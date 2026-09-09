@@ -1,0 +1,52 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: nextpm-db
+    environment:
+      POSTGRES_USER: nextpm
+      POSTGRES_PASSWORD: nextpm
+      POSTGRES_DB: nextpm
+    ports:
+      - '5432:5432'
+    volumes:
+      - nextpm-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U nextpm -d nextpm']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./backend
+    container_name: nextpm-api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://nextpm:nextpm@db:5432/nextpm?schema=public
+      JWT_SECRET: change-me-in-production
+      CORS_ORIGIN: http://localhost:8080
+      AI_PROVIDER: ${AI_PROVIDER:-mock}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports:
+      - '4000:4000'
+    volumes:
+      - nextpm-uploads:/app/storage/uploads
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: http://localhost:4000/api
+    container_name: nextpm-web
+    depends_on:
+      - api
+    ports:
+      - '8080:80'
+
+volumes:
+  nextpm-db:
+  nextpm-uploads:

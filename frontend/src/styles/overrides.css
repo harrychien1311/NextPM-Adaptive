@@ -1,0 +1,135 @@
+/* Only additions the prototype did not need: auth screen, loaders, empty states. */
+.auth-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(160deg, var(--navy-2) 0%, #10243d 55%, #17324f 100%);
+  padding: 24px;
+}
+.auth-card {
+  width: min(420px, 100%);
+  background: var(--white);
+  border-radius: 18px;
+  padding: 32px;
+  box-shadow: 0 24px 60px rgba(9, 24, 44, 0.35);
+}
+.auth-card .brand {
+  padding: 0 0 20px;
+}
+.auth-card h1 {
+  font-size: 1.35rem;
+  margin: 0 0 6px;
+}
+.auth-card p {
+  color: var(--muted);
+  font-size: 0.88rem;
+  margin: 0 0 22px;
+}
+.auth-card label {
+  display: grid;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 14px;
+}
+.auth-card input {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 11px 12px;
+  font: inherit;
+  color: var(--ink);
+}
+.auth-card button {
+  width: 100%;
+  border: 0;
+  border-radius: 9px;
+  padding: 12px;
+  background: var(--blue);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.auth-card button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+.auth-error {
+  background: #fdecec;
+  color: #a33;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 0.82rem;
+  margin-bottom: 14px;
+}
+.auth-hint {
+  margin-top: 18px;
+  font-size: 0.76rem;
+  color: var(--muted);
+  text-align: center;
+}
+.state-block {
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.state-block strong {
+  display: block;
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+.inline-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #cbd7e6;
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  vertical-align: -2px;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .inline-spinner {
+    animation-duration: 2s;
+  }
+}
+.program-empty {
+  padding: 22px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  background: #fbfdff;
+}
+.filtered-out {
+  display: none !important;
+}
+.hidden {
+  display: none !important;
+}
+.ai-suggested-chip {
+  margin-left: 8px;
+  vertical-align: middle;
+}
+.ai-advisory-banner strong {
+  display: block;
+}
+.ai-advisory-banner button {
+  white-space: nowrap;
+}
+/* The AI can recommend up to six governance models — the prototype's 3-column grid doesn't fit that. */
+.governance-grid {
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+.download-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}

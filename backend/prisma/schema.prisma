@@ -1,0 +1,579 @@
+// NextPM Adaptive — PostgreSQL schema
+// Hierarchy: Portfolio -> Program -> Project workspace
+// Planning flow: Input & verify -> Governance recommendation -> Template, generate & approve
+//
+// Governance model recommendation is LLM-driven (see modules/ai/provider.ts,
+// modules/rules/rules.service.ts — the module keeps its original folder name for a
+// minimal diff, but no longer runs a deterministic rule engine).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------- enums
+
+enum Role {
+  ADMIN
+  PORTFOLIO_MANAGER
+  PROJECT_MANAGER
+  MEMBER
+  VIEWER
+}
+
+enum ProjectType {
+  SI // System Integration
+  SM // Service Management
+  PRODUCT // Product Development
+}
+
+enum ProjectStatus {
+  DRAFT
+  ACTIVE
+  HOLD
+  CLOSED
+}
+
+enum ManagementDomain {
+  GOVERNANCE
+  SCOPE
+  SCHEDULE
+  FINANCE
+  STAKEHOLDERS
+  RESOURCES
+  RISK
+}
+
+enum FieldType {
+  TEXT
+  TEXTAREA
+  DATE
+  DATE_RANGE
+  SELECT
+  NUMBER
+}
+
+/// Where an input value came from. Files never become approved facts automatically:
+/// they only ever produce FILE_REFERENCE / AI_SUGGESTED candidates awaiting PM confirmation.
+enum InputSource {
+  PM_INPUT
+  FILE_REFERENCE
+  AI_SUGGESTED
+}
+
+enum ReferenceGroup {
+  COMMITMENT // SOW, proposal, RFP, contract excerpt
+  SCOPE // requirement list, feature map, product brief
+  ORGANIZATION // roster, stakeholder list, org chart
+  SCHEDULE // committed dates, launch calendar, estimate
+  DESCRIPTION // free-form project description document, read for AI analysis
+}
+
+enum ReferenceStatus {
+  UPLOADED
+  CLASSIFYING
+  VERIFIED
+  WARNING
+  FAILED
+}
+
+enum Requirement {
+  REQUIRED
+  CONDITIONAL
+}
+
+enum DocumentStatus {
+  NOT_GENERATED
+  GENERATING
+  PM_REVIEW
+  APPROVED
+  SUPERSEDED
+}
+
+enum DecisionOutcome {
+  CONFIRMED
+  OVERRIDDEN
+}
+
+enum ActionPriority {
+  REQUIRED
+  CONDITIONAL
+  INFO
+}
+
+enum ActionStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
+enum TaskState {
+  TODO
+  REVIEW
+  BLOCKED
+  DONE
+}
+
+enum ActorType {
+  PM
+  AGENT
+  SYSTEM
+}
+
+enum AgentRole {
+  USER
+  AGENT
+}
+
+// ---------------------------------------------------------------- identity
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String
+  initials     String
+  jobTitle     String   @default("Project Manager")
+  role         Role     @default(PROJECT_MANAGER)
+  passwordHash String
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  ownedPortfolios  Portfolio[]
+  ownedPrograms    Program[]
+  memberships      ProjectMember[]
+  decisions        ApproachDecision[]
+  approvedDocs     PlanningDocument[]  @relation("documentApprover")
+  verifiedInputs   ProjectInputValue[] @relation("inputVerifier")
+  auditEvents      AuditEvent[]
+  dashboardLayouts DashboardLayout[]
+
+  @@map("users")
+}
+
+// ---------------------------------------------------------------- hierarchy
+
+model Portfolio {
+  id                 String   @id @default(uuid())
+  name               String
+  businessUnit       String?
+  strategicObjective String?
+  ownerId            String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  owner    User?     @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  programs Program[]
+  projects Project[]
+
+  @@map("portfolios")
+}
+
+model Program {
+  id            String   @id @default(uuid())
+  portfolioId   String
+  key           String // stable slug used by the UI (commerce, factory, services...)
+  name          String
+  description   String?
+  targetOutcome String?
+  colorKey      String   @default("blue") // blue | violet | green | orange
+  ownerId       String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  owner     User?     @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  projects  Project[]
+
+  @@unique([portfolioId, key])
+  @@map("programs")
+}
+
+model Project {
+  id          String        @id @default(uuid())
+  portfolioId String
+  programId   String? // null => standalone project
+  name        String
+  type        ProjectType
+  status      ProjectStatus @default(DRAFT)
+  customer    String?
+  summary     String?
+  phaseLabel  String?
+  targetStart DateTime?
+  targetEnd   DateTime?
+  targetLabel String? // "Mar 31", "Q1 pilot", "Dec 31 renewal"
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  portfolio        Portfolio              @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  program          Program?               @relation(fields: [programId], references: [id], onDelete: SetNull)
+  members          ProjectMember[]
+  inputValues      ProjectInputValue[]
+  customFields     ProjectCustomField[]
+  references       ReferenceFile[]
+  aiSuggestions    AiApproachSuggestion[]
+  decisions        ApproachDecision[]
+  documents        PlanningDocument[]
+  actionItems      ActionItem[]
+  tasks            PlanningTask[]
+  domainReadiness  DomainReadiness[]
+  auditEvents      AuditEvent[]
+  agentMessages    AgentMessage[]
+  dashboardLayouts DashboardLayout[]
+  exports          ExportJob[]
+
+  @@index([portfolioId, status])
+  @@index([programId])
+  @@map("projects")
+}
+
+model ProjectMember {
+  id        String   @id @default(uuid())
+  projectId String
+  userId    String
+  role      Role     @default(MEMBER)
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@map("project_members")
+}
+
+// ---------------------------------------------------------------- flow 1: input & verify
+
+/// Schema-driven minimum input profile, per project type. Seeded, editable by admins.
+model InputFieldDefinition {
+  id          String           @id @default(uuid())
+  projectType ProjectType
+  key         String
+  label       String
+  helpText    String?
+  fieldType   FieldType        @default(TEXT)
+  options     String[]         @default([])
+  required    Boolean          @default(true)
+  domain      ManagementDomain @default(GOVERNANCE)
+  signalKey   String? // hook consumed by the recommendation prompt builder
+  order       Int              @default(0)
+
+  values ProjectInputValue[]
+
+  @@unique([projectType, key])
+  @@map("input_field_definitions")
+}
+
+model ProjectInputValue {
+  id           String      @id @default(uuid())
+  projectId    String
+  definitionId String
+  value        String?
+  source       InputSource @default(PM_INPUT)
+  verified     Boolean     @default(false)
+  verifiedById String?
+  verifiedAt   DateTime?
+  conflictNote String?
+  updatedAt    DateTime    @updatedAt
+
+  project    Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  definition InputFieldDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+  verifiedBy User?                @relation("inputVerifier", fields: [verifiedById], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, definitionId])
+  @@map("project_input_values")
+}
+
+/// "Custom context" — extra PM signals that may feed the recommendation, document content, or both.
+model ProjectCustomField {
+  id        String   @id @default(uuid())
+  projectId String
+  name      String
+  value     String?
+  useIn     String   @default("BOTH") // RULES | DOCUMENT | BOTH
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("project_custom_fields")
+}
+
+model ReferenceFile {
+  id             String          @id @default(uuid())
+  projectId      String
+  group          ReferenceGroup
+  fileName       String
+  mimeType       String
+  sizeBytes      Int
+  storageKey     String
+  status         ReferenceStatus @default(UPLOADED)
+  verifiedFields Int             @default(0)
+  message        String?
+  extraction     Json? // candidate values / extracted text proposed for PM confirmation
+  uploadedAt     DateTime        @default(now())
+
+  project       Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  aiSuggestions AiApproachSuggestion[]
+
+  @@index([projectId, group])
+  @@map("reference_files")
+}
+
+// ---------------------------------------------------------------- flow 2: governance model recommendation
+
+/// One LLM-generated governance-model recommendation snapshot. Immutable, like an
+/// evaluation: it reads verified project inputs + the project description document
+/// and returns a primary model, a 0-100 suitability score, reasons, evidence, risks
+/// and scored alternatives. The PM decision gate (ApproachDecision) is what actually
+/// commits to one — this table only ever proposes.
+model AiApproachSuggestion {
+  id                  String   @id @default(uuid())
+  projectId           String
+  sourceFileId        String?
+  recommendedApproach String // governance model code, e.g. WATERFALL | SCRUM | KANBAN | HYBRID | ITERATIVE | STAGE_GATE | a custom AI-proposed label
+  confidence          Int // 0-100 suitability score
+  confidenceLevel      String   @default("MEDIUM") // HIGH | MEDIUM | LOW
+  rationale           String
+  reasons             Json     @default("[]") // string[] — key reasons for the primary pick
+  evidence            Json     @default("[]") // string[] — project evidence the reasons are grounded in
+  risks               Json     @default("[]") // string[] — risks / limitations of the primary pick
+  alternatives        Json     @default("[]") // [{ approach, score, rationale }]
+  summary             String?
+  candidateValues     Json     @default("[]") // [{ fieldKey, label, value }] proposed, unverified
+  createdAt           DateTime @default(now())
+
+  project    Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sourceFile ReferenceFile? @relation(fields: [sourceFileId], references: [id], onDelete: SetNull)
+  decisions  ApproachDecision[]
+
+  @@index([projectId, createdAt])
+  @@map("ai_approach_suggestions")
+}
+
+/// The PM decision gate. Confirming locks the generation contract for the pack.
+model ApproachDecision {
+  id             String          @id @default(uuid())
+  projectId      String
+  evaluationId   String?
+  approach       String // the confirmed governance model code (or PM-overridden value)
+  outcome        DecisionOutcome @default(CONFIRMED)
+  rigor          String          @default("Standard+")
+  rationale      String?
+  operatingModel Json?
+  documentPack   Json // required[] + conditional[] frozen at confirmation time
+  active         Boolean         @default(true)
+  decidedById    String
+  decidedAt      DateTime        @default(now())
+
+  project    Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  evaluation AiApproachSuggestion? @relation(fields: [evaluationId], references: [id], onDelete: SetNull)
+  decidedBy  User                  @relation(fields: [decidedById], references: [id])
+
+  @@index([projectId, active])
+  @@map("approach_decisions")
+}
+
+// ---------------------------------------------------------------- flow 3: templates, generate, approve
+
+/// Catalog of planning outputs, selected by project type + domain. Six of these
+/// (Project Charter, Organization Chart, RACI Matrix, Communication Plan,
+/// Change / Escalation Flow, Risk Plan — see data/document-catalog.ts) are required
+/// for every project regardless of the confirmed governance model; only their
+/// internal structure changes by model, via data/governance-models.ts.
+model DocumentDefinition {
+  id           String           @id @default(uuid())
+  projectType  ProjectType
+  domain       ManagementDomain
+  name         String
+  requirement  Requirement      @default(REQUIRED)
+  conditionKey String? // e.g. "budgetControlScope=PM owns"
+  description  String?
+  order        Int              @default(0)
+
+  templates DocumentTemplate[]
+  documents PlanningDocument[]
+
+  @@unique([projectType, domain, name])
+  @@map("document_definitions")
+}
+
+/// Three PMBOK-aligned product templates per document: standard | lean | delivery.
+model DocumentTemplate {
+  id           String  @id @default(uuid())
+  definitionId String
+  key          String // standard | lean | delivery
+  name         String
+  subtitle     String?
+  description  String?
+  recommended  Boolean @default(false)
+  fitScore     Int     @default(80)
+  sections     Json // [{ title, hint, required, defaultIncluded }]
+
+  definition DocumentDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+  documents  PlanningDocument[]
+
+  @@unique([definitionId, key])
+  @@map("document_templates")
+}
+
+model PlanningDocument {
+  id            String           @id @default(uuid())
+  projectId     String
+  definitionId  String
+  templateId    String?
+  name          String
+  domain        ManagementDomain
+  requirement   Requirement      @default(REQUIRED)
+  status        DocumentStatus   @default(NOT_GENERATED)
+  version       Int              @default(1)
+  coverage      Int              @default(0)
+  sourceTrace   Json? // inputs and recommendation used for this draft
+  structuredData Json? // e.g. RACI table rows, risk register rows — used for .docx tables and the dashboard export
+  generatedAt   DateTime?
+  approvedById  String?
+  approvedAt    DateTime?
+  pmQuestions   Json             @default("[]")
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  project    Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  definition DocumentDefinition @relation(fields: [definitionId], references: [id])
+  template   DocumentTemplate?  @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  approvedBy User?              @relation("documentApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  sections   DocumentSection[]
+
+  @@unique([projectId, definitionId])
+  @@index([projectId, status])
+  @@map("planning_documents")
+}
+
+/// The generation contract: only included sections are written by the agent.
+model DocumentSection {
+  id         String  @id @default(uuid())
+  documentId String
+  title      String
+  hint       String?
+  required   Boolean @default(false)
+  included   Boolean @default(true)
+  order      Int     @default(0)
+  content    String?
+  custom     Boolean @default(false)
+
+  document PlanningDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId, order])
+  @@map("document_sections")
+}
+
+// ---------------------------------------------------------------- dashboard, audit, agent
+
+/// PM action center entries — "AI prepares; the PM decides".
+model ActionItem {
+  id            String           @id @default(uuid())
+  projectId     String
+  priority      ActionPriority   @default(REQUIRED)
+  domain        ManagementDomain @default(GOVERNANCE)
+  title         String
+  description   String?
+  targetView    String           @default("input") // input | approach | studio
+  suggestions   String[]         @default([])
+  status        ActionStatus     @default(OPEN)
+  resolvedValue String?
+  blocksDocument String?
+  createdAt     DateTime         @default(now())
+  resolvedAt    DateTime?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, status])
+  @@map("action_items")
+}
+
+model PlanningTask {
+  id        String    @id @default(uuid())
+  projectId String
+  title     String
+  detail    String?
+  state     TaskState @default(TODO)
+  order     Int       @default(0)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("planning_tasks")
+}
+
+model DomainReadiness {
+  id        String           @id @default(uuid())
+  projectId String
+  domain    ManagementDomain
+  score     Int              @default(0)
+  target    Int              @default(80)
+  updatedAt DateTime         @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, domain])
+  @@map("domain_readiness")
+}
+
+model AuditEvent {
+  id        String    @id @default(uuid())
+  projectId String
+  actorType ActorType @default(PM)
+  actorId   String?
+  type      String // INPUT_VERIFIED, APPROACH_CONFIRMED, DOCUMENT_GENERATED...
+  title     String
+  detail    String?
+  payload   Json?
+  createdAt DateTime  @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  actor   User?   @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, createdAt])
+  @@map("audit_events")
+}
+
+model AgentMessage {
+  id        String    @id @default(uuid())
+  projectId String
+  role      AgentRole
+  content   String
+  meta      Json? // recommendation reasons, verified inputs, suggested actions
+  createdAt DateTime  @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
+  @@map("agent_messages")
+}
+
+model DashboardLayout {
+  id        String   @id @default(uuid())
+  projectId String
+  userId    String
+  widgets   Json // { readiness: true, approach: true, ... }
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@map("dashboard_layouts")
+}
+
+model ExportJob {
+  id          String   @id @default(uuid())
+  projectId   String
+  format      String // DOCX | XLSX | PDF | CONFLUENCE
+  status      String   @default("QUEUED")
+  includeOnly String   @default("APPROVED") // approved baseline only, by policy
+  fileKey     String?
+  createdAt   DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("export_jobs")
+}

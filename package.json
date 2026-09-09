@@ -1,0 +1,15 @@
+{
+  "name": "nextpm-adaptive",
+  "private": true,
+  "version": "1.0.0",
+  "description": "NextPM Adaptive — portfolio, rule-based PM approach selection and AI-drafted planning packs",
+  "workspaces": ["backend", "frontend"],
+  "scripts": {
+    "install:all": "npm install --workspaces",
+    "db:up": "docker compose up -d db",
+    "setup": "npm run install:all && npm --workspace backend run prisma:generate && npm --workspace backend run prisma:migrate && npm --workspace backend run db:seed",
+    "dev:api": "npm --workspace backend run dev",
+    "dev:web": "npm --workspace frontend run dev",
+    "build": "npm --workspace backend run build && npm --workspace frontend run build"
+  }
+}
