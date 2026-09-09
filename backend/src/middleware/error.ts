@@ -19,7 +19,9 @@ export function errorHandler(error: unknown, _req: Request, res: Response, _next
       return res.status(404).json({ error: { message: 'Resource not found' } });
     }
   }
-  if (!env.isProd) console.error(error);
+  // Always log server-side so production errors are visible in the platform's log viewer;
+  // only the client-facing message is sanitized in production.
+  console.error(error);
   const message = error instanceof Error ? error.message : 'Unexpected server error';
   res.status(500).json({ error: { message: env.isProd ? 'Unexpected server error' : message } });
 }
