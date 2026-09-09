@@ -17,6 +17,10 @@ import { agentRouter } from './modules/agent/agent.routes';
 export function createApp() {
   const app = express();
 
+  // Render (and most PaaS) sit behind one reverse proxy hop — trust its X-Forwarded-* headers
+  // so req.ip and express-rate-limit see the real client IP instead of the proxy's.
+  app.set('trust proxy', 1);
+
   app.use(helmet());
   app.use(cors({ origin: env.corsOrigin, credentials: true }));
   app.use(express.json({ limit: '2mb' }));
