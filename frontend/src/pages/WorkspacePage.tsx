@@ -8,6 +8,7 @@ import { InputView } from './workspace/InputView';
 import { ApproachView } from './workspace/ApproachView';
 import { StudioView } from './workspace/StudioView';
 import { AgentDrawer } from './workspace/AgentDrawer';
+import { TeamModal } from './workspace/TeamModal';
 
 export type WorkspaceView = 'dashboard' | 'input' | 'approach' | 'studio';
 
@@ -16,6 +17,7 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
   const { user } = useAuth();
   const [view, setView] = useState<WorkspaceView>('dashboard');
   const [agentOpen, setAgentOpen] = useState(false);
+  const [teamOpen, setTeamOpen] = useState(false);
 
   const workspace = useQuery({
     queryKey: ['workspace', projectId],
@@ -67,6 +69,17 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
               <small>Project workspace</small>
             </div>
           </div>
+
+          <button className="team-trigger" onClick={() => setTeamOpen(true)}>
+            <span className="avatar-stack">
+              {project.members.slice(0, 4).map((member) => (
+                <span key={member.id}>{member.initials}</span>
+              ))}
+            </span>
+            <span>
+              Team · {project.members.length} member{project.members.length === 1 ? '' : 's'}
+            </span>
+          </button>
 
           <nav aria-label="Primary navigation">
             <button
@@ -176,6 +189,7 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
         </button>
       )}
       <AgentDrawer projectId={projectId} open={agentOpen} onClose={() => setAgentOpen(false)} />
+      <TeamModal projectId={projectId} open={teamOpen} onClose={() => setTeamOpen(false)} />
     </>
   );
 }

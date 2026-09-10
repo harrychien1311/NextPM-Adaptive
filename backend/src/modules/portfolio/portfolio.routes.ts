@@ -1,17 +1,19 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { ProjectStatus, ProjectType } from '@prisma/client';
+import { ProjectStatus, ProjectType, Role } from '@prisma/client';
 import { asyncHandler } from '../../lib/async-handler';
 import { parse } from '../../lib/validate';
-import { PM_ROLES, requireRole } from '../../middleware/auth';
+import { PM_ROLES, requireProjectMember, requireProjectRole, requireRole } from '../../middleware/auth';
 import { prisma } from '../../lib/prisma';
 import {
+  addProjectMember,
   createPortfolio,
   createProgram,
   createProject,
   listPortfolios,
   portfolioOverview,
   projectWorkspace,
+  removeProjectMember,
   updateProject,
 } from './portfolio.service';
 
@@ -19,8 +21,8 @@ export const portfolioRouter = Router();
 
 portfolioRouter.get(
   '/',
-  asyncHandler(async (_req, res) => {
-    res.json({ portfolios: await listPortfolios() });
+  asyncHandler(async (req, res) => {
+    res.json({ portfolios: await listPortfolios(req.user!) });
   }),
 );
 
@@ -43,7 +45,7 @@ portfolioRouter.post(
 portfolioRouter.get(
   '/:portfolioId/overview',
   asyncHandler(async (req, res) => {
-    res.json(await portfolioOverview(req.params.portfolioId));
+    res.json(await portfolioOverview(req.params.portfolioId, req.user!));
   }),
 );
 
@@ -90,6 +92,7 @@ portfolioRouter.post(
 );
 
 export const projectRouter = Router();
+projectRouter.use('/:projectId', requireProjectMember);
 
 projectRouter.get(
   '/:projectId',
@@ -100,7 +103,7 @@ projectRouter.get(
 
 projectRouter.patch(
   '/:projectId',
-  requireRole(...PM_ROLES),
+  requireProjectRole(...PM_ROLES),
   asyncHandler(async (req, res) => {
     const body = parse(
       z.object({
@@ -129,5 +132,23 @@ projectRouter.get(
       include: { user: { select: { id: true, name: true, initials: true, jobTitle: true } } },
     });
     res.json({ members });
+  }),
+);
+
+/** Invite an existing user (by email) onto this project — this is how isolated projects gain teammates. */
+projectRouter.post(
+  '/:projectId/members',
+  requireProjectRole(...PM_ROLES),
+  asyncHandler(async (req, res) => {
+    const body = parse(z.object({ email: z.string().email(), role: z.nativeEnum(Role).optional() }), req.body);
+    res.status(201).json(await addProjectMember({ projectId: req.params.projectId, email: body.email, role: body.role }));
+  }),
+);
+
+projectRouter.delete(
+  '/:projectId/members/:userId',
+  requireProjectRole(...PM_ROLES),
+  asyncHandler(async (req, res) => {
+    res.json(await removeProjectMember(req.params.projectId, req.params.userId));
   }),
 );

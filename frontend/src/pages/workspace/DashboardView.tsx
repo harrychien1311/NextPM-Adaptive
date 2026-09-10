@@ -85,11 +85,21 @@ export function DashboardView({
           </span>
         </div>
         <div className="dashboard-actions">
-          <button className="secondary" onClick={() => refetch()}>
-            {isRefetching ? '↻ Refreshing…' : '↻ Refresh status'}
+          <button
+            className="secondary icon-only"
+            onClick={() => refetch()}
+            title={isRefetching ? 'Refreshing…' : 'Refresh status'}
+            aria-label="Refresh status"
+          >
+            ↻
           </button>
-          <button className="primary" onClick={() => setDrawerOpen(true)}>
-            ⚙ Customize dashboard
+          <button
+            className="primary icon-only"
+            onClick={() => setDrawerOpen(true)}
+            title="Customize dashboard"
+            aria-label="Customize dashboard"
+          >
+            ⚙
           </button>
         </div>
       </div>

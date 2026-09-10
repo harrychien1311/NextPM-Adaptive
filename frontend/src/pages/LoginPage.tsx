@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../store/auth';
 import { ApiError } from '../api/client';
 
@@ -52,6 +52,9 @@ export function LoginPage() {
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
         <p className="auth-hint">Seeded demo account: lina.vuong@nextpm.local · NextPM!2026</p>
+        <p className="auth-hint">
+          Don't have an account? <Link to="/register">Sign up</Link>
+        </p>
       </form>
     </div>
   );

@@ -2,10 +2,12 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../../lib/async-handler';
 import { parse } from '../../lib/validate';
+import { requireProjectMember } from '../../middleware/auth';
 import { listEvents } from '../audit/audit.service';
 import { dashboard, saveLayout } from './dashboard.service';
 
 export const dashboardRouter = Router();
+dashboardRouter.use('/:projectId', requireProjectMember);
 
 dashboardRouter.get(
   '/:projectId/dashboard',

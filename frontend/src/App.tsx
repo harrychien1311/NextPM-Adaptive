@@ -1,6 +1,7 @@
 import { HashRouter, Navigate, Route, Routes, useParams } from 'react-router-dom';
 import { useAuth } from './store/auth';
 import { LoginPage } from './pages/LoginPage';
+import { RegisterPage } from './pages/RegisterPage';
 import { PortfolioPage } from './pages/PortfolioPage';
 import { WorkspacePage } from './pages/WorkspacePage';
 
@@ -26,6 +27,7 @@ export function App() {
     <HashRouter>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/register" element={<RegisterPage />} />
         <Route
           path="/"
           element={

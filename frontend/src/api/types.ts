@@ -97,6 +97,14 @@ export interface Workspace {
   documentsInReview: number;
 }
 
+export interface ProjectTeamMember {
+  id: string;
+  userId: string;
+  role: string;
+  createdAt: string;
+  user: { id: string; name: string; initials: string; jobTitle: string };
+}
+
 export interface ActionItem {
   id: string;
   priority: 'REQUIRED' | 'CONDITIONAL' | 'INFO';

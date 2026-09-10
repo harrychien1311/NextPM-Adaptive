@@ -7,6 +7,7 @@ import type {
   InputProfile,
   ManagementDomain,
   PortfolioOverview,
+  ProjectTeamMember,
   ProjectType,
   StudioResponse,
   User,
@@ -15,6 +16,8 @@ import type {
 
 export const authApi = {
   login: (email: string, password: string) => api.post<{ token: string; user: User }>('/auth/login', { email, password }),
+  register: (body: { email: string; name: string; password: string; jobTitle?: string }) =>
+    api.post<{ token: string; user: User }>('/auth/register', body),
   me: () => api.get<{ user: User }>('/auth/me'),
 };
 
@@ -36,6 +39,10 @@ export const projectApi = {
   dashboard: (projectId: string) => api.get<DashboardResponse>(`/projects/${projectId}/dashboard`),
   saveLayout: (projectId: string, widgets: Record<string, boolean>) =>
     api.put(`/projects/${projectId}/dashboard/layout`, { widgets }),
+  members: (projectId: string) => api.get<{ members: ProjectTeamMember[] }>(`/projects/${projectId}/members`),
+  addMember: (projectId: string, body: { email: string; role?: string }) =>
+    api.post<ProjectTeamMember>(`/projects/${projectId}/members`, body),
+  removeMember: (projectId: string, userId: string) => api.delete(`/projects/${projectId}/members/${userId}`),
 };
 
 export const inputApi = {

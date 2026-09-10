@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { ManagementDomain } from '@prisma/client';
 import { asyncHandler } from '../../lib/async-handler';
 import { parse } from '../../lib/validate';
-import { PM_ROLES, requireRole } from '../../middleware/auth';
+import { PM_ROLES, requireProjectMember, requireProjectRole } from '../../middleware/auth';
 import {
   approveDocument,
   catalogForProject,
@@ -18,6 +18,7 @@ import {
 } from './documents.service';
 
 export const documentsRouter = Router();
+documentsRouter.use('/:projectId', requireProjectMember);
 
 documentsRouter.get(
   '/:projectId/documents',
@@ -48,7 +49,7 @@ documentsRouter.get(
 /** Choose a template and edit the section structure — the generation contract. */
 documentsRouter.post(
   '/:projectId/documents/contract',
-  requireRole(...PM_ROLES),
+  requireProjectRole(...PM_ROLES),
   asyncHandler(async (req, res) => {
     const body = parse(
       z.object({
@@ -74,7 +75,7 @@ documentsRouter.post(
 
 documentsRouter.post(
   '/:projectId/documents/:documentId/generate',
-  requireRole(...PM_ROLES),
+  requireProjectRole(...PM_ROLES),
   asyncHandler(async (req, res) => {
     res.json(
       await generateDraft({
@@ -88,7 +89,7 @@ documentsRouter.post(
 
 documentsRouter.post(
   '/:projectId/documents/:documentId/approve',
-  requireRole(...PM_ROLES),
+  requireProjectRole(...PM_ROLES),
   asyncHandler(async (req, res) => {
     res.json(
       await approveDocument({
@@ -124,7 +125,7 @@ documentsRouter.get(
 
 documentsRouter.post(
   '/:projectId/exports',
-  requireRole(...PM_ROLES),
+  requireProjectRole(...PM_ROLES),
   asyncHandler(async (req, res) => {
     const body = parse(z.object({ format: z.enum(['DOCX', 'XLSX', 'PDF', 'CONFLUENCE']) }), req.body);
     res.status(201).json(await createExport({ projectId: req.params.projectId, format: body.format, actorId: req.user!.id }));

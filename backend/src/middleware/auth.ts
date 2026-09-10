@@ -2,7 +2,7 @@ import { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { Role } from '@prisma/client';
 import { env } from '../config/env';
-import { forbidden, unauthorized } from '../lib/http-error';
+import { forbidden, notFound, unauthorized } from '../lib/http-error';
 import { prisma } from '../lib/prisma';
 
 export interface AuthUser {
@@ -18,6 +18,8 @@ declare global {
   namespace Express {
     interface Request {
       user?: AuthUser;
+      /** The requester's effective role within the :projectId of this request — set by requireProjectMember. */
+      projectRole?: Role;
     }
   }
 }
@@ -58,3 +60,43 @@ export const requireRole =
   };
 
 export const PM_ROLES: Role[] = [Role.ADMIN, Role.PORTFOLIO_MANAGER, Role.PROJECT_MANAGER];
+
+/**
+ * Isolates projects per user: mount with `router.use('/:projectId', requireProjectMember)` on
+ * every project-scoped router. ADMIN and the owner of the project's portfolio always pass (and
+ * are treated as PORTFOLIO_MANAGER-tier for requireProjectRole below); everyone else must be a
+ * ProjectMember row for this exact project. Sets req.projectRole for requireProjectRole to read.
+ */
+export async function requireProjectMember(req: Request, _res: Response, next: NextFunction) {
+  if (!req.user) return next(unauthorized());
+  if (req.user.role === Role.ADMIN) {
+    req.projectRole = Role.ADMIN;
+    return next();
+  }
+
+  const projectId = req.params.projectId;
+  const [project, membership] = await Promise.all([
+    prisma.project.findUnique({ where: { id: projectId }, select: { portfolio: { select: { ownerId: true } } } }),
+    prisma.projectMember.findUnique({ where: { projectId_userId: { projectId, userId: req.user.id } } }),
+  ]);
+  if (!project) return next(notFound('Project not found'));
+
+  if (project.portfolio.ownerId === req.user.id) {
+    req.projectRole = Role.PORTFOLIO_MANAGER;
+    return next();
+  }
+  if (!membership) return next(forbidden('You are not a member of this project'));
+
+  req.projectRole = membership.role;
+  next();
+}
+
+/** For :projectId routes, after requireProjectMember: checks the requester's role within THIS project. */
+export const requireProjectRole =
+  (...roles: Role[]) =>
+  (req: Request, _res: Response, next: NextFunction) => {
+    if (!req.user) return next(unauthorized());
+    if (!req.projectRole) return next(forbidden('Project membership was not resolved'));
+    if (!roles.includes(req.projectRole)) return next(forbidden());
+    next();
+  };

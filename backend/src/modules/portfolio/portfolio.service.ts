@@ -1,6 +1,6 @@
-import { DocumentStatus, ProjectStatus, ProjectType, Prisma } from '@prisma/client';
+import { DocumentStatus, ProjectStatus, ProjectType, Prisma, Role } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
-import { notFound } from '../../lib/http-error';
+import { conflict, forbidden, notFound } from '../../lib/http-error';
 import { slugify } from '../../lib/slug';
 import { INPUT_SCHEMAS } from '../../data/input-schemas';
 import { computeInputReadiness } from '../../lib/readiness';
@@ -8,8 +8,17 @@ import { logEvent } from '../audit/audit.service';
 
 const COLOR_ROTATION = ['blue', 'violet', 'green', 'orange'];
 
-export async function listPortfolios() {
+/**
+ * Projects are isolated per user: a portfolio is visible if the requester owns it, is ADMIN,
+ * or is a member of at least one project inside it. This keeps the portfolio list from leaking
+ * other teams' work.
+ */
+export async function listPortfolios(user: { id: string; role: Role }) {
   return prisma.portfolio.findMany({
+    where:
+      user.role === Role.ADMIN
+        ? undefined
+        : { OR: [{ ownerId: user.id }, { projects: { some: { members: { some: { userId: user.id } } } } }] },
     orderBy: { createdAt: 'asc' },
     include: {
       owner: { select: { id: true, name: true, initials: true } },
@@ -87,7 +96,7 @@ async function projectReadiness(projectId: string) {
 }
 
 /** The portfolio overview screen: programs, their projects, and roll-up health. */
-export async function portfolioOverview(portfolioId: string) {
+export async function portfolioOverview(portfolioId: string, user: { id: string; role: Role }) {
   const portfolio = await prisma.portfolio.findUnique({
     where: { id: portfolioId },
     include: {
@@ -104,8 +113,15 @@ export async function portfolioOverview(portfolioId: string) {
   });
   if (!portfolio) throw notFound('Portfolio not found');
 
+  // Isolation: only see the projects you own the portfolio for, are ADMIN, or are a member of.
+  const canSeeAll = user.role === Role.ADMIN || portfolio.ownerId === user.id;
+  const visibleProjects = canSeeAll
+    ? portfolio.projects
+    : portfolio.projects.filter((project) => project.members.some((member) => member.userId === user.id));
+  if (!canSeeAll && visibleProjects.length === 0) throw forbidden('You are not a member of any project in this portfolio');
+
   const enriched = await Promise.all(
-    portfolio.projects.map(async (project) => {
+    visibleProjects.map(async (project) => {
       const stats = await projectReadiness(project.id);
       const [decision, openActions] = await Promise.all([
         prisma.approachDecision.findFirst({ where: { projectId: project.id, active: true } }),
@@ -297,4 +313,27 @@ export async function projectWorkspace(projectId: string) {
 
 export async function updateProject(projectId: string, data: Prisma.ProjectUpdateInput) {
   return prisma.project.update({ where: { id: projectId }, data });
+}
+
+/** Invites an existing registered user onto a project — the only way an isolated project gains teammates. */
+export async function addProjectMember(params: { projectId: string; email: string; role?: Role }) {
+  const user = await prisma.user.findUnique({ where: { email: params.email.toLowerCase() } });
+  if (!user) throw notFound('No user found with this email — they need to register first');
+
+  const existing = await prisma.projectMember.findUnique({
+    where: { projectId_userId: { projectId: params.projectId, userId: user.id } },
+  });
+  if (existing) throw conflict('This user is already a member of this project');
+
+  return prisma.projectMember.create({
+    data: { projectId: params.projectId, userId: user.id, role: params.role ?? Role.MEMBER },
+    include: { user: { select: { id: true, name: true, initials: true, jobTitle: true } } },
+  });
+}
+
+export async function removeProjectMember(projectId: string, userId: string) {
+  const existing = await prisma.projectMember.findUnique({ where: { projectId_userId: { projectId, userId } } });
+  if (!existing) throw notFound('This user is not a member of this project');
+  await prisma.projectMember.delete({ where: { projectId_userId: { projectId, userId } } });
+  return { removed: true };
 }

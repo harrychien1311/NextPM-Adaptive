@@ -2,9 +2,11 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../../lib/async-handler';
 import { parse } from '../../lib/validate';
+import { requireProjectMember } from '../../middleware/auth';
 import { ask, history } from './agent.service';
 
 export const agentRouter = Router();
+agentRouter.use('/:projectId', requireProjectMember);
 
 agentRouter.get(
   '/:projectId/agent/messages',

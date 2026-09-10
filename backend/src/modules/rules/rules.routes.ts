@@ -3,10 +3,11 @@ import { z } from 'zod';
 import { DecisionOutcome } from '@prisma/client';
 import { asyncHandler } from '../../lib/async-handler';
 import { parse } from '../../lib/validate';
-import { PM_ROLES, requireRole } from '../../middleware/auth';
+import { PM_ROLES, requireProjectMember, requireProjectRole } from '../../middleware/auth';
 import { activeDecision, approachOptions, decideApproach, latestEvaluation, runEvaluation } from './rules.service';
 
 export const rulesRouter = Router();
+rulesRouter.use('/:projectId', requireProjectMember);
 
 /** Read the current recommendation, scored alternatives and PM decision state. */
 rulesRouter.get(
@@ -24,7 +25,7 @@ rulesRouter.get(
 /** Asks the AI (Skill 1) to recommend a governance model from verified inputs + the project description document. */
 rulesRouter.post(
   '/:projectId/approach/evaluate',
-  requireRole(...PM_ROLES),
+  requireProjectRole(...PM_ROLES),
   asyncHandler(async (req, res) => {
     res.json(await runEvaluation(req.params.projectId, req.user!.id));
   }),
@@ -33,7 +34,7 @@ rulesRouter.post(
 /** The PM decision gate: confirm the recommendation, or override with a reason. */
 rulesRouter.post(
   '/:projectId/approach/decide',
-  requireRole(...PM_ROLES),
+  requireProjectRole(...PM_ROLES),
   asyncHandler(async (req, res) => {
     const body = parse(
       z.object({
