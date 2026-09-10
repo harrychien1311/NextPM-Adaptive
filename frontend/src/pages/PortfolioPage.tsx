@@ -103,10 +103,28 @@ export function PortfolioPage() {
 
   if (!portfolioId || !summary) {
     return (
-      <div className="state-block">
-        <strong>No portfolio yet</strong>
-        Create a portfolio to start grouping programs and project workspaces.
-      </div>
+      <>
+        <div className="state-block">
+          <strong>No portfolio yet</strong>
+          You're not a member of any project yet, and no portfolio is set up for you. Create one to start grouping
+          programs and project workspaces — you'll automatically own it.
+          <div style={{ marginTop: 16, display: 'flex', gap: 8, justifyContent: 'center' }}>
+            <button className="primary" onClick={() => setOpenModal('portfolio')}>
+              + Create portfolio
+            </button>
+            <button className="secondary" onClick={logout}>
+              Sign out
+            </button>
+          </div>
+        </div>
+        <Backdrop open={openModal === 'portfolio'} onClose={() => setOpenModal(null)} />
+        <CreatePortfolioModal
+          open={openModal === 'portfolio'}
+          busy={createPortfolio.isPending}
+          onClose={() => setOpenModal(null)}
+          onSubmit={(body) => createPortfolio.mutate(body)}
+        />
+      </>
     );
   }
 
