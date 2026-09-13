@@ -150,6 +150,31 @@ export interface ActionItem {
   blocksDocument: string | null;
 }
 
+/** One row of the dashboard's Planning documents list — an upload or an AI draft. */
+export interface LibraryEntry {
+  id: string;
+  kind: 'UPLOAD' | 'GENERATED';
+  origin: 'PM_INPUT' | 'AI_GENERATED';
+  name: string;
+  category: string;
+  status: string;
+  sizeBytes: number | null;
+  at: string | null;
+}
+
+/** An uploaded file with the text extracted from it on upload. */
+export interface ReferenceDetail {
+  id: string;
+  fileName: string;
+  group: string;
+  status: string;
+  message: string | null;
+  sizeBytes: number;
+  uploadedAt: string;
+  textAvailable: boolean;
+  text: string | null;
+}
+
 export interface DashboardResponse {
   workspace: Workspace;
   startReadiness: {
@@ -173,6 +198,7 @@ export interface DashboardResponse {
   };
   actions: ActionItem[];
   domains: { domain: ManagementDomain; score: number; target: number }[];
+  library: LibraryEntry[];
   activity: {
     id: string;
     type: string;
@@ -352,6 +378,15 @@ export interface CatalogEntry {
 export interface StudioResponse {
   catalog: CatalogEntry[];
   domains: { domain: ManagementDomain; count: number }[];
+}
+
+/** One chat thread, private to the user who held it. */
+export interface AgentSession {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  _count: { messages: number };
 }
 
 export interface AgentMessage {

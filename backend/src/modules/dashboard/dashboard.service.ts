@@ -18,11 +18,16 @@ const DEFAULT_WIDGETS = {
 export async function dashboard(projectId: string, userId: string) {
   const workspace = await projectWorkspace(projectId);
 
-  const [tasks, actions, domains, documents, activity, layout] = await Promise.all([
+  const [tasks, actions, domains, documents, references, activity, layout] = await Promise.all([
     prisma.planningTask.findMany({ where: { projectId }, orderBy: { order: 'asc' } }),
     prisma.actionItem.findMany({ where: { projectId, status: 'OPEN' }, orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }] }),
     prisma.domainReadiness.findMany({ where: { projectId } }),
-    prisma.planningDocument.findMany({ where: { projectId }, select: { status: true, requirement: true, name: true } }),
+    prisma.planningDocument.findMany({
+      where: { projectId },
+      select: { id: true, name: true, status: true, requirement: true, version: true, domain: true, generatedAt: true },
+      orderBy: { name: 'asc' },
+    }),
+    prisma.referenceFile.findMany({ where: { projectId }, orderBy: { uploadedAt: 'desc' } }),
     listEvents(projectId, 8),
     prisma.dashboardLayout.findUnique({ where: { projectId_userId: { projectId, userId } } }),
   ]);
@@ -66,6 +71,36 @@ export async function dashboard(projectId: string, userId: string) {
     },
     actions,
     domains: domains.map((row) => ({ domain: row.domain, score: row.score, target: row.target })),
+    /**
+     * Every document attached to this project, whichever end it came from: files the PM uploaded
+     * on the Input screen, and drafts the AI wrote in the Planning Studio. `origin` is what the
+     * UI labels each row with, and `kind` tells it which preview to open.
+     */
+    library: [
+      ...references.map((file) => ({
+        id: file.id,
+        kind: 'UPLOAD' as const,
+        origin: 'PM_INPUT' as const,
+        name: file.fileName,
+        // DESCRIPTION is the dedicated project-description slot, not one of the reference tiles.
+        category: file.group === 'DESCRIPTION' ? 'Project description' : `${file.group} reference`,
+        status: file.status,
+        sizeBytes: file.sizeBytes,
+        at: file.uploadedAt,
+      })),
+      ...documents
+        .filter((doc) => doc.status !== DocumentStatus.NOT_GENERATED)
+        .map((doc) => ({
+          id: doc.id,
+          kind: 'GENERATED' as const,
+          origin: 'AI_GENERATED' as const,
+          name: `${doc.name} — v${doc.version}`,
+          category: `${doc.domain} · ${doc.requirement === 'REQUIRED' ? 'Required' : 'Conditional'}`,
+          status: doc.status,
+          sizeBytes: null,
+          at: doc.generatedAt,
+        })),
+    ],
     activity,
     widgets: (layout?.widgets as Record<string, boolean>) ?? DEFAULT_WIDGETS,
   };

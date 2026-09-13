@@ -273,12 +273,23 @@ async function main() {
       }
     }
 
-    await prisma.agentMessage.create({
+    // Seed one chat thread so the drawer opens with something in it.
+    await prisma.agentSession.create({
       data: {
         projectId: project.id,
-        role: 'AGENT',
-        content: `I recommend a ${seed.approach ?? 'Hybrid'} governance model based on the AI recommendation. Baseline the fixed commitments, plan detail in two-sprint horizons and use a formal change threshold.`,
-        meta: { decisionApplied: false },
+        userId: users.LV,
+        title: 'Why this governance model?',
+        messages: {
+          create: [
+            { projectId: project.id, role: 'USER', content: 'Why this governance model?' },
+            {
+              projectId: project.id,
+              role: 'AGENT',
+              content: `I recommend a ${seed.approach ?? 'Hybrid'} governance model based on the AI recommendation. Baseline the fixed commitments, plan detail in two-sprint horizons and use a formal change threshold.`,
+              meta: { decisionApplied: false },
+            },
+          ],
+        },
       },
     });
 

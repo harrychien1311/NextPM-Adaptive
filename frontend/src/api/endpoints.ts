@@ -2,9 +2,14 @@ import { api } from './client';
 import type {
   AdminAccountList,
   AgentMessage,
+  AgentSession,
   ApproachResponse,
   Approach,
   DashboardResponse,
+  DocumentGap,
+  DocumentSection,
+  DocumentStatus,
+  DocumentStructuredData,
   InputProfile,
   ManagementDomain,
   ProgramOverview,
@@ -12,6 +17,7 @@ import type {
   ProjectStatus,
   ProjectTeamMember,
   ProjectType,
+  ReferenceDetail,
   Role,
   StudioResponse,
   User,
@@ -104,6 +110,12 @@ export const inputApi = {
     return api.upload(`/projects/${projectId}/description`, form);
   },
   removeReference: (projectId: string, id: string) => api.delete(`/projects/${projectId}/references/${id}`),
+  /** Metadata + the text extracted on upload, for the preview panel. */
+  reference: (projectId: string, id: string) =>
+    api.get<ReferenceDetail>(`/projects/${projectId}/references/${id}`),
+  /** Absolute URL of the original file, for "open the real thing" links. */
+  referenceFileUrl: (projectId: string, id: string) =>
+    `${import.meta.env.VITE_API_URL ?? '/api'}/projects/${projectId}/references/${id}/file`,
 };
 
 export const rulesApi = {
@@ -118,6 +130,17 @@ export const documentsApi = {
   studio: (projectId: string, domain?: ManagementDomain) =>
     api.get<StudioResponse>(`/projects/${projectId}/documents${domain ? `?domain=${domain}` : ''}`),
   fit: (projectId: string, definitionId: string) => api.get(`/projects/${projectId}/documents/${definitionId}/fit`),
+  /** One generated document by id — what the dashboard's Planning documents list previews. */
+  detail: (projectId: string, documentId: string) =>
+    api.get<{
+      id: string;
+      name: string;
+      version: number;
+      status: DocumentStatus;
+      sections: DocumentSection[];
+      gaps: DocumentGap[];
+      structuredData: DocumentStructuredData | null;
+    }>(`/projects/${projectId}/documents/${documentId}`),
   /** The model chooses the structure — there is no template or section contract to set first. */
   generate: (projectId: string, definitionId: string) =>
     api.post(`/projects/${projectId}/documents/generate`, { definitionId }),
@@ -142,7 +165,19 @@ export const dashboardExportApi = {
 };
 
 export const agentApi = {
-  messages: (projectId: string) => api.get<{ messages: AgentMessage[] }>(`/projects/${projectId}/agent/messages`),
-  ask: (projectId: string, question: string) =>
-    api.post<{ agentMessage: AgentMessage }>(`/projects/${projectId}/agent/messages`, { question }),
+  sessions: (projectId: string) =>
+    api.get<{ sessions: AgentSession[] }>(`/projects/${projectId}/agent/sessions`),
+  createSession: (projectId: string) => api.post<AgentSession>(`/projects/${projectId}/agent/sessions`),
+  messages: (projectId: string, sessionId: string) =>
+    api.get<{ messages: AgentMessage[] }>(`/projects/${projectId}/agent/sessions/${sessionId}/messages`),
+  /** Asks inside one thread — the backend replays that thread's earlier turns to the model. */
+  ask: (projectId: string, sessionId: string, question: string) =>
+    api.post<{ agentMessage: AgentMessage; title: string }>(
+      `/projects/${projectId}/agent/sessions/${sessionId}/messages`,
+      { question },
+    ),
+  renameSession: (projectId: string, sessionId: string, title: string) =>
+    api.patch<AgentSession>(`/projects/${projectId}/agent/sessions/${sessionId}`, { title }),
+  deleteSession: (projectId: string, sessionId: string) =>
+    api.delete(`/projects/${projectId}/agent/sessions/${sessionId}`),
 };

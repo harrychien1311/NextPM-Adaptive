@@ -6,10 +6,13 @@ import path from 'node:path';
 import { asyncHandler } from '../../lib/async-handler';
 import { parse } from '../../lib/validate';
 import { env } from '../../config/env';
+import { contentDisposition, decodeUploadFileName } from '../../lib/file-names';
 import { PROJECT_WRITE_ROLES, requireProjectMember, requireProjectRole } from '../../middleware/auth';
 import {
   addCustomField,
   inputProfile,
+  referenceDetail,
+  referenceFilePath,
   registerDescriptionDocument,
   registerReference,
   removeCustomField,
@@ -19,8 +22,8 @@ import {
   verifyInputs,
 } from './input.service';
 
-/** The four classified groups; DESCRIPTION has its own upload endpoint below. */
-const CLASSIFIED_GROUPS = ['COMMITMENT', 'SCOPE', 'ORGANIZATION', 'SCHEDULE'] as const;
+/** Every group with its own upload tile; DESCRIPTION has a separate endpoint below. */
+const CLASSIFIED_GROUPS = ['COMMITMENT', 'SCOPE', 'ORGANIZATION', 'SCHEDULE', 'OTHER'] as const;
 
 fs.mkdirSync(env.uploadDir, { recursive: true });
 
@@ -127,13 +130,35 @@ inputRouter.post(
       await registerReference({
         projectId: req.params.projectId,
         group: body.group,
-        fileName: req.file.originalname,
+        fileName: decodeUploadFileName(req.file.originalname),
         mimeType: req.file.mimetype,
         sizeBytes: req.file.size,
         storageKey: req.file.filename,
         actorId: req.user!.id,
       }),
     );
+  }),
+);
+
+/** Metadata + extracted text, for the preview panel. Any project member may read it. */
+inputRouter.get(
+  '/:projectId/references/:id',
+  asyncHandler(async (req, res) => {
+    res.json(await referenceDetail(req.params.projectId, req.params.id));
+  }),
+);
+
+/** The original file as uploaded — `inline` so a PDF opens in the browser's own viewer. */
+inputRouter.get(
+  '/:projectId/references/:id/file',
+  asyncHandler(async (req, res) => {
+    const { path: filePath, fileName, mimeType } = await referenceFilePath(req.params.projectId, req.params.id);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: { message: 'The stored file is no longer on disk' } });
+    }
+    res.setHeader('Content-Type', mimeType || 'application/octet-stream');
+    res.setHeader('Content-Disposition', contentDisposition('inline', fileName));
+    return res.sendFile(path.resolve(filePath));
   }),
 );
 
@@ -155,7 +180,7 @@ inputRouter.post(
     res.status(201).json(
       await registerDescriptionDocument({
         projectId: req.params.projectId,
-        fileName: req.file.originalname,
+        fileName: decodeUploadFileName(req.file.originalname),
         mimeType: req.file.mimetype,
         sizeBytes: req.file.size,
         storageKey: req.file.filename,

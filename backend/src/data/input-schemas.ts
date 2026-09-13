@@ -79,4 +79,5 @@ export const REFERENCE_GROUPS = [
   { group: 'SCOPE', glyph: 'S', tone: 'cyan', title: 'Scope reference', hint: 'Requirement list, feature map or product brief' },
   { group: 'ORGANIZATION', glyph: 'O', tone: 'rose', title: 'Organization reference', hint: 'Team roster, stakeholder list or org chart' },
   { group: 'SCHEDULE', glyph: 'T', tone: 'violet', title: 'Schedule constraints', hint: 'Committed dates, launch calendar or estimate' },
+  { group: 'OTHER', glyph: '+', tone: 'green-bg', title: 'Others', hint: 'Any other project document you want the agent to read' },
 ] as const;

@@ -1,8 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { projectApi } from '../../api/endpoints';
+import { documentsApi, projectApi } from '../../api/endpoints';
 import { Ring } from '../../components/Ring';
 import { useToast } from '../../components/Toast';
+import { DocumentPreview } from './DocumentPreview';
+import { UploadPreview } from './UploadPreview';
+import type { LibraryEntry } from '../../api/types';
 import type { WorkspaceView } from '../WorkspacePage';
 
 const TASK_STATE: Record<string, string> = {
@@ -29,6 +32,7 @@ const WIDGET_LABELS: [string, string][] = [
   ['tasks', 'Planning tasks'],
   ['decisions', 'PM decisions'],
   ['domains', 'Readiness by domain'],
+  ['library', 'Planning documents'],
   ['activity', 'Agent activity'],
 ];
 
@@ -59,6 +63,28 @@ export function DashboardView({
 
   const [widgets, setWidgets] = useState<Record<string, boolean> | null>(null);
   const activeWidgets = widgets ?? data?.widgets ?? {};
+
+  /** The Planning documents row the PM clicked; decides which of the two previews opens. */
+  const [preview, setPreview] = useState<LibraryEntry | null>(null);
+
+  // Generated documents are fetched on demand — the dashboard payload carries only the listing.
+  const previewDoc = useQuery({
+    queryKey: ['document', projectId, preview?.id],
+    queryFn: () => documentsApi.detail(projectId, preview!.id),
+    enabled: preview?.kind === 'GENERATED',
+  });
+
+  // Escape closes whichever preview is open, and the page behind must not scroll under it.
+  useEffect(() => {
+    if (!preview) return;
+    const onKey = (event: KeyboardEvent) => event.key === 'Escape' && setPreview(null);
+    window.addEventListener('keydown', onKey);
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = '';
+    };
+  }, [preview]);
 
   if (isLoading || !data) {
     return (
@@ -274,6 +300,50 @@ export function DashboardView({
           </article>
         )}
 
+        {show('library') && (
+          <article className="panel widget wide">
+            <div className="panel-head">
+              <div>
+                <h2>Planning documents</h2>
+                <p>Everything attached to this project — what you uploaded and what the AI wrote</p>
+              </div>
+              <span className="copilot-badge">{data.library.length} total</span>
+            </div>
+            {data.library.length === 0 ? (
+              <div className="program-empty">
+                Nothing yet. Upload reference files on Project Input, or generate a document in the Planning Studio.
+              </div>
+            ) : (
+              <div className="doc-library">
+                {data.library.map((item) => (
+                  <button
+                    className="library-row"
+                    key={`${item.kind}-${item.id}`}
+                    onClick={() => setPreview(item)}
+                    title="View document"
+                  >
+                    <span className={`library-icon ${item.kind === 'GENERATED' ? 'ai' : 'pm'}`}>
+                      {item.kind === 'GENERATED' ? '✦' : '▤'}
+                    </span>
+                    <span className="library-name">
+                      <b>{item.name}</b>
+                      <small>
+                        {item.category}
+                        {item.sizeBytes ? ` · ${Math.max(1, Math.round(item.sizeBytes / 1024))} KB` : ''}
+                        {item.at ? ` · ${new Date(item.at).toLocaleDateString()}` : ''}
+                      </small>
+                    </span>
+                    <span className={`origin-tag ${item.origin === 'AI_GENERATED' ? 'ai' : 'pm'}`}>
+                      {item.origin === 'AI_GENERATED' ? 'AI generated' : 'PM input'}
+                    </span>
+                    <span className="library-view">View document →</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </article>
+        )}
+
         {show('activity') && (
           <article className="panel widget">
             <div className="panel-head">
@@ -323,6 +393,23 @@ export function DashboardView({
           {saveLayout.isPending ? 'Saving…' : 'Save dashboard layout'}
         </button>
       </div>
+
+      {preview?.kind === 'UPLOAD' && (
+        <UploadPreview
+          projectId={projectId}
+          fileId={preview.id}
+          fileName={preview.name}
+          onClose={() => setPreview(null)}
+        />
+      )}
+      {preview?.kind === 'GENERATED' && previewDoc.data && (
+        <DocumentPreview
+          document={previewDoc.data}
+          projectName={data.workspace.name}
+          onClose={() => setPreview(null)}
+          onDownload={() => documentsApi.downloadDocx(projectId, preview.id, preview.name)}
+        />
+      )}
     </section>
   );
 }

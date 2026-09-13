@@ -74,9 +74,12 @@ export const api = {
       const payload = text ? JSON.parse(text) : null;
       throw new ApiError(response.status, payload?.error?.message ?? response.statusText, payload?.error?.details);
     }
+    // Prefer RFC 5987 `filename*` — it is the only form that carries a non-ASCII name intact,
+    // since plain `filename` lives in a latin1 HTTP header.
     const disposition = response.headers.get('content-disposition') ?? '';
-    const match = /filename="([^"]+)"/.exec(disposition);
-    const fileName = match?.[1] ?? fallbackFileName;
+    const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
+    const plain = /filename="([^"]+)"/.exec(disposition);
+    const fileName = encoded ? decodeURIComponent(encoded[1]) : (plain?.[1] ?? fallbackFileName);
     const blob = await response.blob();
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');

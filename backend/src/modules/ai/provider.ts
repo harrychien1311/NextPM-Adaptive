@@ -144,13 +144,17 @@ export interface InputExtractionOutput {
   provider: AiProvider;
 }
 
+/** One earlier turn of the same chat, replayed so follow-up questions make sense. */
+export interface AgentTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export interface AgentReplyContext {
-  projectName: string;
-  approach: string;
+  /** The whole project as text — inputs, governance decision, documents. Built by agent.service. */
+  projectContext: string;
+  history: AgentTurn[];
   question: string;
-  verifiedCount: number;
-  missingCount: number;
-  reasons: string[];
 }
 
 /**
@@ -718,24 +722,29 @@ export async function answerAgentQuestion(context: AgentReplyContext): Promise<s
           model: env.ai.model,
           max_tokens: 700,
           ...outputConfig(),
-          // The formatting rules are a contract with the chat renderer in AgentDrawer.tsx, which
-          // deliberately understands only this subset. Widen one and the other must follow.
+          // The formatting rules are a contract with the chat renderer in AgentMessageText.tsx,
+          // which deliberately understands only this subset. Widen one and the other must follow.
           system: [
-            'You are the NextPM planning agent. Explain the governance-model recommendation, verify values',
-            'or offer to generate a planning page. You never apply a decision without PM confirmation.',
+            'You are the NextPM planning agent for one project. Answer the PM from the project data below.',
+            'You may explain the governance-model recommendation, point out missing inputs, or offer to',
+            'generate a planning document. You never apply a decision — the PM confirms everything in the UI.',
+            '',
+            'Answering rules:',
+            '- Use ONLY the project data below. If it does not answer the question, say so plainly and name',
+            '  what is missing. Never invent a date, name, owner or number.',
+            '- A value marked "(NOT YET VERIFIED)" is a draft the PM has not confirmed — say so when you use it.',
             '',
             'Formatting rules:',
             '- Reply in short paragraphs separated by a blank line. Keep the whole answer under 150 words.',
             '- You may use "- " bullet lists, "1. " numbered lists, **bold** for key terms and `code` for',
             '  field names or values.',
             '- Do NOT use headings, tables, links, block quotes, code fences or nested lists.',
+            '',
+            '=== PROJECT DATA ===',
+            context.projectContext,
           ].join('\n'),
-          messages: [
-            {
-              role: 'user',
-              content: `Project ${context.projectName}, governance model ${context.approach}, ${context.verifiedCount} verified inputs, ${context.missingCount} missing values. Recommendation reasons: ${context.reasons.join('; ')}. Question: ${context.question}`,
-            },
-          ],
+          // Earlier turns first, so "explain that in more detail" has something to refer to.
+          messages: [...context.history, { role: 'user', content: context.question }],
         }),
       });
       if (response.ok) {
@@ -758,9 +767,13 @@ export async function answerAgentQuestion(context: AgentReplyContext): Promise<s
     }
   }
 
+  // Mock fallback. It has the project context in hand but no way to reason over it, so it says
+  // what it is rather than pretending to answer.
   return [
-    `I can verify a value, explain the governance-model recommendation or generate a selected planning page for ${context.projectName}.`,
-    `Right now: ${context.verifiedCount} verified inputs, ${context.missingCount} values still waiting on you, governance model ${context.approach}.`,
-    'No decision has been applied — I will ask for your confirmation first.',
-  ].join(' ');
+    'The AI provider could not be reached, so I cannot answer this properly.',
+    '',
+    'Here is what I can see about this project:',
+    '',
+    context.projectContext.split('\n').slice(0, 20).join('\n'),
+  ].join('\n');
 }

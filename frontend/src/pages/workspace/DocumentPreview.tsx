@@ -1,4 +1,17 @@
-import type { CatalogEntry } from '../../api/types';
+import type { DocumentGap, DocumentSection, DocumentStructuredData } from '../../api/types';
+
+/**
+ * What the preview needs, independent of where it came from. The Planning Studio passes a catalog
+ * entry's document; the Dashboard passes one fetched by id.
+ */
+export interface PreviewDocument {
+  name: string;
+  version: number;
+  status: string;
+  sections: DocumentSection[];
+  gaps: DocumentGap[];
+  structuredData: DocumentStructuredData | null;
+}
 
 /** Capturing + global so `split` keeps the tokens as their own array entries. */
 const GAP_SPLIT = /(\{\{gap:\d+\}\})/g;
@@ -40,34 +53,35 @@ function Cell({ text }: { text: string }) {
  * same data the export does, so the two cannot drift apart over a rendering library's quirks.
  */
 export function DocumentPreview({
-  entry,
+  document,
   projectName,
   onClose,
   onDownload,
 }: {
-  entry: CatalogEntry | null;
+  document: PreviewDocument | null;
   projectName: string;
   onClose: () => void;
-  onDownload: () => void;
+  onDownload?: () => void;
 }) {
-  if (!entry?.document) return null;
-  const document = entry.document;
+  if (!document) return null;
   const raci = document.structuredData?.raciTable ?? [];
   const risks = document.structuredData?.riskRegister ?? [];
 
   return (
-    <div className="doc-preview-overlay" role="dialog" aria-label={`${entry.name} preview`}>
+    <div className="doc-preview-overlay" role="dialog" aria-label={`${document.name} preview`}>
       <div className="doc-preview-bar">
         <div>
-          <strong>{entry.name}</strong>
+          <strong>{document.name}</strong>
           <small>
             v{document.version} · {document.status === 'APPROVED' ? 'PM approved · baseline' : 'AI draft · PM review required'}
           </small>
         </div>
         <div>
-          <button className="secondary" onClick={onDownload}>
-            Download .docx
-          </button>
+          {onDownload && (
+            <button className="secondary" onClick={onDownload}>
+              Download .docx
+            </button>
+          )}
           <button className="secondary" onClick={onClose}>
             Close preview
           </button>
@@ -76,7 +90,7 @@ export function DocumentPreview({
 
       <div className="doc-preview-scroll" onClick={(event) => event.target === event.currentTarget && onClose()}>
         <article className="doc-page">
-          <h1>{entry.name}</h1>
+          <h1>{document.name}</h1>
           <p className="doc-meta">
             <b>{projectName}</b>
             <span>

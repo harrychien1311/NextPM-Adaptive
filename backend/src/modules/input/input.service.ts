@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { InputSource, ManagementDomain, ReferenceGroup, ReferenceStatus } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 import { badRequest, notFound } from '../../lib/http-error';
@@ -436,6 +437,35 @@ export async function registerDescriptionDocument(params: {
   });
 
   return file;
+}
+
+/**
+ * One uploaded file for the preview panel: its metadata plus the text extracted on upload.
+ * The original bytes stay on disk — `referenceFilePath` below serves those for download.
+ */
+export async function referenceDetail(projectId: string, id: string) {
+  const file = await prisma.referenceFile.findFirst({ where: { id, projectId } });
+  if (!file) throw notFound('Reference file not found');
+  const extraction = file.extraction as { rawText?: string; textAvailable?: boolean } | null;
+
+  return {
+    id: file.id,
+    fileName: file.fileName,
+    group: file.group,
+    status: file.status,
+    message: file.message,
+    sizeBytes: file.sizeBytes,
+    uploadedAt: file.uploadedAt,
+    textAvailable: Boolean(extraction?.textAvailable),
+    text: extraction?.textAvailable ? (extraction.rawText ?? null) : null,
+  };
+}
+
+/** Resolves the on-disk path of an upload, for streaming the original file back. */
+export async function referenceFilePath(projectId: string, id: string) {
+  const file = await prisma.referenceFile.findFirst({ where: { id, projectId } });
+  if (!file) throw notFound('Reference file not found');
+  return { path: path.join(env.uploadDir, file.storageKey), fileName: file.fileName, mimeType: file.mimeType };
 }
 
 export async function removeReference(projectId: string, id: string) {

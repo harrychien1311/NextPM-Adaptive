@@ -447,17 +447,17 @@ export async function approveDocument(params: { projectId: string; documentId: s
   return updated;
 }
 
+/** One generated document, shaped for the preview panel (which the dashboard also opens). */
 export async function documentDetail(projectId: string, documentId: string) {
   const document = await prisma.planningDocument.findFirst({
     where: { id: documentId, projectId },
     include: {
       sections: { orderBy: { order: 'asc' } },
-      template: true,
       approvedBy: { select: { id: true, name: true, initials: true } },
     },
   });
   if (!document) throw notFound('Planning document not found');
-  return document;
+  return { ...document, gaps: readGaps(document.pmQuestions) };
 }
 
 /** Template fit panel: why this template is recommended for this project. */

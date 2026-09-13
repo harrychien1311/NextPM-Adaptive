@@ -79,6 +79,7 @@ enum ReferenceGroup {
   SCOPE // requirement list, feature map, product brief
   ORGANIZATION // roster, stakeholder list, org chart
   SCHEDULE // committed dates, launch calendar, estimate
+  OTHER // anything else about the project the PM wants the agent to read
   DESCRIPTION // free-form project description document, read for AI analysis
 }
 
@@ -153,6 +154,7 @@ model User {
 
   ownedPrograms    Program[]
   ownedProjects    Project[]           @relation("projectOwner")
+  agentSessions    AgentSession[]
   memberships      ProjectMember[]
   decisions        ApproachDecision[]
   approvedDocs     PlanningDocument[]  @relation("documentApprover")
@@ -212,6 +214,7 @@ model Project {
   domainReadiness  DomainReadiness[]
   auditEvents      AuditEvent[]
   agentMessages    AgentMessage[]
+  agentSessions    AgentSession[]
   dashboardLayouts DashboardLayout[]
   exports          ExportJob[]
 
@@ -531,17 +534,39 @@ model AuditEvent {
   @@map("audit_events")
 }
 
+/// One chat thread, scoped to a project AND a user: chats are private to whoever held them,
+/// the same way project access is. `title` is derived from the first question asked.
+model AgentSession {
+  id        String   @id @default(uuid())
+  projectId String
+  userId    String?
+  title     String   @default("New chat")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project  Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user     User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  messages AgentMessage[]
+
+  @@index([projectId, userId, updatedAt])
+  @@map("agent_sessions")
+}
+
 model AgentMessage {
   id        String    @id @default(uuid())
   projectId String
+  /// Null only for rows created before chat sessions existed.
+  sessionId String?
   role      AgentRole
   content   String
   meta      Json? // recommendation reasons, verified inputs, suggested actions
   createdAt DateTime  @default(now())
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  session AgentSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([projectId, createdAt])
+  @@index([sessionId, createdAt])
   @@map("agent_messages")
 }
 

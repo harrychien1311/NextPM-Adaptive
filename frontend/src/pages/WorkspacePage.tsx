@@ -8,6 +8,7 @@ import { InputView } from './workspace/InputView';
 import { ApproachView } from './workspace/ApproachView';
 import { StudioView } from './workspace/StudioView';
 import { AgentDrawer } from './workspace/AgentDrawer';
+import { FloatingAgentButton } from './workspace/FloatingAgentButton';
 import { TeamModal } from './workspace/TeamModal';
 import { SignOutIcon } from '../components/icons';
 
@@ -191,15 +192,7 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
         </main>
       </div>
 
-      {!agentOpen && (
-        <button className="floating-agent" onClick={() => setAgentOpen(true)}>
-          <span>✦</span>
-          <div>
-            <strong>Ask Planning Agent</strong>
-            <small>Copilot Studio</small>
-          </div>
-        </button>
-      )}
+      {!agentOpen && <FloatingAgentButton onOpen={() => setAgentOpen(true)} />}
       <AgentDrawer projectId={projectId} open={agentOpen} onClose={() => setAgentOpen(false)} />
       <TeamModal projectId={projectId} open={teamOpen} onClose={() => setTeamOpen(false)} />
     </>

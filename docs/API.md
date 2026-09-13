@@ -53,7 +53,9 @@ workspace; `PROJECT_OWNER` creates projects and may open only the ones it owns o
 | POST | `/projects/:id/custom-fields` | `{ name, value?, useIn: RULES\|DOCUMENT\|BOTH }` |
 | DELETE | `/projects/:id/custom-fields/:fieldId` | |
 | POST | `/projects/:id/actions/:actionId/resolve` | `{ value }` — writes the answer back into the input profile |
-| POST | `/projects/:id/references` | multipart: `file`, `group: COMMITMENT\|SCOPE\|ORGANIZATION\|SCHEDULE` — the four classified reference groups |
+| POST | `/projects/:id/references` | multipart: `file`, `group: COMMITMENT\|SCOPE\|ORGANIZATION\|SCHEDULE\|OTHER` — `OTHER` is the catch-all slot for any project document; it is read on Verify exactly like the classified ones |
+| GET | `/projects/:id/references/:fileId` | metadata + the text extracted on upload, for the preview panel |
+| GET | `/projects/:id/references/:fileId/file` | the original bytes, `Content-Disposition: inline` so a PDF opens in the browser viewer |
 | DELETE | `/projects/:id/references/:fileId` | also removes the project description document |
 | POST | `/projects/:id/description` | multipart: `file` (PDF/DOCX/TXT) — the project description document; text is extracted immediately, read by the AI on the next recommendation |
 
@@ -114,11 +116,16 @@ with `POST …/fill`.
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| GET | `/projects/:id/dashboard` | readiness verdict, outputs, tasks, actions, domain bars, activity, widget layout |
+| GET | `/projects/:id/dashboard` | readiness verdict, outputs, tasks, actions, domain bars, activity, widget layout, and `library` — every document attached to the project, each tagged `origin: PM_INPUT \| AI_GENERATED` and `kind: UPLOAD \| GENERATED` (which decides whether the UI opens the upload preview or the document preview) |
+| GET | `/projects/:id/documents/:documentId` | one generated document with its sections and gaps — what the dashboard previews |
 | PUT | `/projects/:id/dashboard/layout` | `{ widgets: { readiness: true, ... } }` |
 | GET | `/projects/:id/activity?limit=30` | audit trail |
-| GET | `/projects/:id/agent/messages` | conversation history |
-| POST | `/projects/:id/agent/messages` | `{ question }` — reply is advisory, `meta.decisionApplied` is always `false` |
+| GET | `/projects/:id/agent/sessions` | the caller's chat threads, newest activity first |
+| POST | `/projects/:id/agent/sessions` | starts a thread; titled from its first question |
+| GET | `/projects/:id/agent/sessions/:sessionId/messages` | one thread's messages; 403 if it belongs to another user |
+| POST | `/projects/:id/agent/sessions/:sessionId/messages` | `{ question }` — the thread's earlier turns are replayed to the model. Reply is advisory, `meta.decisionApplied` is always `false` |
+| PATCH | `/projects/:id/agent/sessions/:sessionId` | `{ title }` |
+| DELETE | `/projects/:id/agent/sessions/:sessionId` | messages cascade |
 
 ## Status codes
 

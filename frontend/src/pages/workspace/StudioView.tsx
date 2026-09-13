@@ -475,7 +475,7 @@ export function StudioView({ projectId }: { projectId: string }) {
 
       {previewing && (
         <DocumentPreview
-          entry={selected ?? null}
+          document={draft ? { ...draft, name: selected?.name ?? 'Document' } : null}
           projectName={workspace.data?.name ?? ''}
           onClose={() => setPreviewing(false)}
           onDownload={() => documentsApi.downloadDocx(projectId, draft!.id, selected?.name ?? 'document')}

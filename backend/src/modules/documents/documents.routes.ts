@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { ManagementDomain } from '@prisma/client';
 import { asyncHandler } from '../../lib/async-handler';
 import { parse } from '../../lib/validate';
+import { contentDisposition } from '../../lib/file-names';
 import { PROJECT_WRITE_ROLES, requireProjectMember, requireProjectRole } from '../../middleware/auth';
 import {
   answerDocumentGap,
@@ -140,7 +141,7 @@ documentsRouter.get(
   asyncHandler(async (req, res) => {
     const { fileName, buffer } = await renderDocumentDocx(req.params.projectId, req.params.documentId);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Content-Disposition', contentDisposition('attachment', fileName));
     res.send(buffer);
   }),
 );
@@ -151,7 +152,7 @@ documentsRouter.get(
   asyncHandler(async (req, res) => {
     const html = await renderDashboardHtml(req.params.projectId);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="dashboard.html"`);
+    res.setHeader('Content-Disposition', contentDisposition('attachment', 'dashboard.html'));
     res.send(html);
   }),
 );
