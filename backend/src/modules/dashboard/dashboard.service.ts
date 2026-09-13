@@ -2,7 +2,7 @@ import { DocumentStatus, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 import { notFound } from '../../lib/http-error';
 import { listEvents } from '../audit/audit.service';
-import { projectWorkspace } from '../portfolio/portfolio.service';
+import { projectWorkspace } from '../program/program.service';
 
 const DEFAULT_WIDGETS = {
   readiness: true,

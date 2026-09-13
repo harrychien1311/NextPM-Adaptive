@@ -94,6 +94,7 @@ export async function runEvaluation(projectId: string, actorId: string) {
       alternatives: analysis.alternatives as unknown as Prisma.InputJsonValue,
       summary: analysis.summary,
       candidateValues: appliedCandidates as unknown as Prisma.InputJsonValue,
+      aiProvider: analysis.provider,
     },
   });
 
@@ -103,7 +104,7 @@ export async function runEvaluation(projectId: string, actorId: string) {
     actorType: 'AGENT',
     type: 'GOVERNANCE_MODEL_RECOMMENDED',
     title: `${analysis.recommendedApproach} recommended · ${analysis.confidence}% confidence`,
-    detail: `${appliedCandidates.length} candidate values proposed for PM confirmation`,
+    detail: `${appliedCandidates.length} candidate values proposed for PM confirmation · produced by ${analysis.provider}`,
     payload: { evaluationId: evaluation.id, confidence: analysis.confidence, alternatives: analysis.alternatives },
   });
 

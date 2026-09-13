@@ -1,3 +1,5 @@
 node_modules
 dist
 .env
+# Build cache written by `tsc -b`; it changes on every build and belongs to nobody.
+tsconfig.tsbuildinfo

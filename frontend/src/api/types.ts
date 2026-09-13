@@ -17,23 +17,49 @@ export type ManagementDomain =
   | 'RISK';
 export type DocumentStatus = 'NOT_GENERATED' | 'GENERATING' | 'PM_REVIEW' | 'APPROVED' | 'SUPERSEDED';
 
+/** Global account role. ADMIN manages accounts only and never sees a project workspace. */
+export type Role = 'ADMIN' | 'PROGRAM_OWNER' | 'PROJECT_OWNER';
+/** A user's role inside one project — independent of their account role. */
+export type ProjectRole = 'OWNER' | 'MEMBER' | 'VIEWER';
+
 export interface User {
   id: string;
   email: string;
   name: string;
   initials: string;
-  role: string;
+  role: Role;
   jobTitle: string;
 }
 
-export interface PortfolioSummary {
+export interface AdminAccount {
+  id: string;
+  email: string;
+  name: string;
+  initials: string;
+  jobTitle: string;
+  role: Role;
+  active: boolean;
+  createdAt: string;
+  ownedProjects: number;
+  ownedPrograms: number;
+  memberships: number;
+}
+
+export interface AdminAccountList {
+  users: AdminAccount[];
+  counts: { total: number; active: number; admins: number; programOwners: number; projectOwners: number };
+}
+
+export interface ProgramSummary {
   programs: number;
   activePrograms: number;
   activeProjects: number;
+  /** Projects this user may actually open — the rest are visible but locked. */
+  myProjects: number;
   byType: Record<'SI' | 'SM' | 'PRODUCT', number>;
   needsAttention: number;
   pendingDecisions: number;
-  portfolioReadiness: number;
+  deliveryReadiness: number;
   statusCounts: Record<'all' | 'active' | 'draft' | 'hold' | 'closed', number>;
 }
 
@@ -43,12 +69,20 @@ export interface ProjectCard {
   type: ProjectType;
   status: ProjectStatus;
   summary: string | null;
+  customer: string | null;
+  programId: string | null;
   targetLabel: string | null;
   programKey: string;
   programName: string;
   approach: Approach | null;
   openDecisions: number;
   members: { id: string; initials: string; name: string }[];
+  /** False when the viewer may see the card but has not been granted the workspace. */
+  canOpen: boolean;
+  /** May rename, re-file or change the status of this project. */
+  canEdit: boolean;
+  /** May delete it — stricter than canEdit, since deletion cascades and cannot be undone. */
+  canDelete: boolean;
   readiness: number;
   inputReadiness: number;
   verifiedInputs: number;
@@ -64,15 +98,16 @@ export interface ProgramGroup {
   id: string | null;
   name: string;
   description: string | null;
+  targetOutcome: string | null;
   colorKey: string;
   readiness: number | null;
   health: 'good' | 'watch' | 'risk' | 'none';
   projects: ProjectCard[];
 }
 
-export interface PortfolioOverview {
-  portfolio: { id: string; name: string };
-  summary: PortfolioSummary;
+export interface ProgramOverview {
+  capabilities: { canCreateProgram: boolean; canCreateProject: boolean; canOpenAll: boolean };
+  summary: ProgramSummary;
   groups: ProgramGroup[];
 }
 
@@ -82,7 +117,6 @@ export interface Workspace {
   type: ProjectType;
   status: ProjectStatus;
   phaseLabel: string;
-  portfolio: { id: string; name: string };
   program: { id: string; name: string; key: string } | null;
   members: { id: string; name: string; initials: string }[];
   approach: { approach: Approach; rigor: string; outcome: string; decidedAt: string } | null;
@@ -100,7 +134,7 @@ export interface Workspace {
 export interface ProjectTeamMember {
   id: string;
   userId: string;
-  role: string;
+  role: ProjectRole;
   createdAt: string;
   user: { id: string; name: string; initials: string; jobTitle: string };
 }
@@ -198,6 +232,15 @@ export interface InputProfile {
   }[];
 }
 
+/** What "Verify input" reports back: what it read, what it prefilled, and what it verified. */
+export interface VerifyResult {
+  verified: number;
+  prefilled: number;
+  documentsRead: number;
+  stillEmpty: number;
+  provider: 'anthropic' | 'mock';
+}
+
 export interface GovernanceAlternative {
   approach: Approach;
   score: number;
@@ -219,6 +262,8 @@ export interface ApproachResponse {
     alternatives: GovernanceAlternative[];
     summary: string | null;
     candidateValues: { fieldKey: string; label: string; value: string }[];
+    /** 'mock' means the API call failed and a keyword heuristic produced this — warn the PM. */
+    aiProvider: 'anthropic' | 'mock';
     createdAt: string;
   } | null;
   options: {
@@ -243,15 +288,35 @@ export interface ApproachResponse {
   } | null;
 }
 
-export interface DocumentTemplate {
-  id: string;
-  key: string;
-  name: string;
-  subtitle: string | null;
-  description: string | null;
-  recommended: boolean;
-  fitScore: number;
-  sections: { title: string; hint?: string; required?: boolean; defaultIncluded?: boolean }[];
+/**
+ * A fact the document needed but the project data did not have. The model wrote `token` into the
+ * section text instead of guessing; "Fill out the document" swaps the answer in for that token.
+ */
+export interface DocumentGap {
+  token: string;
+  question: string;
+  answer: string | null;
+}
+
+export interface RaciRow {
+  activity: string;
+  responsible: string;
+  accountable: string;
+  consulted: string;
+  informed: string;
+}
+
+export interface RiskRow {
+  risk: string;
+  severity: string;
+  owner: string;
+  mitigation: string;
+}
+
+/** Tables the model returned alongside the prose, for the two documents that need one. */
+export interface DocumentStructuredData {
+  raciTable?: RaciRow[];
+  riskRegister?: RiskRow[];
 }
 
 export interface DocumentSection {
@@ -271,15 +336,14 @@ export interface CatalogEntry {
   domain: ManagementDomain;
   requirement: 'REQUIRED' | 'CONDITIONAL';
   conditionKey: string | null;
-  templates: DocumentTemplate[];
   document: {
     id: string;
     status: DocumentStatus;
     version: number;
     coverage: number;
-    templateId: string | null;
     sections: DocumentSection[];
-    pmQuestions: string[];
+    gaps: DocumentGap[];
+    structuredData: DocumentStructuredData | null;
     generatedAt: string | null;
     approvedAt: string | null;
   } | null;

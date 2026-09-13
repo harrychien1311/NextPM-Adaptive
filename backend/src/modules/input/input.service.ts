@@ -4,7 +4,9 @@ import { badRequest, notFound } from '../../lib/http-error';
 import { env } from '../../config/env';
 import { REFERENCE_GROUPS } from '../../data/input-schemas';
 import { extractTextFromFile } from '../../lib/extract-text';
+import { matchOptionsInText } from '../../lib/option-match';
 import { computeInputReadiness } from '../../lib/readiness';
+import { extractInputValues, type AiProvider } from '../ai/provider';
 import { logEvent } from '../audit/audit.service';
 
 const DESCRIPTION_GROUP: ReferenceGroup = 'DESCRIPTION';
@@ -138,14 +140,102 @@ export async function saveValues(params: {
  * calls the AI itself: the governance-model recommendation (which also reads the
  * project description document) is a separate, explicit action on the Approach screen.
  */
+/**
+ * "Verify input" does two things, in this order:
+ *
+ * 1. **Prefill from the uploaded documents.** Text was already pulled out of every upload
+ *    (language-agnostic, no model involved). Stage 1 maps that text onto SELECT options
+ *    deterministically; only the fields it cannot resolve are sent to the model in stage 2.
+ *    Whatever comes back lands in *empty* fields as AI_SUGGESTED and **unverified** — a document
+ *    never becomes an approved fact on its own, and a PM answer is never overwritten. Fields
+ *    nothing could answer stay blank for the PM to fill in.
+ *
+ * 2. **Verify what the PM actually owns.** Values the PM typed are marked verified; the values
+ *    this run just suggested are deliberately left unverified, so the next press of the button
+ *    is what promotes the ones the PM has reviewed and kept.
+ */
 export async function verifyInputs(projectId: string, actorId: string) {
-  const values = await prisma.projectInputValue.findMany({
-    where: { projectId, NOT: { value: null } },
-    include: { definition: true },
-  });
+  const project = await prisma.project.findUnique({ where: { id: projectId } });
+  if (!project) throw notFound('Project not found');
 
+  const [definitions, existingValues, references] = await Promise.all([
+    prisma.inputFieldDefinition.findMany({ where: { projectType: project.type }, orderBy: { order: 'asc' } }),
+    prisma.projectInputValue.findMany({ where: { projectId } }),
+    prisma.referenceFile.findMany({ where: { projectId }, orderBy: { uploadedAt: 'asc' } }),
+  ]);
+
+  const valueByDefinition = new Map(existingValues.map((value) => [value.definitionId, value]));
+  const documents = references
+    .map((file) => {
+      const extraction = file.extraction as { rawText?: string; textAvailable?: boolean } | null;
+      const text = extraction?.textAvailable && extraction.rawText ? extraction.rawText : null;
+      return text ? { label: `${file.group} · ${file.fileName}`, text } : null;
+    })
+    .filter((document): document is { label: string; text: string } => document !== null);
+
+  // Only fields with no value at all are open for prefill.
+  const emptyDefinitions = definitions.filter((definition) => !valueByDefinition.get(definition.id)?.value);
+
+  const suggestions = new Map<string, string>();
+  let provider: AiProvider = 'mock';
+
+  if (documents.length && emptyDefinitions.length) {
+    const corpus = documents.map((document) => document.text).join('\n\n');
+
+    // Stage 1 — deterministic, free, no tokens spent.
+    const matched = matchOptionsInText(
+      corpus,
+      emptyDefinitions.map((definition) => ({ fieldKey: definition.key, options: definition.options })),
+    );
+    for (const match of matched) suggestions.set(match.fieldKey, match.value);
+
+    // Stage 2 — the model, for everything stage 1 could not resolve (including any document
+    // that is not in English, where literal option matching can never work).
+    const unresolved = emptyDefinitions.filter((definition) => !suggestions.has(definition.key));
+    if (unresolved.length) {
+      const extracted = await extractInputValues({
+        projectName: project.name,
+        projectType: project.type,
+        documents,
+        fields: unresolved.map((definition) => ({
+          fieldKey: definition.key,
+          label: definition.label,
+          fieldType: definition.fieldType,
+          options: definition.options,
+        })),
+      });
+      provider = extracted.provider;
+
+      const definitionByKey = new Map(unresolved.map((definition) => [definition.key, definition]));
+      for (const value of extracted.values) {
+        const definition = definitionByKey.get(value.fieldKey);
+        if (!definition || !value.value) continue;
+        // A SELECT may only ever hold one of its own options — drop anything else rather than
+        // writing a value the form cannot render.
+        if (definition.options.length && !definition.options.includes(value.value)) continue;
+        suggestions.set(definition.key, value.value);
+      }
+    }
+
+    const definitionByKey = new Map(definitions.map((definition) => [definition.key, definition]));
+    for (const [fieldKey, value] of suggestions) {
+      const definition = definitionByKey.get(fieldKey);
+      if (!definition) continue;
+      await prisma.projectInputValue.upsert({
+        where: { projectId_definitionId: { projectId, definitionId: definition.id } },
+        create: { projectId, definitionId: definition.id, value, source: InputSource.AI_SUGGESTED },
+        update: { value, source: InputSource.AI_SUGGESTED, verified: false, conflictNote: null },
+      });
+    }
+  }
+
+  // Verify the PM's own answers. AI suggestions — including the ones just written — stay
+  // unverified until the PM has looked at them and pressed the button again.
+  const verifiable = await prisma.projectInputValue.findMany({
+    where: { projectId, NOT: { value: null }, source: InputSource.PM_INPUT },
+  });
   await prisma.projectInputValue.updateMany({
-    where: { projectId, NOT: { value: null } },
+    where: { projectId, NOT: { value: null }, source: InputSource.PM_INPUT },
     data: { verified: true, verifiedById: actorId, verifiedAt: new Date() },
   });
 
@@ -159,11 +249,19 @@ export async function verifyInputs(projectId: string, actorId: string) {
     projectId,
     actorId,
     type: 'INPUTS_VERIFIED',
-    title: `${values.length} data points verified`,
-    detail: 'PM confirmed the current input profile as the basis for the governance-model recommendation.',
+    title: `${verifiable.length} data points verified · ${suggestions.size} prefilled from documents`,
+    detail: documents.length
+      ? `Read ${documents.length} uploaded document(s); extraction produced by ${provider}.`
+      : 'No uploaded documents to read — verified the PM-entered profile only.',
   });
 
-  return { verified: values.length };
+  return {
+    verified: verifiable.length,
+    prefilled: suggestions.size,
+    documentsRead: documents.length,
+    stillEmpty: definitions.length - (existingValues.filter((value) => value.value).length + suggestions.size),
+    provider,
+  };
 }
 
 export async function addCustomField(params: { projectId: string; name: string; value?: string; useIn?: string }) {
@@ -230,8 +328,12 @@ export async function resolveAction(params: { projectId: string; actionId: strin
 }
 
 /**
- * Registers an uploaded reference and its candidate extraction. Files never become
- * approved facts: extracted values are stored as AI_SUGGESTED for PM confirmation.
+ * Registers an uploaded reference file. Its text is read here, exactly like the project
+ * description document — reading a file is cheap and language-agnostic, while deciding what the
+ * text *means* is deferred to "Verify input" so the PM controls when a model is called.
+ *
+ * Files never become approved facts: anything derived from them lands as AI_SUGGESTED for PM
+ * confirmation.
  */
 export async function registerReference(params: {
   projectId: string;
@@ -248,19 +350,21 @@ export async function registerReference(params: {
     throw badRequest(`Maximum ${env.maxFilesPerGroup} files per reference group`);
   }
 
-  const file = await prisma.referenceFile.create({
-    data: { ...fileData, status: ReferenceStatus.CLASSIFYING },
+  const { text, unsupportedFormat } = await extractTextFromFile({
+    storageKey: params.storageKey,
+    fileName: params.fileName,
   });
 
-  // Verification sequence: classify -> extract -> compare with PM input -> flag -> PM confirms.
-  const extraction = await extractCandidates(params.group);
-  const updated = await prisma.referenceFile.update({
-    where: { id: file.id },
+  const file = await prisma.referenceFile.create({
     data: {
-      status: extraction.conflicts.length ? ReferenceStatus.WARNING : ReferenceStatus.VERIFIED,
-      verifiedFields: extraction.candidates.length,
-      message: extraction.conflicts[0] ?? `${extraction.candidates.length} fields verified`,
-      extraction: extraction as unknown as object,
+      ...fileData,
+      status: text ? ReferenceStatus.UPLOADED : ReferenceStatus.WARNING,
+      message: text
+        ? 'Text extracted — press Verify input to read it into the form'
+        : unsupportedFormat
+          ? 'This file format cannot be read as text — re-upload as PDF, DOCX or TXT'
+          : 'Could not read this file — re-upload as PDF, DOCX or TXT',
+      extraction: { rawText: text, textAvailable: Boolean(text) },
     },
   });
 
@@ -268,12 +372,14 @@ export async function registerReference(params: {
     projectId: params.projectId,
     actorId,
     actorType: 'AGENT',
-    type: 'REFERENCE_VERIFIED',
-    title: `${params.fileName} checked against group rules`,
-    detail: `${extraction.candidates.length} candidate values proposed for PM confirmation`,
+    type: 'REFERENCE_UPLOADED',
+    title: `${params.fileName} added to ${params.group.toLowerCase()} references`,
+    detail: text
+      ? `${text.length.toLocaleString()} characters extracted; Verify input will read them into the form.`
+      : 'File stored, but no readable text was found.',
   });
 
-  return updated;
+  return file;
 }
 
 /**
@@ -332,26 +438,6 @@ export async function registerDescriptionDocument(params: {
   return file;
 }
 
-/**
- * Extraction stub. Replace with a real parser (pdf-parse / xlsx / docx) or a
- * document-understanding model; the contract stays the same.
- */
-async function extractCandidates(group: ClassifiedReferenceGroup) {
-  const map: Record<ClassifiedReferenceGroup, { candidates: { fieldKey: string; value: string }[]; conflicts: string[] }> = {
-    COMMITMENT: {
-      candidates: [
-        { fieldKey: 'contractModel', value: 'Fixed price' },
-        { fieldKey: 'deadlineFlexibility', value: 'Fixed launch date' },
-      ],
-      conflicts: [],
-    },
-    SCOPE: { candidates: [{ fieldKey: 'scopeClarity', value: 'Medium — major flows known' }], conflicts: ['Acceptance owner missing'] },
-    ORGANIZATION: { candidates: [], conflicts: [] },
-    SCHEDULE: { candidates: [], conflicts: [] },
-  };
-  return map[group];
-}
-
 export async function removeReference(projectId: string, id: string) {
   const file = await prisma.referenceFile.findFirst({ where: { id, projectId } });
   if (!file) throw notFound('Reference file not found');
@@ -359,13 +445,17 @@ export async function removeReference(projectId: string, id: string) {
   return { removed: true };
 }
 
-/** Domain readiness = share of that domain's required inputs which are verified. */
+/**
+ * Domain readiness = share of that domain's inputs which are filled *and* verified. Scored over
+ * every field in the domain, not just the required ones, for the same reason as overall input
+ * readiness: only two fields are required, and most domains contain neither of them.
+ */
 export async function recomputeDomainReadiness(projectId: string) {
   const values = await prisma.projectInputValue.findMany({ where: { projectId }, include: { definition: true } });
   const domains: ManagementDomain[] = ['GOVERNANCE', 'SCOPE', 'SCHEDULE', 'FINANCE', 'STAKEHOLDERS', 'RESOURCES', 'RISK'];
 
   for (const domain of domains) {
-    const scoped = values.filter((value) => value.definition.domain === domain && value.definition.required);
+    const scoped = values.filter((value) => value.definition.domain === domain);
     const score = scoped.length
       ? Math.round((scoped.filter((value) => value.value && value.verified).length / scoped.length) * 100)
       : 0;

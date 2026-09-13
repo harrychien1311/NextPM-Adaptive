@@ -13,7 +13,12 @@ export async function login(email: string, password: string) {
   return { token: signToken(user), user: publicUser(user) };
 }
 
-export async function register(params: { email: string; name: string; password: string; role?: Role; jobTitle?: string }) {
+/**
+ * Self-service sign-up. The role is hard-coded to PROJECT_OWNER and deliberately NOT taken from
+ * the request body: PROGRAM_OWNER and ADMIN accounts may only be created by an administrator
+ * through the admin console (modules/admin).
+ */
+export async function register(params: { email: string; name: string; password: string; jobTitle?: string }) {
   const existing = await prisma.user.findUnique({ where: { email: params.email.toLowerCase() } });
   if (existing) throw conflict('This email is already registered');
   const user = await prisma.user.create({
@@ -22,7 +27,7 @@ export async function register(params: { email: string; name: string; password: 
       name: params.name,
       initials: initialsOf(params.name),
       jobTitle: params.jobTitle ?? 'Project Manager',
-      role: params.role ?? Role.PROJECT_MANAGER,
+      role: Role.PROJECT_OWNER,
       passwordHash: await bcrypt.hash(params.password, 10),
     },
   });

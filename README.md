@@ -15,7 +15,7 @@ approved facts automatically, and the AI never applies a decision on its own.
 
 | Layer | Choice | Why |
 | --- | --- | --- |
-| Database | PostgreSQL 16 + Prisma ORM | Relational hierarchy (portfolio → program → project), JSON columns for recommendation snapshots |
+| Database | PostgreSQL 16 + Prisma ORM | Relational hierarchy (program → project), JSON columns for recommendation snapshots |
 | Backend | Node 20, TypeScript, Express, Zod | Modular services, one module per planning flow step |
 | Frontend | React 18, TypeScript, Vite, TanStack Query | The prototype CSS is reused byte-for-byte in `frontend/src/styles/app.css` |
 | Auth | JWT + bcrypt, role-based | Only PM roles can confirm governance models and approve outputs |
@@ -32,7 +32,7 @@ cd backend
 cp .env.example .env          # adjust DATABASE_URL / JWT_SECRET if needed
 npm install
 npx prisma migrate dev --name init
-npm run db:seed               # 1 portfolio, 4 programs, 8 project workspaces
+npm run db:seed               # 6 accounts, 4 programs, 8 project workspaces
 npm run dev                   # http://localhost:4000
 
 # 3. Frontend (new terminal)
@@ -42,7 +42,13 @@ npm install
 npm run dev                   # http://localhost:5173
 ```
 
-Seeded sign-in: `lina.vuong@nextpm.local` / `NextPM!2026`
+Seeded sign-ins (all `NextPM!2026`):
+
+| Account | Role | Sees |
+| --- | --- | --- |
+| `lina.vuong@nextpm.local` | Program owner | creates programs and projects; opens every workspace |
+| `nam.hoang@nextpm.local` | Project owner | creates projects; opens only the two projects they are a member of |
+| `admin@nextpm.local` | Administrator | the account console only — no project workspace |
 
 ### Everything in Docker
 
@@ -78,7 +84,8 @@ nextpm/
 │       ├── data/                  # input schemas, document catalog, governance-model metadata
 │       ├── modules/
 │       │   ├── auth/              # login, JWT, roles
-│       │   ├── portfolio/         # portfolio → program → project + readiness roll-up
+│       │   ├── admin/             # account administration (administrator-only)
+│       │   ├── program/           # program → project + access control + readiness roll-up
 │       │   ├── input/             # flow 1: values, verification, references, actions
 │       │   ├── rules/             # flow 2: AI recommendation snapshot + PM decision gate
 │       │   ├── documents/         # flow 3: catalog, templates, generation, approval, .docx/.html export
@@ -92,7 +99,8 @@ nextpm/
 │   └── src/
 │       ├── api/                   # typed client + endpoint map
 │       ├── pages/
-│       │   ├── PortfolioPage.tsx  # portfolio overview screen
+│       │   ├── AdminPage.tsx      # administrator account console
+│       │   ├── ProgramOverviewPage.tsx # program overview screen
 │       │   └── workspace/         # DashboardView, InputView, ApproachView, StudioView, AgentDrawer
 │       └── styles/app.css         # design system from the handoff, unchanged
 ├── docs/

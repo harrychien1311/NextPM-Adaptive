@@ -1,8 +1,26 @@
-import { Document, HeadingLevel, Packer, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } from 'docx';
+import {
+  BorderStyle,
+  Document,
+  Packer,
+  Paragraph,
+  ShadingType,
+  Table,
+  TableCell,
+  TableRow,
+  TextRun,
+  WidthType,
+} from 'docx';
 import { DocumentStatus, ManagementDomain, Prisma, Requirement } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 import { badRequest, conflict, notFound } from '../../lib/http-error';
-import { generateDocument, generateGovernanceArtifact, RaciRow, RiskRow } from '../ai/provider';
+import {
+  generateDocument,
+  generateGovernanceArtifact,
+  type DocumentGap,
+  type GenerationOutput,
+  type RaciRow,
+  type RiskRow,
+} from '../ai/provider';
 import { logEvent } from '../audit/audit.service';
 import { DELIVERY_TEMPLATE } from '../../data/document-catalog';
 import { artifactGuidance, governanceModelMeta, isGovernanceArtifact } from '../../data/governance-models';
@@ -48,7 +66,6 @@ export async function catalogForProject(projectId: string, domain?: ManagementDo
   const definitions = await prisma.documentDefinition.findMany({
     where: { projectType: project.type, ...(domain ? { domain } : {}) },
     orderBy: [{ domain: 'asc' }, { order: 'asc' }],
-    include: { templates: true },
   });
 
   const documents = await prisma.planningDocument.findMany({
@@ -63,25 +80,17 @@ export async function catalogForProject(projectId: string, domain?: ManagementDo
     domain: definition.domain,
     requirement: definition.requirement,
     conditionKey: definition.conditionKey,
-    templates: definition.templates.map((template) => ({
-      id: template.id,
-      key: template.key,
-      name: template.name,
-      subtitle: template.subtitle,
-      description: template.description,
-      recommended: template.recommended,
-      fitScore: template.fitScore,
-      sections: template.sections,
-    })),
     document: byDefinition.get(definition.id)
       ? {
           id: byDefinition.get(definition.id)!.id,
           status: byDefinition.get(definition.id)!.status,
           version: byDefinition.get(definition.id)!.version,
           coverage: byDefinition.get(definition.id)!.coverage,
-          templateId: byDefinition.get(definition.id)!.templateId,
           sections: byDefinition.get(definition.id)!.sections,
-          pmQuestions: byDefinition.get(definition.id)!.pmQuestions,
+          /** Open "PM confirmation needed" items — token + question + the PM's answer, if given. */
+          gaps: readGaps(byDefinition.get(definition.id)!.pmQuestions),
+          /** RACI / risk rows, so the on-screen preview shows the same tables as the .docx. */
+          structuredData: byDefinition.get(definition.id)!.structuredData,
           generatedAt: byDefinition.get(definition.id)!.generatedAt,
           approvedAt: byDefinition.get(definition.id)!.approvedAt,
         }
@@ -109,75 +118,44 @@ export async function domainSummary(projectId: string) {
  * Selects a template and writes the generation contract (checked sections).
  * Called before generation so the PM controls structure first.
  */
-export async function setGenerationContract(params: {
+/**
+ * Generates one planning document from the catalog entry the PM picked.
+ *
+ * There is no template and no section contract any more: the model decides the structure from the
+ * document type, the project type and the confirmed governance model, and returns the sections it
+ * wrote. Whatever it could not source from the project data comes back as a gap — a token left in
+ * the prose plus the question to ask — never as an invented fact.
+ */
+export async function generateDocumentForDefinition(params: {
   projectId: string;
   definitionId: string;
-  templateId: string;
-  sections?: { title: string; hint?: string; required?: boolean; included?: boolean; custom?: boolean }[];
+  actorId: string;
 }) {
-  const { projectId, definitionId, templateId } = params;
-  const [definition, template] = await Promise.all([
-    prisma.documentDefinition.findUnique({ where: { id: definitionId } }),
-    prisma.documentTemplate.findUnique({ where: { id: templateId } }),
-  ]);
+  const { projectId, definitionId, actorId } = params;
+  const definition = await prisma.documentDefinition.findUnique({ where: { id: definitionId } });
   if (!definition) throw notFound('Document definition not found');
-  if (!template || template.definitionId !== definitionId) throw badRequest('Template does not belong to this document');
 
-  const seeded = (template.sections as unknown as { title: string; hint?: string; required?: boolean; defaultIncluded?: boolean }[]).map(
-    (section) => ({
-      title: section.title,
-      hint: section.hint,
-      required: section.required ?? false,
-      included: section.defaultIncluded ?? true,
-      custom: false,
-    }),
-  );
-  const sections = params.sections?.length ? params.sections.map((s) => ({ included: true, required: false, custom: false, ...s })) : seeded;
-
-  const document = await prisma.planningDocument.upsert({
+  const existing = await prisma.planningDocument.upsert({
     where: { projectId_definitionId: { projectId, definitionId } },
     create: {
       projectId,
       definitionId,
-      templateId,
       name: definition.name,
       domain: definition.domain,
       requirement: definition.requirement,
     },
-    update: { templateId, status: DocumentStatus.NOT_GENERATED },
+    update: {},
   });
 
-  await prisma.documentSection.deleteMany({ where: { documentId: document.id } });
-  await prisma.documentSection.createMany({
-    data: sections.map((section, index) => ({
-      documentId: document.id,
-      title: section.title,
-      hint: section.hint ?? null,
-      required: Boolean(section.required),
-      included: section.included !== false,
-      custom: Boolean(section.custom),
-      order: index,
-    })),
-  });
-
-  const included = sections.filter((s) => s.included !== false).length;
-  await prisma.planningDocument.update({
-    where: { id: document.id },
-    data: { coverage: Math.round((included / Math.max(sections.length, 1)) * 100) },
-  });
-
-  return prisma.planningDocument.findUnique({
-    where: { id: document.id },
-    include: { sections: { orderBy: { order: 'asc' } }, template: true },
-  });
+  return generateDraft({ projectId, documentId: existing.id, actorId });
 }
 
-/** Generates the draft for the included sections only. AI drafts; PM approves. */
+/** The model owns the structure; this writes whatever it returned. AI drafts, PM approves. */
 export async function generateDraft(params: { projectId: string; documentId: string; actorId: string }) {
   const { projectId, documentId, actorId } = params;
   const document = await prisma.planningDocument.findFirst({
     where: { id: documentId, projectId },
-    include: { sections: { orderBy: { order: 'asc' } }, template: true, project: true, definition: true },
+    include: { sections: { orderBy: { order: 'asc' } }, project: true, definition: true },
   });
   if (!document) throw notFound('Planning document not found');
   if (document.status === DocumentStatus.APPROVED) {
@@ -207,22 +185,23 @@ export async function generateDraft(params: { projectId: string; documentId: str
   await prisma.planningDocument.update({ where: { id: documentId }, data: { status: DocumentStatus.GENERATING } });
 
   const verifiedInputs = verified.map((value) => ({ label: value.definition.label, value: value.value! }));
-  const sections = document.sections.filter((section) => section.included).map((s) => ({ title: s.title, hint: s.hint }));
 
-  let output: { sections: { title: string; content: string }[]; pmQuestions: string[]; unresolved: string[] };
+  const generationContext = {
+    projectName: document.project.name,
+    projectType: document.project.type,
+    approach: decision.approach,
+    rigor: decision.rigor,
+    documentName: document.name,
+    verifiedInputs,
+    reasons,
+  };
+
+  let output: GenerationOutput;
   let structuredData: { raciTable?: RaciRow[]; riskRegister?: RiskRow[] } | null = null;
 
   if (isGovernanceArtifact(document.name)) {
     const artifactOutput = await generateGovernanceArtifact({
-      projectName: document.project.name,
-      projectType: document.project.type,
-      approach: decision.approach,
-      rigor: decision.rigor,
-      documentName: document.name,
-      templateName: document.template?.name ?? 'Standard',
-      verifiedInputs,
-      reasons,
-      sections,
+      ...generationContext,
       artifactName: document.name,
       structureGuidance: artifactGuidance(document.name, decision.approach),
     });
@@ -231,46 +210,44 @@ export async function generateDraft(params: { projectId: string; documentId: str
       structuredData = { raciTable: artifactOutput.raciTable, riskRegister: artifactOutput.riskRegister };
     }
   } else {
-    output = await generateDocument({
-      projectName: document.project.name,
-      projectType: document.project.type,
-      approach: decision.approach,
-      rigor: decision.rigor,
-      documentName: document.name,
-      templateName: document.template?.name ?? 'Standard',
-      verifiedInputs,
-      reasons,
-      sections,
-    });
+    output = await generateDocument(generationContext);
   }
 
-  const contentByTitle = new Map(output.sections.map((section) => [section.title, section.content]));
+  // The model's structure replaces whatever was there — a regeneration may legitimately return a
+  // different set of sections.
+  await prisma.documentSection.deleteMany({ where: { documentId } });
+  await prisma.documentSection.createMany({
+    data: output.sections.map((section, index) => ({
+      documentId,
+      title: section.title,
+      content: section.content,
+      required: false,
+      included: true,
+      custom: false,
+      order: index,
+    })),
+  });
 
-  await prisma.$transaction([
-    ...document.sections.map((section) =>
-      prisma.documentSection.update({
-        where: { id: section.id },
-        data: { content: section.included ? contentByTitle.get(section.title) ?? null : null },
-      }),
-    ),
-    prisma.planningDocument.update({
-      where: { id: documentId },
-      data: {
-        status: DocumentStatus.PM_REVIEW,
-        generatedAt: new Date(),
-        pmQuestions: output.pmQuestions as unknown as Prisma.InputJsonValue,
-        structuredData: structuredData ? (structuredData as unknown as Prisma.InputJsonValue) : Prisma.JsonNull,
-        sourceTrace: {
-          verifiedInputs: verified.length,
-          reasons,
-          confidence: evaluation?.confidence ?? null,
-          template: document.template?.name ?? 'Standard',
-          approach: decision.approach,
-          unresolved: output.unresolved,
-        } as unknown as Prisma.InputJsonValue,
-      },
-    }),
-  ]);
+  await prisma.planningDocument.update({
+    where: { id: documentId },
+    data: {
+      status: DocumentStatus.PM_REVIEW,
+      generatedAt: new Date(),
+      coverage: 100,
+      // Holds DocumentGap objects ({ token, question, answer }) — the token is what
+      // "Fill out the document" substitutes the answer for.
+      pmQuestions: output.gaps as unknown as Prisma.InputJsonValue,
+      structuredData: structuredData ? (structuredData as unknown as Prisma.InputJsonValue) : Prisma.JsonNull,
+      sourceTrace: {
+        verifiedInputs: verified.length,
+        reasons,
+        confidence: evaluation?.confidence ?? null,
+        approach: decision.approach,
+        unresolved: output.unresolved,
+        aiProvider: output.provider,
+      } as unknown as Prisma.InputJsonValue,
+    },
+  });
 
   await logEvent({
     projectId,
@@ -278,13 +255,168 @@ export async function generateDraft(params: { projectId: string; documentId: str
     actorType: 'AGENT',
     type: 'DOCUMENT_GENERATED',
     title: `${document.name} generated`,
-    detail: `${verified.length} verified inputs + ${decision.approach} governance model`,
-    payload: { documentId, unresolved: output.unresolved },
+    detail: `${output.sections.length} sections · ${output.gaps.length} gap(s) for PM · produced by ${output.provider}`,
+    payload: { documentId, unresolved: output.unresolved, provider: output.provider },
   });
 
   return prisma.planningDocument.findUnique({
     where: { id: documentId },
-    include: { sections: { orderBy: { order: 'asc' } }, template: true },
+    include: { sections: { orderBy: { order: 'asc' } } },
+  });
+}
+
+/** Normalises the JSON column, which held plain strings before gaps existed. */
+export function readGaps(value: unknown): DocumentGap[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry, index): DocumentGap | null => {
+      if (typeof entry === 'string') return { token: `{{gap:${index + 1}}}`, question: entry, answer: null };
+      if (entry && typeof entry === 'object' && 'question' in entry) {
+        const gap = entry as DocumentGap;
+        return { token: gap.token, question: gap.question, answer: gap.answer ?? null };
+      }
+      return null;
+    })
+    .filter((gap): gap is DocumentGap => gap !== null);
+}
+
+/** PM edits the draft in place — titles and body text, add or remove sections. */
+export async function updateDocumentSections(params: {
+  projectId: string;
+  documentId: string;
+  sections: { title: string; content: string }[];
+  actorId: string;
+}) {
+  const { projectId, documentId, sections, actorId } = params;
+  const document = await prisma.planningDocument.findFirst({ where: { id: documentId, projectId } });
+  if (!document) throw notFound('Planning document not found');
+  if (document.status === DocumentStatus.APPROVED) {
+    throw conflict('Approved documents are locked — create a new version before editing');
+  }
+
+  await prisma.documentSection.deleteMany({ where: { documentId } });
+  await prisma.documentSection.createMany({
+    data: sections.map((section, index) => ({
+      documentId,
+      title: section.title,
+      content: section.content,
+      required: false,
+      included: true,
+      custom: true,
+      order: index,
+    })),
+  });
+
+  await logEvent({
+    projectId,
+    actorId,
+    type: 'DOCUMENT_EDITED',
+    title: `${document.name} edited by PM`,
+    detail: `${sections.length} sections saved`,
+  });
+
+  return prisma.planningDocument.findUnique({
+    where: { id: documentId },
+    include: { sections: { orderBy: { order: 'asc' } } },
+  });
+}
+
+/** Records the PM's answer to one gap. Nothing is written into the document until "fill". */
+export async function answerDocumentGap(params: {
+  projectId: string;
+  documentId: string;
+  token: string;
+  answer: string;
+}) {
+  const { projectId, documentId, token, answer } = params;
+  const document = await prisma.planningDocument.findFirst({ where: { id: documentId, projectId } });
+  if (!document) throw notFound('Planning document not found');
+
+  const gaps = readGaps(document.pmQuestions);
+  const target = gaps.find((gap) => gap.token === token);
+  if (!target) throw notFound('That question is not open on this document');
+  target.answer = answer;
+
+  return prisma.planningDocument.update({
+    where: { id: documentId },
+    data: { pmQuestions: gaps as unknown as Prisma.InputJsonValue },
+    include: { sections: { orderBy: { order: 'asc' } } },
+  });
+}
+
+/**
+ * Substitutes every answered gap's token with its answer, across section text and the structured
+ * RACI / risk tables. Plain string replacement on purpose: the PM's wording reaches the document
+ * exactly as typed, and nothing they did not ask about is rewritten.
+ */
+export async function fillDocumentGaps(params: { projectId: string; documentId: string; actorId: string }) {
+  const { projectId, documentId, actorId } = params;
+  const document = await prisma.planningDocument.findFirst({
+    where: { id: documentId, projectId },
+    include: { sections: { orderBy: { order: 'asc' } } },
+  });
+  if (!document) throw notFound('Planning document not found');
+  if (document.status === DocumentStatus.APPROVED) {
+    throw conflict('Approved documents are locked — create a new version before editing');
+  }
+
+  const gaps = readGaps(document.pmQuestions);
+  const answered = gaps.filter((gap) => gap.answer?.trim());
+  if (!answered.length) throw badRequest('Answer at least one open question before filling the document');
+
+  const substitute = (text: string) =>
+    answered.reduce((current, gap) => current.split(gap.token).join(gap.answer!.trim()), text);
+
+  await prisma.$transaction(
+    document.sections.map((section) =>
+      prisma.documentSection.update({
+        where: { id: section.id },
+        data: { content: section.content ? substitute(section.content) : section.content },
+      }),
+    ),
+  );
+
+  const structured = (document.structuredData ?? null) as { raciTable?: RaciRow[]; riskRegister?: RiskRow[] } | null;
+  const nextStructured = structured
+    ? {
+        raciTable: structured.raciTable?.map((row) => ({
+          activity: substitute(row.activity),
+          responsible: substitute(row.responsible),
+          accountable: substitute(row.accountable),
+          consulted: substitute(row.consulted),
+          informed: substitute(row.informed),
+        })),
+        riskRegister: structured.riskRegister?.map((row) => ({
+          risk: substitute(row.risk),
+          severity: row.severity,
+          owner: substitute(row.owner),
+          mitigation: substitute(row.mitigation),
+        })),
+      }
+    : null;
+
+  // A filled gap is closed: it is no longer missing from the document.
+  const remaining = gaps.filter((gap) => !gap.answer?.trim());
+
+  await prisma.planningDocument.update({
+    where: { id: documentId },
+    data: {
+      pmQuestions: remaining as unknown as Prisma.InputJsonValue,
+      structuredData: nextStructured ? (nextStructured as unknown as Prisma.InputJsonValue) : Prisma.JsonNull,
+    },
+  });
+
+  await logEvent({
+    projectId,
+    actorId,
+    type: 'DOCUMENT_GAPS_FILLED',
+    title: `${answered.length} PM answer(s) written into ${document.name}`,
+    detail: remaining.length ? `${remaining.length} question(s) still open` : 'No open questions left',
+  });
+
+  return prisma.planningDocument.findUnique({
+    where: { id: documentId },
+    include: { sections: { orderBy: { order: 'asc' } } },
   });
 }
 
@@ -394,6 +526,39 @@ export async function createExport(params: { projectId: string; format: string; 
 // ---------------------------------------------------------------------------
 
 /** Builds a real .docx file for one planning document (any document, not just the six governance artifacts). */
+/** Brand palette for the Word export — same navy/blue as the app's design system. */
+const DOCX = {
+  navy: '10243D',
+  blue: '1F5FA9',
+  rule: 'C9D6E6',
+  headerBg: '10243D',
+  zebra: 'F4F7FB',
+  gapText: 'B26A00',
+  gapBg: 'FFF1D6',
+  muted: '6B7C93',
+} as const;
+
+const GAP_PATTERN = /\{\{gap:\d+\}\}/g;
+
+/**
+ * Splits section text on unanswered gap tokens so each one renders as a visible, highlighted
+ * blank instead of leaking `{{gap:3}}` into the Word file.
+ */
+function runsWithGaps(text: string, bold = false): TextRun[] {
+  const runs: TextRun[] = [];
+  let cursor = 0;
+  for (const match of text.matchAll(GAP_PATTERN)) {
+    const index = match.index ?? 0;
+    if (index > cursor) runs.push(new TextRun({ text: text.slice(cursor, index), bold }));
+    runs.push(
+      new TextRun({ text: '[ answer needed ]', bold: true, color: DOCX.gapText, highlight: 'yellow' }),
+    );
+    cursor = index + match[0].length;
+  }
+  if (cursor < text.length) runs.push(new TextRun({ text: text.slice(cursor), bold }));
+  return runs.length ? runs : [new TextRun({ text, bold })];
+}
+
 export async function renderDocumentDocx(projectId: string, documentId: string): Promise<{ fileName: string; buffer: Buffer }> {
   const document = await prisma.planningDocument.findFirst({
     where: { id: documentId, projectId },
@@ -402,27 +567,59 @@ export async function renderDocumentDocx(projectId: string, documentId: string):
   if (!document) throw notFound('Planning document not found');
 
   const structured = (document.structuredData ?? null) as { raciTable?: RaciRow[]; riskRegister?: RiskRow[] } | null;
-  const children: (Paragraph | Table)[] = [
-    new Paragraph({ text: document.name, heading: HeadingLevel.TITLE }),
+  const gaps = readGaps(document.pmQuestions);
+
+  const heading = (text: string) =>
     new Paragraph({
+      spacing: { before: 320, after: 140 },
+      border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: DOCX.rule, space: 6 } },
+      children: [new TextRun({ text, bold: true, size: 26, color: DOCX.blue })],
+    });
+
+  const children: (Paragraph | Table)[] = [
+    new Paragraph({
+      spacing: { after: 80 },
+      children: [new TextRun({ text: document.name.toUpperCase(), bold: true, size: 44, color: DOCX.navy })],
+    }),
+    new Paragraph({
+      spacing: { after: 40 },
+      border: { bottom: { style: BorderStyle.SINGLE, size: 18, color: DOCX.blue, space: 6 } },
       children: [
-        new TextRun({ text: `${document.project.name} · version ${document.version} · status ${document.status}`, italics: true }),
+        new TextRun({ text: document.project.name, bold: true, size: 22, color: DOCX.blue }),
+        new TextRun({ text: `   ·   version ${document.version}   ·   ${document.status}`, size: 20, color: DOCX.muted }),
+      ],
+    }),
+    new Paragraph({
+      spacing: { before: 120, after: 240 },
+      children: [
+        new TextRun({
+          text: 'AI-drafted from PM-verified project inputs. Highlighted blanks are facts the project data did not contain.',
+          italics: true,
+          size: 18,
+          color: DOCX.muted,
+        }),
       ],
     }),
   ];
 
   for (const section of document.sections.filter((s) => s.included && s.content)) {
-    children.push(new Paragraph({ text: section.title, heading: HeadingLevel.HEADING_2 }));
-    children.push(new Paragraph({ text: section.content ?? '' }));
+    children.push(heading(section.title));
+    // Keep the author's paragraph breaks instead of collapsing the section into one block.
+    for (const block of (section.content ?? '').split(/\n{2,}/)) {
+      children.push(new Paragraph({ spacing: { after: 120 }, children: runsWithGaps(block.trim()) }));
+    }
   }
 
   if (document.name === 'Organization Chart') {
     children.push(
       new Paragraph({
+        spacing: { before: 120 },
         children: [
           new TextRun({
             text: 'Rendered as a structured text/table representation of the reporting hierarchy — not a graphical diagram.',
             italics: true,
+            size: 18,
+            color: DOCX.muted,
           }),
         ],
       }),
@@ -430,7 +627,7 @@ export async function renderDocumentDocx(projectId: string, documentId: string):
   }
 
   if (structured?.raciTable?.length) {
-    children.push(new Paragraph({ text: 'RACI Table', heading: HeadingLevel.HEADING_2 }));
+    children.push(heading('RACI Matrix'));
     children.push(
       docxTable(
         ['Activity', 'Responsible', 'Accountable', 'Consulted', 'Informed'],
@@ -440,7 +637,7 @@ export async function renderDocumentDocx(projectId: string, documentId: string):
   }
 
   if (structured?.riskRegister?.length) {
-    children.push(new Paragraph({ text: 'Risk Register', heading: HeadingLevel.HEADING_2 }));
+    children.push(heading('Risk Register'));
     children.push(
       docxTable(
         ['Risk', 'Severity', 'Owner', 'Mitigation'],
@@ -449,10 +646,29 @@ export async function renderDocumentDocx(projectId: string, documentId: string):
     );
   }
 
-  if (document.pmQuestions && (document.pmQuestions as unknown as string[]).length) {
-    children.push(new Paragraph({ text: 'Open PM Questions', heading: HeadingLevel.HEADING_2 }));
-    for (const question of document.pmQuestions as unknown as string[]) {
-      children.push(new Paragraph({ text: `• ${question}` }));
+  if (gaps.length) {
+    children.push(heading('PM confirmation needed'));
+    children.push(
+      new Paragraph({
+        spacing: { after: 120 },
+        children: [
+          new TextRun({
+            text: 'These facts were not present in the project data, so they were left blank rather than guessed:',
+            italics: true,
+            size: 18,
+            color: DOCX.muted,
+          }),
+        ],
+      }),
+    );
+    for (const gap of gaps) {
+      children.push(
+        new Paragraph({
+          bullet: { level: 0 },
+          spacing: { after: 60 },
+          children: [new TextRun({ text: gap.question, color: DOCX.gapText })],
+        }),
+      );
     }
   }
 
@@ -464,14 +680,46 @@ export async function renderDocumentDocx(projectId: string, documentId: string):
 
 function docxTable(headers: string[], rows: string[][]): Table {
   const headerRow = new TableRow({
+    tableHeader: true,
     children: headers.map(
-      (h) => new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: h, bold: true })] })] }),
+      (header) =>
+        new TableCell({
+          shading: { type: ShadingType.CLEAR, fill: DOCX.headerBg },
+          margins: { top: 80, bottom: 80, left: 120, right: 120 },
+          children: [
+            new Paragraph({ children: [new TextRun({ text: header, bold: true, color: 'FFFFFF', size: 19 })] }),
+          ],
+        }),
     ),
   });
+
   const bodyRows = rows.map(
-    (row) => new TableRow({ children: row.map((cell) => new TableCell({ children: [new Paragraph(cell)] })) }),
+    (row, rowIndex) =>
+      new TableRow({
+        children: row.map(
+          (cell) =>
+            new TableCell({
+              // Zebra striping keeps wide RACI tables readable on paper.
+              shading: rowIndex % 2 === 1 ? { type: ShadingType.CLEAR, fill: DOCX.zebra } : undefined,
+              margins: { top: 80, bottom: 80, left: 120, right: 120 },
+              children: [new Paragraph({ children: runsWithGaps(cell, false), spacing: { after: 0 } })],
+            }),
+        ),
+      }),
   );
-  return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [headerRow, ...bodyRows] });
+
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    borders: {
+      top: { style: BorderStyle.SINGLE, size: 4, color: DOCX.rule },
+      bottom: { style: BorderStyle.SINGLE, size: 4, color: DOCX.rule },
+      left: { style: BorderStyle.SINGLE, size: 4, color: DOCX.rule },
+      right: { style: BorderStyle.SINGLE, size: 4, color: DOCX.rule },
+      insideHorizontal: { style: BorderStyle.SINGLE, size: 2, color: DOCX.rule },
+      insideVertical: { style: BorderStyle.SINGLE, size: 2, color: DOCX.rule },
+    },
+    rows: [headerRow, ...bodyRows],
+  });
 }
 
 function slugForFile(name: string): string {

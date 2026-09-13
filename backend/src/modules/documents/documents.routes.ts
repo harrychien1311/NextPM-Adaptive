@@ -3,18 +3,20 @@ import { z } from 'zod';
 import { ManagementDomain } from '@prisma/client';
 import { asyncHandler } from '../../lib/async-handler';
 import { parse } from '../../lib/validate';
-import { PM_ROLES, requireProjectMember, requireProjectRole } from '../../middleware/auth';
+import { PROJECT_WRITE_ROLES, requireProjectMember, requireProjectRole } from '../../middleware/auth';
 import {
+  answerDocumentGap,
   approveDocument,
   catalogForProject,
   createExport,
   documentDetail,
   domainSummary,
-  generateDraft,
+  fillDocumentGaps,
+  generateDocumentForDefinition,
   renderDashboardHtml,
   renderDocumentDocx,
-  setGenerationContract,
   templateFit,
+  updateDocumentSections,
 } from './documents.service';
 
 export const documentsRouter = Router();
@@ -46,39 +48,70 @@ documentsRouter.get(
   }),
 );
 
-/** Choose a template and edit the section structure — the generation contract. */
+/**
+ * Generate one catalog document. There is no template or section contract to set first — the
+ * model decides the structure and reports what it could not source as gaps.
+ */
 documentsRouter.post(
-  '/:projectId/documents/contract',
-  requireProjectRole(...PM_ROLES),
+  '/:projectId/documents/generate',
+  requireProjectRole(...PROJECT_WRITE_ROLES),
   asyncHandler(async (req, res) => {
-    const body = parse(
-      z.object({
-        definitionId: z.string().uuid(),
-        templateId: z.string().uuid(),
-        sections: z
-          .array(
-            z.object({
-              title: z.string().min(1),
-              hint: z.string().optional(),
-              required: z.boolean().optional(),
-              included: z.boolean().optional(),
-              custom: z.boolean().optional(),
-            }),
-          )
-          .optional(),
+    const body = parse(z.object({ definitionId: z.string().uuid() }), req.body);
+    res.json(
+      await generateDocumentForDefinition({
+        projectId: req.params.projectId,
+        definitionId: body.definitionId,
+        actorId: req.user!.id,
       }),
-      req.body,
     );
-    res.json(await setGenerationContract({ projectId: req.params.projectId, ...body }));
   }),
 );
 
+/** "Edit content" — the PM rewrites the draft in place. */
+documentsRouter.put(
+  '/:projectId/documents/:documentId/sections',
+  requireProjectRole(...PROJECT_WRITE_ROLES),
+  asyncHandler(async (req, res) => {
+    const body = parse(
+      z.object({
+        sections: z.array(z.object({ title: z.string().min(1), content: z.string() })).min(1),
+      }),
+      req.body,
+    );
+    res.json(
+      await updateDocumentSections({
+        projectId: req.params.projectId,
+        documentId: req.params.documentId,
+        sections: body.sections,
+        actorId: req.user!.id,
+      }),
+    );
+  }),
+);
+
+/** Answer one "PM confirmation needed" question. Recorded only — nothing is written yet. */
 documentsRouter.post(
-  '/:projectId/documents/:documentId/generate',
-  requireProjectRole(...PM_ROLES),
+  '/:projectId/documents/:documentId/gaps',
+  requireProjectRole(...PROJECT_WRITE_ROLES),
+  asyncHandler(async (req, res) => {
+    const body = parse(z.object({ token: z.string().min(1), answer: z.string().min(1) }), req.body);
+    res.json(
+      await answerDocumentGap({
+        projectId: req.params.projectId,
+        documentId: req.params.documentId,
+        ...body,
+      }),
+    );
+  }),
+);
+
+/** "Fill out the document" — writes every answered gap into the blanks it belongs to. */
+documentsRouter.post(
+  '/:projectId/documents/:documentId/fill',
+  requireProjectRole(...PROJECT_WRITE_ROLES),
   asyncHandler(async (req, res) => {
     res.json(
-      await generateDraft({
+      await fillDocumentGaps({
         projectId: req.params.projectId,
         documentId: req.params.documentId,
         actorId: req.user!.id,
@@ -89,7 +122,7 @@ documentsRouter.post(
 
 documentsRouter.post(
   '/:projectId/documents/:documentId/approve',
-  requireProjectRole(...PM_ROLES),
+  requireProjectRole(...PROJECT_WRITE_ROLES),
   asyncHandler(async (req, res) => {
     res.json(
       await approveDocument({
@@ -125,7 +158,7 @@ documentsRouter.get(
 
 documentsRouter.post(
   '/:projectId/exports',
-  requireProjectRole(...PM_ROLES),
+  requireProjectRole(...PROJECT_WRITE_ROLES),
   asyncHandler(async (req, res) => {
     const body = parse(z.object({ format: z.enum(['DOCX', 'XLSX', 'PDF', 'CONFLUENCE']) }), req.body);
     res.status(201).json(await createExport({ projectId: req.params.projectId, format: body.format, actorId: req.user!.id }));

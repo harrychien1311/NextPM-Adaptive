@@ -1,16 +1,21 @@
 import { api } from './client';
 import type {
+  AdminAccountList,
   AgentMessage,
   ApproachResponse,
   Approach,
   DashboardResponse,
   InputProfile,
   ManagementDomain,
-  PortfolioOverview,
+  ProgramOverview,
+  ProjectRole,
+  ProjectStatus,
   ProjectTeamMember,
   ProjectType,
+  Role,
   StudioResponse,
   User,
+  VerifyResult,
   Workspace,
 } from './types';
 
@@ -21,26 +26,57 @@ export const authApi = {
   me: () => api.get<{ user: User }>('/auth/me'),
 };
 
-export const portfolioApi = {
-  list: () => api.get<{ portfolios: { id: string; name: string }[] }>('/portfolios'),
-  overview: (portfolioId: string) => api.get<PortfolioOverview>(`/portfolios/${portfolioId}/overview`),
-  createPortfolio: (body: { name: string; businessUnit?: string; strategicObjective?: string }) =>
-    api.post<{ id: string; name: string }>('/portfolios', body),
-  createProgram: (portfolioId: string, body: { name: string; description?: string; targetOutcome?: string }) =>
-    api.post<{ id: string; name: string; key: string }>(`/portfolios/${portfolioId}/programs`, body),
-  createProject: (
-    portfolioId: string,
-    body: { name: string; type: ProjectType; programId?: string | null; customer?: string; targetStart?: string },
-  ) => api.post<Workspace>(`/portfolios/${portfolioId}/projects`, body),
+export const programApi = {
+  /** The delivery landing screen — programs, their projects, and what this account may do. */
+  overview: () => api.get<ProgramOverview>('/programs/overview'),
+  create: (body: { name: string; description?: string; targetOutcome?: string }) =>
+    api.post<{ id: string; name: string; key: string }>('/programs', body),
+  update: (programId: string, body: { name?: string; description?: string | null; targetOutcome?: string | null }) =>
+    api.patch<{ id: string; name: string; key: string }>(`/programs/${programId}`, body),
+  /** Does not delete the program's projects — they become standalone. */
+  remove: (programId: string) =>
+    api.delete<{ deleted: boolean; name: string; projectsReleased: number }>(`/programs/${programId}`),
+};
+
+/** Administrator console — account management only. */
+export const adminApi = {
+  users: () => api.get<AdminAccountList>('/admin/users'),
+  createUser: (body: { email: string; name: string; password: string; jobTitle?: string; role: Role }) =>
+    api.post('/admin/users', body),
+  updateUser: (userId: string, body: { name?: string; jobTitle?: string; role?: Role; active?: boolean }) =>
+    api.patch(`/admin/users/${userId}`, body),
+  resetPassword: (userId: string, password: string) => api.post(`/admin/users/${userId}/password`, { password }),
+  deleteUser: (userId: string) => api.delete(`/admin/users/${userId}`),
 };
 
 export const projectApi = {
+  create: (body: {
+    name: string;
+    type: ProjectType;
+    programId?: string | null;
+    customer?: string;
+    targetStart?: string;
+  }) => api.post<Workspace>('/projects', body),
   workspace: (projectId: string) => api.get<Workspace>(`/projects/${projectId}`),
+  update: (
+    projectId: string,
+    body: {
+      name?: string;
+      status?: ProjectStatus;
+      summary?: string;
+      customer?: string;
+      targetLabel?: string;
+      programId?: string | null;
+    },
+  ) => api.patch<Workspace>(`/projects/${projectId}`, body),
+  /** Irreversible — cascades every input, upload, document and audit row of the project. */
+  remove: (projectId: string) =>
+    api.delete<{ deleted: boolean; name: string; documentsRemoved: number }>(`/projects/${projectId}`),
   dashboard: (projectId: string) => api.get<DashboardResponse>(`/projects/${projectId}/dashboard`),
   saveLayout: (projectId: string, widgets: Record<string, boolean>) =>
     api.put(`/projects/${projectId}/dashboard/layout`, { widgets }),
   members: (projectId: string) => api.get<{ members: ProjectTeamMember[] }>(`/projects/${projectId}/members`),
-  addMember: (projectId: string, body: { email: string; role?: string }) =>
+  addMember: (projectId: string, body: { email: string; role?: ProjectRole }) =>
     api.post<ProjectTeamMember>(`/projects/${projectId}/members`, body),
   removeMember: (projectId: string, userId: string) => api.delete(`/projects/${projectId}/members/${userId}`),
 };
@@ -49,7 +85,8 @@ export const inputApi = {
   profile: (projectId: string) => api.get<InputProfile>(`/projects/${projectId}/input`),
   save: (projectId: string, values: { definitionId: string; value: string | null }[]) =>
     api.put<InputProfile>(`/projects/${projectId}/input`, { values }),
-  verify: (projectId: string) => api.post<{ verified: number }>(`/projects/${projectId}/input/verify`),
+  /** Extracts from the uploaded documents, prefills what it can, then verifies the PM's answers. */
+  verify: (projectId: string) => api.post<VerifyResult>(`/projects/${projectId}/input/verify`),
   addCustomField: (projectId: string, body: { name: string; value?: string; useIn?: string }) =>
     api.post(`/projects/${projectId}/custom-fields`, body),
   removeCustomField: (projectId: string, id: string) => api.delete(`/projects/${projectId}/custom-fields/${id}`),
@@ -81,16 +118,17 @@ export const documentsApi = {
   studio: (projectId: string, domain?: ManagementDomain) =>
     api.get<StudioResponse>(`/projects/${projectId}/documents${domain ? `?domain=${domain}` : ''}`),
   fit: (projectId: string, definitionId: string) => api.get(`/projects/${projectId}/documents/${definitionId}/fit`),
-  setContract: (
-    projectId: string,
-    body: {
-      definitionId: string;
-      templateId: string;
-      sections?: { title: string; hint?: string; required?: boolean; included?: boolean; custom?: boolean }[];
-    },
-  ) => api.post(`/projects/${projectId}/documents/contract`, body),
-  generate: (projectId: string, documentId: string) =>
-    api.post(`/projects/${projectId}/documents/${documentId}/generate`),
+  /** The model chooses the structure — there is no template or section contract to set first. */
+  generate: (projectId: string, definitionId: string) =>
+    api.post(`/projects/${projectId}/documents/generate`, { definitionId }),
+  /** "Edit content" — replaces the draft with the PM's own text. */
+  saveSections: (projectId: string, documentId: string, sections: { title: string; content: string }[]) =>
+    api.put(`/projects/${projectId}/documents/${documentId}/sections`, { sections }),
+  /** Records one answer; nothing is written into the document until `fill`. */
+  answerGap: (projectId: string, documentId: string, token: string, answer: string) =>
+    api.post(`/projects/${projectId}/documents/${documentId}/gaps`, { token, answer }),
+  /** Substitutes every answered gap into the blanks it belongs to. */
+  fill: (projectId: string, documentId: string) => api.post(`/projects/${projectId}/documents/${documentId}/fill`),
   approve: (projectId: string, documentId: string) =>
     api.post(`/projects/${projectId}/documents/${documentId}/approve`),
   export: (projectId: string, format: 'DOCX' | 'XLSX' | 'PDF' | 'CONFLUENCE') =>

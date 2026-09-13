@@ -6,7 +6,7 @@ import path from 'node:path';
 import { asyncHandler } from '../../lib/async-handler';
 import { parse } from '../../lib/validate';
 import { env } from '../../config/env';
-import { PM_ROLES, requireProjectMember, requireProjectRole } from '../../middleware/auth';
+import { PROJECT_WRITE_ROLES, requireProjectMember, requireProjectRole } from '../../middleware/auth';
 import {
   addCustomField,
   inputProfile,
@@ -56,7 +56,7 @@ inputRouter.get(
 
 inputRouter.put(
   '/:projectId/input',
-  requireProjectRole(...PM_ROLES),
+  requireProjectRole(...PROJECT_WRITE_ROLES),
   asyncHandler(async (req, res) => {
     const body = parse(
       z.object({
@@ -70,7 +70,7 @@ inputRouter.put(
 
 inputRouter.post(
   '/:projectId/input/verify',
-  requireProjectRole(...PM_ROLES),
+  requireProjectRole(...PROJECT_WRITE_ROLES),
   asyncHandler(async (req, res) => {
     res.json(await verifyInputs(req.params.projectId, req.user!.id));
   }),
@@ -78,7 +78,7 @@ inputRouter.post(
 
 inputRouter.post(
   '/:projectId/custom-fields',
-  requireProjectRole(...PM_ROLES),
+  requireProjectRole(...PROJECT_WRITE_ROLES),
   asyncHandler(async (req, res) => {
     const body = parse(
       z.object({
@@ -94,7 +94,7 @@ inputRouter.post(
 
 inputRouter.delete(
   '/:projectId/custom-fields/:id',
-  requireProjectRole(...PM_ROLES),
+  requireProjectRole(...PROJECT_WRITE_ROLES),
   asyncHandler(async (req, res) => {
     res.json(await removeCustomField(req.params.projectId, req.params.id));
   }),
@@ -102,7 +102,7 @@ inputRouter.delete(
 
 inputRouter.post(
   '/:projectId/actions/:actionId/resolve',
-  requireProjectRole(...PM_ROLES),
+  requireProjectRole(...PROJECT_WRITE_ROLES),
   asyncHandler(async (req, res) => {
     const body = parse(z.object({ value: z.string().min(1) }), req.body);
     res.json(
@@ -118,7 +118,7 @@ inputRouter.post(
 
 inputRouter.post(
   '/:projectId/references',
-  requireProjectRole(...PM_ROLES),
+  requireProjectRole(...PROJECT_WRITE_ROLES),
   upload.single('file'),
   asyncHandler(async (req, res) => {
     const body = parse(z.object({ group: z.enum(CLASSIFIED_GROUPS) }), req.body);
@@ -139,7 +139,7 @@ inputRouter.post(
 
 inputRouter.delete(
   '/:projectId/references/:id',
-  requireProjectRole(...PM_ROLES),
+  requireProjectRole(...PROJECT_WRITE_ROLES),
   asyncHandler(async (req, res) => {
     res.json(await removeReference(req.params.projectId, req.params.id));
   }),
@@ -148,7 +148,7 @@ inputRouter.delete(
 /** The project description document — a single free-form file read for the AI advisory suggestion. */
 inputRouter.post(
   '/:projectId/description',
-  requireProjectRole(...PM_ROLES),
+  requireProjectRole(...PROJECT_WRITE_ROLES),
   upload.single('file'),
   asyncHandler(async (req, res) => {
     if (!req.file) return res.status(400).json({ error: { message: 'A file is required' } });

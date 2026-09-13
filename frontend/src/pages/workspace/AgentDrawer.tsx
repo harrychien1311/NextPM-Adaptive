@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { agentApi } from '../../api/endpoints';
+import { AgentMessageText } from './AgentMessageText';
 
 const QUICK_PROMPTS = ['Explain the recommended governance model', 'Show missing inputs', 'Generate the Risk Plan'];
 
@@ -52,7 +53,7 @@ export function AgentDrawer({
             <div className="agent-message" key={message.id}>
               <span>✦</span>
               <div>
-                <p>{message.content}</p>
+                <AgentMessageText content={message.content} />
                 {message.meta ? (
                   <small>
                     {String((message.meta as Record<string, unknown>).verifiedInputs ?? 0)} verified inputs ·{' '}

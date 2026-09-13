@@ -193,6 +193,466 @@
 .team-trigger .avatar-stack span:first-child {
   margin-left: 0;
 }
+/* Sign out — the same door-and-arrow mark on every screen, inheriting the surface's text colour. */
+.signout-button {
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+}
+.signout-button svg {
+  width: 17px;
+  height: 17px;
+  display: block;
+}
+.portfolio-profile .signout-button {
+  color: #fff;
+  /* The prototype spaced this button to the LEFT of the avatar; it now sits at the far right. */
+  margin-right: 0;
+  margin-left: 4px;
+}
+/* Sign out is the last child of every header, so it is always the top-right corner. The prototype
+   hides .top-actions icon buttons on narrow screens — that rule must not swallow sign out. */
+.top-actions .signout-button {
+  order: 99;
+}
+@media (max-width: 640px) {
+  .top-actions .signout-button {
+    display: inline-grid;
+  }
+}
+
+/* Agent chat replies are markdown prose — see AgentMessageText.tsx for the supported subset. */
+.agent-rich > * {
+  margin: 0 0 8px;
+}
+.agent-rich > *:last-child {
+  margin-bottom: 0;
+}
+.agent-rich ul,
+.agent-rich ol {
+  padding-left: 18px;
+}
+.agent-rich li {
+  margin-bottom: 4px;
+}
+.agent-rich li:last-child {
+  margin-bottom: 0;
+}
+.agent-rich strong {
+  font-weight: 600;
+}
+.agent-rich code {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.92em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* ------------------------------------------------- document preview (page view)
+   Colours here mirror renderDocumentDocx in documents.service.ts on purpose: what the PM reads
+   on screen should be what lands in the Word file. */
+.doc-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  background: #47566a;
+}
+.doc-preview-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 18px;
+  background: #10243d;
+  color: #fff;
+}
+.doc-preview-bar strong {
+  display: block;
+  font-size: 0.88rem;
+}
+.doc-preview-bar small {
+  display: block;
+  color: #9fb1c5;
+  font-size: 0.72rem;
+  margin-top: 2px;
+}
+.doc-preview-bar > div:last-child {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.doc-preview-scroll {
+  flex: 1;
+  overflow: auto;
+  padding: 28px 16px 56px;
+}
+/* A4 proportions with print-like margins — the "sheet of paper" the PM is reviewing. */
+.doc-page {
+  width: min(820px, 100%);
+  margin: 0 auto;
+  background: #fff;
+  border-radius: 2px;
+  box-shadow: 0 18px 48px rgba(9, 24, 44, 0.4);
+  padding: 64px 72px 72px;
+  color: #1d2b3a;
+  font-size: 0.92rem;
+  line-height: 1.7;
+}
+.doc-page h1 {
+  margin: 0 0 6px;
+  font-size: 1.9rem;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  color: #10243d;
+}
+.doc-page .doc-meta {
+  margin: 0 0 4px;
+  padding-bottom: 10px;
+  border-bottom: 3px solid #1f5fa9;
+  font-size: 0.86rem;
+  color: #6b7c93;
+}
+.doc-page .doc-meta b {
+  color: #1f5fa9;
+}
+.doc-page .doc-note {
+  margin: 14px 0 26px;
+  font-style: italic;
+  font-size: 0.82rem;
+  color: #6b7c93;
+}
+.doc-page h2 {
+  margin: 30px 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #c9d6e6;
+  font-size: 1.06rem;
+  color: #1f5fa9;
+}
+.doc-page p {
+  margin: 0 0 12px;
+}
+.doc-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0 14px;
+  font-size: 0.82rem;
+}
+.doc-table th {
+  background: #10243d;
+  color: #fff;
+  text-align: left;
+  font-weight: 600;
+  padding: 9px 11px;
+  border: 1px solid #c9d6e6;
+}
+.doc-table td {
+  padding: 9px 11px;
+  border: 1px solid #c9d6e6;
+  vertical-align: top;
+}
+.doc-table tbody tr:nth-child(even) td {
+  background: #f4f7fb;
+}
+.doc-gap-list {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  color: #8a5a12;
+}
+.doc-gap-list li {
+  margin-bottom: 6px;
+}
+.doc-gap-list em {
+  color: #2f6b48;
+  font-style: italic;
+}
+@media (max-width: 700px) {
+  .doc-page {
+    padding: 32px 24px 40px;
+  }
+  .doc-preview-bar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+/* ------------------------------------------------- planning studio: gaps and inline editing */
+/* A blank the AI refused to guess, shown inline where it sits in the prose. */
+.gap-marker {
+  background: #fff1d6;
+  color: #8a5a12;
+  border: 1px dashed #e0b878;
+  border-radius: 5px;
+  padding: 0 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.gap-list {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 14px;
+}
+.gap-item {
+  border: 1px solid var(--line);
+  border-left: 3px solid #e0b878;
+  border-radius: 8px;
+  padding: 10px 11px;
+  background: #fffdf8;
+}
+.gap-item.answered {
+  border-left-color: #4f9d6b;
+  background: #f7fcf9;
+}
+.gap-item p {
+  margin: 0 0 7px;
+  font-size: 0.78rem;
+  color: var(--ink);
+}
+.gap-item small {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 0.74rem;
+  color: #2f6b48;
+  font-style: italic;
+}
+.gap-item button {
+  font-size: 0.72rem;
+  padding: 5px 10px;
+}
+.fill-button {
+  width: 100%;
+}
+/* Inline document editing — the preview turns into fields in place. */
+.editor-body.editing {
+  display: grid;
+  gap: 16px;
+}
+.edit-section {
+  display: grid;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  background: #fbfdff;
+}
+.edit-section input,
+.edit-section textarea {
+  width: 100%;
+  border: 1px solid #ccd6e1;
+  border-radius: 7px;
+  padding: 9px 11px;
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--ink);
+  background: #fff;
+}
+.edit-section input {
+  font-weight: 600;
+}
+.edit-section textarea {
+  resize: vertical;
+  line-height: 1.55;
+}
+.edit-section button {
+  justify-self: start;
+  font-size: 0.72rem;
+  padding: 5px 10px;
+}
+
+/* Edit + open sit side by side on a project card. */
+.card-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.card-actions button {
+  white-space: nowrap;
+}
+
+/* Destructive action, set apart from the form it lives in so it is never a mis-click. */
+.danger-zone {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid #f0cccc;
+  background: #fdf6f6;
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 6px 0 4px;
+}
+.danger-zone strong {
+  display: block;
+  font-size: 0.82rem;
+  color: #8a2b2b;
+}
+.danger-zone small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.72rem;
+  margin-top: 2px;
+}
+.danger-zone button {
+  flex-shrink: 0;
+}
+.secondary.danger {
+  color: #a33;
+  border-color: #e9c4c4;
+}
+.secondary.danger:hover:not(:disabled) {
+  background: #fbeaea;
+}
+@media (max-width: 560px) {
+  .danger-zone {
+    display: block;
+  }
+  .danger-zone button {
+    margin-top: 10px;
+  }
+}
+
+/* Shown when a recommendation came from the deterministic fallback rather than the model. */
+.mock-warning {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #f0d3a8;
+  background: #fff8ec;
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  font-size: 0.8rem;
+  color: #6b4a17;
+}
+.mock-warning strong {
+  color: #8a5a12;
+}
+.mock-warning code {
+  background: #f4e6cd;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.74rem;
+}
+
+/* Three actions now share the input form footer, so let them wrap on narrow screens. */
+.form-actions {
+  flex-wrap: wrap;
+}
+
+/* A project card the viewer may see on the program overview but has not been granted. */
+.locked-chip {
+  margin-left: auto;
+  font-size: 0.85rem;
+  opacity: 0.7;
+}
+.project-footer button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* ---------------------------------------------------------------- admin console */
+.admin-main {
+  padding: 26px 32px 40px;
+}
+.account-table {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
+}
+.account-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 2.2fr) minmax(150px, 1.2fr) minmax(120px, 0.9fr) minmax(90px, 0.7fr) minmax(260px, 1.6fr);
+  gap: 14px;
+  align-items: center;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+  font-size: 0.82rem;
+}
+.account-row:first-child {
+  border-top: 0;
+}
+.account-row.account-head {
+  background: #f4f7fb;
+  color: var(--muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.account-row.inactive {
+  background: #fbfcfd;
+  color: var(--muted);
+}
+.account-identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.account-identity strong {
+  display: block;
+  font-size: 0.85rem;
+}
+.account-identity em {
+  color: var(--muted);
+  font-style: normal;
+  font-weight: 400;
+}
+.account-identity small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-row select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 7px 8px;
+  font: inherit;
+  font-size: 0.76rem;
+  background: #fff;
+  color: var(--ink);
+}
+.account-counts {
+  display: grid;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+.account-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.account-actions button {
+  font-size: 0.72rem;
+  padding: 6px 9px;
+}
+.account-actions .danger {
+  color: #a33;
+  border-color: #e9c4c4;
+}
+@media (max-width: 1080px) {
+  .account-row {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .account-row.account-head {
+    display: none;
+  }
+  .account-actions {
+    justify-content: flex-start;
+  }
+}
 .icon-only {
   width: 38px;
   height: 38px;

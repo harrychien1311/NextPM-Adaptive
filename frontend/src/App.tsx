@@ -2,7 +2,8 @@ import { HashRouter, Navigate, Route, Routes, useParams } from 'react-router-dom
 import { useAuth } from './store/auth';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
-import { PortfolioPage } from './pages/PortfolioPage';
+import { AdminPage } from './pages/AdminPage';
+import { ProgramOverviewPage } from './pages/ProgramOverviewPage';
 import { WorkspacePage } from './pages/WorkspacePage';
 
 function RequireAuth({ children }: { children: JSX.Element }) {
@@ -10,11 +11,25 @@ function RequireAuth({ children }: { children: JSX.Element }) {
   if (loading) {
     return (
       <div className="state-block">
-        <span className="inline-spinner" /> Loading your portfolio…
+        <span className="inline-spinner" /> Loading your workspace…
       </div>
     );
   }
   return user ? children : <Navigate to="/login" replace />;
+}
+
+/**
+ * Administrators and delivery accounts live on separate sides of the app: an admin never lands on
+ * a program or project screen, and a delivery account never lands on the account console.
+ */
+function DeliveryOnly({ children }: { children: JSX.Element }) {
+  const { user } = useAuth();
+  return user?.role === 'ADMIN' ? <Navigate to="/admin" replace /> : children;
+}
+
+function AdminOnly({ children }: { children: JSX.Element }) {
+  const { user } = useAuth();
+  return user?.role === 'ADMIN' ? children : <Navigate to="/" replace />;
 }
 
 function WorkspaceRoute() {
@@ -32,7 +47,19 @@ export function App() {
           path="/"
           element={
             <RequireAuth>
-              <PortfolioPage />
+              <DeliveryOnly>
+                <ProgramOverviewPage />
+              </DeliveryOnly>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/admin"
+          element={
+            <RequireAuth>
+              <AdminOnly>
+                <AdminPage />
+              </AdminOnly>
             </RequireAuth>
           }
         />
@@ -40,7 +67,9 @@ export function App() {
           path="/projects/:projectId/*"
           element={
             <RequireAuth>
-              <WorkspaceRoute />
+              <DeliveryOnly>
+                <WorkspaceRoute />
+              </DeliveryOnly>
             </RequireAuth>
           }
         />

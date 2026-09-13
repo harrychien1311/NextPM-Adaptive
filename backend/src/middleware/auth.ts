@@ -1,6 +1,6 @@
 import { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
-import { Role } from '@prisma/client';
+import { ProjectRole, Role } from '@prisma/client';
 import { env } from '../config/env';
 import { forbidden, notFound, unauthorized } from '../lib/http-error';
 import { prisma } from '../lib/prisma';
@@ -19,7 +19,7 @@ declare global {
     interface Request {
       user?: AuthUser;
       /** The requester's effective role within the :projectId of this request — set by requireProjectMember. */
-      projectRole?: Role;
+      projectRole?: ProjectRole;
     }
   }
 }
@@ -50,7 +50,7 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
   }
 }
 
-/** Only these roles may confirm approaches / approve baselines. */
+/** Account-role gate (global). ADMIN is an account-administration role, not a delivery role. */
 export const requireRole =
   (...roles: Role[]) =>
   (req: Request, _res: Response, next: NextFunction) => {
@@ -59,30 +59,36 @@ export const requireRole =
     next();
   };
 
-export const PM_ROLES: Role[] = [Role.ADMIN, Role.PORTFOLIO_MANAGER, Role.PROJECT_MANAGER];
+/** Roles allowed to create a project workspace: the program owner, and any project owner. */
+export const PROJECT_CREATOR_ROLES: Role[] = [Role.PROGRAM_OWNER, Role.PROJECT_OWNER];
+
+/** Within a project, only OWNER may change planning state; MEMBER/VIEWER are read-only. */
+export const PROJECT_WRITE_ROLES: ProjectRole[] = [ProjectRole.OWNER];
 
 /**
  * Isolates projects per user: mount with `router.use('/:projectId', requireProjectMember)` on
- * every project-scoped router. ADMIN and the owner of the project's portfolio always pass (and
- * are treated as PORTFOLIO_MANAGER-tier for requireProjectRole below); everyone else must be a
- * ProjectMember row for this exact project. Sets req.projectRole for requireProjectRole to read.
+ * every project-scoped router.
+ *
+ * - PROGRAM_OWNER oversees the whole delivery org, so it passes for any project as OWNER.
+ * - The project's own owner passes as OWNER even without a membership row.
+ * - Everyone else must have a ProjectMember row for this exact project.
+ * - ADMIN deliberately does NOT pass: administrators manage accounts, never delivery content.
  */
 export async function requireProjectMember(req: Request, _res: Response, next: NextFunction) {
   if (!req.user) return next(unauthorized());
   if (req.user.role === Role.ADMIN) {
-    req.projectRole = Role.ADMIN;
-    return next();
+    return next(forbidden('Administrator accounts manage users only, not project workspaces'));
   }
 
   const projectId = req.params.projectId;
   const [project, membership] = await Promise.all([
-    prisma.project.findUnique({ where: { id: projectId }, select: { portfolio: { select: { ownerId: true } } } }),
+    prisma.project.findUnique({ where: { id: projectId }, select: { ownerId: true } }),
     prisma.projectMember.findUnique({ where: { projectId_userId: { projectId, userId: req.user.id } } }),
   ]);
   if (!project) return next(notFound('Project not found'));
 
-  if (project.portfolio.ownerId === req.user.id) {
-    req.projectRole = Role.PORTFOLIO_MANAGER;
+  if (req.user.role === Role.PROGRAM_OWNER || project.ownerId === req.user.id) {
+    req.projectRole = ProjectRole.OWNER;
     return next();
   }
   if (!membership) return next(forbidden('You are not a member of this project'));
@@ -93,7 +99,7 @@ export async function requireProjectMember(req: Request, _res: Response, next: N
 
 /** For :projectId routes, after requireProjectMember: checks the requester's role within THIS project. */
 export const requireProjectRole =
-  (...roles: Role[]) =>
+  (...roles: ProjectRole[]) =>
   (req: Request, _res: Response, next: NextFunction) => {
     if (!req.user) return next(unauthorized());
     if (!req.projectRole) return next(forbidden('Project membership was not resolved'));

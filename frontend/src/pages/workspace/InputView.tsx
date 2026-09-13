@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { inputApi } from '../../api/endpoints';
+import { inputApi, rulesApi } from '../../api/endpoints';
+import { ApiError } from '../../api/client';
 import { useToast } from '../../components/Toast';
 import { useDebouncedCallback } from '../../hooks/useDebouncedCallback';
 import type { InputField } from '../../api/types';
@@ -42,17 +43,55 @@ export function InputView({
     save.mutate([{ definitionId, value }]);
   }, 900);
 
+  /**
+   * Reads the uploaded documents into the form, then verifies the PM's own answers. It stays on
+   * this screen on purpose: prefilled values arrive unverified, and the PM is meant to look at
+   * them before asking for a governance model.
+   */
   const verify = useMutation({
     mutationFn: () => inputApi.verify(projectId),
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: ['input', projectId] });
       await queryClient.invalidateQueries({ queryKey: ['workspace', projectId] });
+
+      const read = result.documentsRead
+        ? `Read ${result.documentsRead} document${result.documentsRead === 1 ? '' : 's'}. `
+        : 'No uploaded documents to read. ';
+      const filled = result.prefilled
+        ? `Prefilled ${result.prefilled} field${result.prefilled === 1 ? '' : 's'} — review them, then verify again to confirm. `
+        : result.documentsRead
+          ? 'Nothing new could be answered from them — fill the rest in yourself. '
+          : '';
       notify({
-        title: 'Verification complete',
-        detail: `${result.verified} data points verified. Get the AI governance-model recommendation next.`,
+        title: `${result.verified} data point${result.verified === 1 ? '' : 's'} verified`,
+        detail: `${read}${filled}`.trim(),
       });
-      setTimeout(() => onNavigate('approach'), 450);
+      if (result.documentsRead && result.provider === 'mock') {
+        notify({
+          title: 'Document reading is unavailable',
+          detail:
+            'The AI provider could not be reached, so only exact keyword matches were applied. Check AI_PROVIDER and ANTHROPIC_API_KEY.',
+        });
+      }
     },
+    onError: (error) =>
+      notify({ title: 'Verification failed', detail: error instanceof ApiError ? error.message : 'Unexpected error' }),
+  });
+
+  /** The explicit "ask the AI" step — runs Skill 1, then opens the Governance Model screen. */
+  const suggestModel = useMutation({
+    mutationFn: () => rulesApi.evaluate(projectId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['approach', projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['workspace', projectId] });
+      notify({ title: 'Recommendation ready', detail: 'Opening the governance model options.' });
+      setTimeout(() => onNavigate('approach'), 350);
+    },
+    onError: (error) =>
+      notify({
+        title: 'Could not get a recommendation',
+        detail: error instanceof ApiError ? error.message : 'Unexpected error',
+      }),
   });
 
   const addField = useMutation({
@@ -120,6 +159,10 @@ export function InputView({
     setDraft((current) => ({ ...current, [field.definitionId]: value }));
     autoSave(field.definitionId, value || null);
   };
+
+  /** Flushes everything typed since the last save, instead of waiting out the autosave debounce. */
+  const pendingDraftValues = () =>
+    Object.entries(draft).map(([definitionId, value]) => ({ definitionId, value: value || null }));
 
   return (
     <section className="view active">
@@ -256,11 +299,32 @@ export function InputView({
               <i>✓</i>{' '}
               {save.isPending ? 'Saving…' : savedAt ? `Auto-saved at ${savedAt.toLocaleTimeString()}` : 'Auto-save on'}
             </span>
-            <button type="button" className="secondary" onClick={() => setSavedAt(new Date())}>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => save.mutate(pendingDraftValues())}
+              disabled={save.isPending}
+              title="Save what you have typed without verifying it"
+            >
               Save draft
             </button>
-            <button type="button" className="primary" onClick={() => verify.mutate()} disabled={verify.isPending}>
-              {verify.isPending ? 'Verifying…' : 'Verify input & continue'}
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => verify.mutate()}
+              disabled={verify.isPending || suggestModel.isPending}
+              title="Read the uploaded documents into the form, then confirm your answers"
+            >
+              {verify.isPending ? 'Reading documents…' : 'Verify input'}
+            </button>
+            <button
+              type="button"
+              className="primary"
+              onClick={() => suggestModel.mutate()}
+              disabled={suggestModel.isPending || verify.isPending}
+              title="Ask the AI to recommend a governance model from the verified inputs"
+            >
+              {suggestModel.isPending ? 'Asking AI…' : '✦ Suggest governance model'}
             </button>
           </div>
         </form>

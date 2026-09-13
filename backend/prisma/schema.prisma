@@ -1,5 +1,5 @@
 // NextPM Adaptive — PostgreSQL schema
-// Hierarchy: Portfolio -> Program -> Project workspace
+// Hierarchy: Program -> Project workspace (a project with no program is standalone)
 // Planning flow: Input & verify -> Governance recommendation -> Template, generate & approve
 //
 // Governance model recommendation is LLM-driven (see modules/ai/provider.ts,
@@ -17,10 +17,19 @@ datasource db {
 
 // ---------------------------------------------------------------- enums
 
+/// Global account role. Deliberately three, non-overlapping responsibilities:
+/// ADMIN never touches delivery data, PROGRAM_OWNER is the only role that may create a Program,
+/// and PROJECT_OWNER (what self-registration grants) may create projects but only open its own.
 enum Role {
   ADMIN
-  PORTFOLIO_MANAGER
-  PROJECT_MANAGER
+  PROGRAM_OWNER
+  PROJECT_OWNER
+}
+
+/// A user's role *inside* one project — separate from the account role on purpose, so granting
+/// someone access to a workspace can never change what they may do platform-wide.
+enum ProjectRole {
+  OWNER
   MEMBER
   VIEWER
 }
@@ -137,13 +146,13 @@ model User {
   name         String
   initials     String
   jobTitle     String   @default("Project Manager")
-  role         Role     @default(PROJECT_MANAGER)
+  role         Role     @default(PROJECT_OWNER)
   passwordHash String
   active       Boolean  @default(true)
   createdAt    DateTime @default(now())
 
-  ownedPortfolios  Portfolio[]
   ownedPrograms    Program[]
+  ownedProjects    Project[]           @relation("projectOwner")
   memberships      ProjectMember[]
   decisions        ApproachDecision[]
   approvedDocs     PlanningDocument[]  @relation("documentApprover")
@@ -156,26 +165,9 @@ model User {
 
 // ---------------------------------------------------------------- hierarchy
 
-model Portfolio {
-  id                 String   @id @default(uuid())
-  name               String
-  businessUnit       String?
-  strategicObjective String?
-  ownerId            String?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
-
-  owner    User?     @relation(fields: [ownerId], references: [id], onDelete: SetNull)
-  programs Program[]
-  projects Project[]
-
-  @@map("portfolios")
-}
-
 model Program {
   id            String   @id @default(uuid())
-  portfolioId   String
-  key           String // stable slug used by the UI (commerce, factory, services...)
+  key           String   @unique // stable slug used by the UI (commerce, factory, services...)
   name          String
   description   String?
   targetOutcome String?
@@ -184,18 +176,16 @@ model Program {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
-  owner     User?     @relation(fields: [ownerId], references: [id], onDelete: SetNull)
-  projects  Project[]
+  owner    User?     @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  projects Project[]
 
-  @@unique([portfolioId, key])
   @@map("programs")
 }
 
 model Project {
   id          String        @id @default(uuid())
-  portfolioId String
   programId   String? // null => standalone project
+  ownerId     String? // the project owner — the account that created it
   name        String
   type        ProjectType
   status      ProjectStatus @default(DRAFT)
@@ -208,8 +198,8 @@ model Project {
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
-  portfolio        Portfolio              @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
   program          Program?               @relation(fields: [programId], references: [id], onDelete: SetNull)
+  owner            User?                  @relation("projectOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   members          ProjectMember[]
   inputValues      ProjectInputValue[]
   customFields     ProjectCustomField[]
@@ -225,17 +215,18 @@ model Project {
   dashboardLayouts DashboardLayout[]
   exports          ExportJob[]
 
-  @@index([portfolioId, status])
+  @@index([status])
   @@index([programId])
+  @@index([ownerId])
   @@map("projects")
 }
 
 model ProjectMember {
-  id        String   @id @default(uuid())
+  id        String      @id @default(uuid())
   projectId String
   userId    String
-  role      Role     @default(MEMBER)
-  createdAt DateTime @default(now())
+  role      ProjectRole @default(MEMBER)
+  createdAt DateTime    @default(now())
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -341,7 +332,11 @@ model AiApproachSuggestion {
   risks               Json     @default("[]") // string[] — risks / limitations of the primary pick
   alternatives        Json     @default("[]") // [{ approach, score, rationale }]
   summary             String?
-  candidateValues     Json     @default("[]") // [{ fieldKey, label, value }] proposed, unverified
+  candidateValues     Json     @default("[]")
+  /// Which writer produced this snapshot: "anthropic" or "mock". The AI call falls back to the
+  /// deterministic mock on any error, so without this a heuristic result is indistinguishable
+  /// from a real one — both to the PM and to anyone auditing the decision later.
+  aiProvider          String   @default("mock") // [{ fieldKey, label, value }] proposed, unverified
   createdAt           DateTime @default(now())
 
   project    Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)

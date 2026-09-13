@@ -7,7 +7,8 @@ import { env } from './config/env';
 import { authenticate } from './middleware/auth';
 import { errorHandler, notFoundHandler } from './middleware/error';
 import { authRouter } from './modules/auth/auth.routes';
-import { portfolioRouter, projectRouter } from './modules/portfolio/portfolio.routes';
+import { programRouter, projectRouter } from './modules/program/program.routes';
+import { adminRouter } from './modules/admin/admin.routes';
 import { inputRouter } from './modules/input/input.routes';
 import { rulesRouter } from './modules/rules/rules.routes';
 import { documentsRouter } from './modules/documents/documents.routes';
@@ -33,7 +34,8 @@ export function createApp() {
   // Everything below requires a signed-in user.
   const api = express.Router();
   api.use(authenticate);
-  api.use('/portfolios', portfolioRouter);
+  api.use('/admin', adminRouter);
+  api.use('/programs', programRouter);
   api.use('/projects', projectRouter);
   api.use('/projects', inputRouter);
   api.use('/projects', rulesRouter);

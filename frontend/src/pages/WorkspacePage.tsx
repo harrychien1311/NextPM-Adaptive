@@ -9,12 +9,13 @@ import { ApproachView } from './workspace/ApproachView';
 import { StudioView } from './workspace/StudioView';
 import { AgentDrawer } from './workspace/AgentDrawer';
 import { TeamModal } from './workspace/TeamModal';
+import { SignOutIcon } from '../components/icons';
 
 export type WorkspaceView = 'dashboard' | 'input' | 'approach' | 'studio';
 
 export function WorkspacePage({ projectId }: { projectId: string }) {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const [view, setView] = useState<WorkspaceView>('dashboard');
   const [agentOpen, setAgentOpen] = useState(false);
   const [teamOpen, setTeamOpen] = useState(false);
@@ -35,7 +36,15 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
     return (
       <div className="state-block">
         <strong>Workspace unavailable</strong>
-        This project could not be loaded. Return to the portfolio overview and try again.
+        This project could not be loaded, or you have not been granted access to it.
+        <div style={{ marginTop: 16, display: 'flex', gap: 8, justifyContent: 'center' }}>
+          <button className="secondary" onClick={() => navigate('/')}>
+            ← Back to program overview
+          </button>
+          <button className="secondary" onClick={logout}>
+            Sign out
+          </button>
+        </div>
       </div>
     );
   }
@@ -55,10 +64,10 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
             </div>
           </div>
           <button className="back-projects" onClick={() => navigate('/')}>
-            ← Portfolio overview
+            ← Program overview
           </button>
           <div className="workspace-path">
-            <span>Portfolio</span>
+            <span>Program</span>
             <b>›</b>
             <strong>{project.program?.name ?? 'Standalone'}</strong>
           </div>
@@ -125,7 +134,6 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
               <strong>{user?.name}</strong>
               <span>{user?.jobTitle}</span>
             </div>
-            <button aria-label="Profile menu">•••</button>
           </div>
         </aside>
 
@@ -169,6 +177,10 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
                   Review {project.documentsInReview} draft{project.documentsInReview > 1 ? 's' : ''}
                 </button>
               )}
+              {/* Sign out sits last so it is the top-right corner on every screen of the app. */}
+              <button className="icon-button signout-button" onClick={logout} title="Sign out" aria-label="Sign out">
+                <SignOutIcon />
+              </button>
             </div>
           </header>
 

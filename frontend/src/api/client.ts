@@ -13,6 +13,21 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Fired when the API rejects the session mid-use — an expired token, or an account an
+ * administrator deactivated or deleted while it was signed in.
+ *
+ * This module cannot touch React state, and must not import the auth store (that would be a
+ * cycle), so it announces the rejection and `AuthProvider` is the one that clears the session.
+ * Routing is then left to `RequireAuth`: dropping the user is what sends the app to /login.
+ */
+export const UNAUTHORIZED_EVENT = 'nextpm:unauthorized';
+
+function rejectSession() {
+  tokenStore.clear();
+  window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = tokenStore.get();
   const isForm = init.body instanceof FormData;
@@ -26,10 +41,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     },
   });
 
-  if (response.status === 401) {
-    tokenStore.clear();
-    window.location.hash = '#/login';
-  }
+  if (response.status === 401) rejectSession();
 
   const text = await response.text();
   const payload = text ? JSON.parse(text) : null;
@@ -57,6 +69,7 @@ export const api = {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!response.ok) {
+      if (response.status === 401) rejectSession();
       const text = await response.text();
       const payload = text ? JSON.parse(text) : null;
       throw new ApiError(response.status, payload?.error?.message ?? response.statusText, payload?.error?.details);

@@ -29,8 +29,12 @@ services:
       DATABASE_URL: postgresql://nextpm:nextpm@db:5432/nextpm?schema=public
       JWT_SECRET: change-me-in-production
       CORS_ORIGIN: http://localhost:8080
+      # Interpolated from the .env file sitting NEXT TO this compose file (or the shell) —
+      # backend/.env is not visible to the container.
       AI_PROVIDER: ${AI_PROVIDER:-mock}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
+      AI_EFFORT: ${AI_EFFORT:-}
     ports:
       - '4000:4000'
     volumes:

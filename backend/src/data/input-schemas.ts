@@ -8,18 +8,22 @@ export interface FieldSeed {
   domain: ManagementDomain;
   /** Signal consumed by the governance-model recommendation prompt (see modules/ai/provider.ts). */
   signalKey?: string;
+  /**
+   * Defaults to false. Only the project/service/product name and its objective are required —
+   * everything else is a signal the PM may leave blank, or let the document extraction fill in.
+   */
   required?: boolean;
   defaultValue?: string;
 }
 
 /**
- * "Minimum project profile" — the 12 required signals per project type.
+ * "Minimum project profile" — the signals the AI scores a governance model from, per project type.
  * Mirrors `inputSchemas` in the approved prototype.
  */
 export const INPUT_SCHEMAS: Record<ProjectType, FieldSeed[]> = {
   SI: [
-    { key: 'projectName', label: 'Project name', fieldType: FieldType.TEXT, domain: ManagementDomain.GOVERNANCE, defaultValue: 'KR Commerce Modernization' },
-    { key: 'businessObjective', label: 'Business objective', fieldType: FieldType.TEXT, domain: ManagementDomain.SCOPE, defaultValue: 'Launch a unified B2B commerce platform' },
+    { key: 'projectName', label: 'Project name', fieldType: FieldType.TEXT, domain: ManagementDomain.GOVERNANCE, required: true, defaultValue: 'KR Commerce Modernization' },
+    { key: 'businessObjective', label: 'Business objective', fieldType: FieldType.TEXT, domain: ManagementDomain.SCOPE, required: true, defaultValue: 'Launch a unified B2B commerce platform' },
     { key: 'successMeasure', label: 'Success measure', fieldType: FieldType.TEXT, domain: ManagementDomain.SCOPE, defaultValue: 'Launch by Mar 31; order error below 1%' },
     { key: 'targetWindow', label: 'Target dates', fieldType: FieldType.DATE_RANGE, domain: ManagementDomain.SCHEDULE, defaultValue: '2026-10-01..2027-03-31' },
     { key: 'contractModel', label: 'Contract model', fieldType: FieldType.SELECT, options: ['Fixed price', 'Time & Materials', 'Internal initiative'], domain: ManagementDomain.FINANCE, signalKey: 'contractModel', defaultValue: 'Fixed price' },
@@ -37,8 +41,8 @@ export const INPUT_SCHEMAS: Record<ProjectType, FieldSeed[]> = {
     { key: 'budgetControlScope', label: 'Budget control scope', fieldType: FieldType.SELECT, options: ['PM owns', 'Track impact only'], domain: ManagementDomain.FINANCE, signalKey: 'budgetControlScope' },
   ],
   SM: [
-    { key: 'serviceName', label: 'Service name', fieldType: FieldType.TEXT, domain: ManagementDomain.GOVERNANCE, defaultValue: 'SK Manufacturing AMS' },
-    { key: 'serviceObjective', label: 'Service objective', fieldType: FieldType.TEXT, domain: ManagementDomain.SCOPE, defaultValue: 'Keep production applications stable and available' },
+    { key: 'serviceName', label: 'Service name', fieldType: FieldType.TEXT, domain: ManagementDomain.GOVERNANCE, required: true, defaultValue: 'SK Manufacturing AMS' },
+    { key: 'serviceObjective', label: 'Service objective', fieldType: FieldType.TEXT, domain: ManagementDomain.SCOPE, required: true, defaultValue: 'Keep production applications stable and available' },
     { key: 'successMeasure', label: 'Success measure', fieldType: FieldType.TEXT, domain: ManagementDomain.SCOPE, defaultValue: '99.9% SLA; P1 restore below 2 hours' },
     { key: 'serviceTerm', label: 'Service term', fieldType: FieldType.DATE_RANGE, domain: ManagementDomain.SCHEDULE, defaultValue: '2027-01-01..2027-12-31' },
     { key: 'contractModel', label: 'Contract model', fieldType: FieldType.SELECT, options: ['Managed service', 'T&M support', 'Outcome-based'], domain: ManagementDomain.FINANCE, signalKey: 'contractModel', defaultValue: 'Managed service' },
@@ -53,8 +57,8 @@ export const INPUT_SCHEMAS: Record<ProjectType, FieldSeed[]> = {
     { key: 'budgetControlScope', label: 'Budget control scope', fieldType: FieldType.SELECT, options: ['PM owns', 'Track impact only'], domain: ManagementDomain.FINANCE, signalKey: 'budgetControlScope' },
   ],
   PRODUCT: [
-    { key: 'productName', label: 'Product name', fieldType: FieldType.TEXT, domain: ManagementDomain.GOVERNANCE, defaultValue: 'AI Quality Assistant' },
-    { key: 'productVision', label: 'Product vision', fieldType: FieldType.TEXT, domain: ManagementDomain.SCOPE, defaultValue: 'Reduce manual quality review effort with AI' },
+    { key: 'productName', label: 'Product name', fieldType: FieldType.TEXT, domain: ManagementDomain.GOVERNANCE, required: true, defaultValue: 'AI Quality Assistant' },
+    { key: 'productVision', label: 'Product vision', fieldType: FieldType.TEXT, domain: ManagementDomain.SCOPE, required: true, defaultValue: 'Reduce manual quality review effort with AI' },
     { key: 'targetOutcome', label: 'Target outcome', fieldType: FieldType.TEXT, domain: ManagementDomain.SCOPE, defaultValue: '30% faster review; pilot adoption above 70%' },
     { key: 'planningHorizon', label: 'Planning horizon', fieldType: FieldType.TEXT, domain: ManagementDomain.SCHEDULE, defaultValue: 'Q4 pilot — H1 scale' },
     { key: 'contractModel', label: 'Funding model', fieldType: FieldType.SELECT, options: ['Quarterly product funding', 'Fixed initiative budget', 'Experiment funding'], domain: ManagementDomain.FINANCE, signalKey: 'contractModel', defaultValue: 'Quarterly product funding' },

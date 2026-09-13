@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from '../store/auth';
 import { ApiError } from '../api/client';
 
@@ -11,7 +11,9 @@ export function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  if (user) navigate('/', { replace: true });
+  // Declarative redirect, not navigate() during render: a render-phase side effect here is what
+  // let an already-rejected session ping-pong between /login and the protected routes.
+  if (user) return <Navigate to="/" replace />;
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -38,7 +40,7 @@ export function LoginPage() {
           </div>
         </div>
         <h1>Sign in to your workspace</h1>
-        <p>Portfolio roll-up, rule-based approach selection and PM-approved planning packs.</p>
+        <p>Program roll-up, AI governance-model recommendations and PM-approved planning packs.</p>
         {error && <div className="auth-error">{error}</div>}
         <label>
           Work email
@@ -51,7 +53,11 @@ export function LoginPage() {
         <button type="submit" disabled={busy}>
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
-        <p className="auth-hint">Seeded demo account: lina.vuong@nextpm.local · NextPM!2026</p>
+        <p className="auth-hint">
+          Seeded demo accounts · NextPM!2026
+          <br />
+          lina.vuong@nextpm.local (program owner) · nam.hoang@nextpm.local (project owner) · admin@nextpm.local
+        </p>
         <p className="auth-hint">
           Don't have an account? <Link to="/register">Sign up</Link>
         </p>

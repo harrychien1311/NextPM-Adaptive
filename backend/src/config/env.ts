@@ -19,7 +19,20 @@ export const env = {
   ai: {
     provider: (process.env.AI_PROVIDER ?? 'mock') as 'mock' | 'anthropic',
     anthropicKey: process.env.ANTHROPIC_API_KEY ?? '',
-    model: process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-6',
+    // Current-generation default. Override with ANTHROPIC_MODEL to pin a different model.
+    // `||` rather than `??` on purpose: a variable set to an empty string (which is what an
+    // unset `${ANTHROPIC_MODEL:-}` in docker-compose produces) must fall back, not send "".
+    model: process.env.ANTHROPIC_MODEL || 'claude-opus-5',
+    /**
+     * How hard the model thinks before answering. The API's own default is `high`; we send
+     * `medium` deliberately — on this workload the reasoning is only ~14-27% of the output
+     * tokens, so `high` buys little and costs more.
+     *
+     * `off` omits the parameter entirely. Needed if ANTHROPIC_MODEL is ever pointed at a model
+     * that rejects `effort` (Haiku 4.5 and older Sonnet), where sending it would 400 the request
+     * and silently drop the app back to the mock writer.
+     */
+    effort: process.env.AI_EFFORT || 'medium',
   },
   isProd: process.env.NODE_ENV === 'production',
 };

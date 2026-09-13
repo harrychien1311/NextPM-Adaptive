@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import bcrypt from 'bcryptjs';
-import { ManagementDomain, PrismaClient, ProjectStatus, ProjectType, Requirement, Role } from '@prisma/client';
+import { ManagementDomain, PrismaClient, ProjectRole, ProjectStatus, ProjectType, Requirement, Role } from '@prisma/client';
 import { INPUT_SCHEMAS } from '../src/data/input-schemas';
 import { BASE_TEMPLATES, DELIVERY_TEMPLATE, DOCUMENT_CATALOG } from '../src/data/document-catalog';
 
@@ -9,11 +9,12 @@ const prisma = new PrismaClient();
 async function seedUsers() {
   const password = await bcrypt.hash('NextPM!2026', 10);
   const people = [
-    { email: 'lina.vuong@nextpm.local', name: 'Lina Vuong', initials: 'LV', role: Role.PORTFOLIO_MANAGER, jobTitle: 'Project Manager' },
-    { email: 'nam.hoang@nextpm.local', name: 'Nam Hoang', initials: 'NH', role: Role.PROJECT_MANAGER, jobTitle: 'Delivery Manager' },
-    { email: 'an.nguyen@nextpm.local', name: 'An Nguyen', initials: 'AN', role: Role.MEMBER, jobTitle: 'Business Analyst' },
-    { email: 'bao.tran@nextpm.local', name: 'Bao Tran', initials: 'BT', role: Role.MEMBER, jobTitle: 'Service Lead' },
-    { email: 'ha.pham@nextpm.local', name: 'Ha Pham', initials: 'HA', role: Role.MEMBER, jobTitle: 'Product Owner' },
+    // Lina is the single PROGRAM_OWNER — the only account that may create programs.
+    { email: 'lina.vuong@nextpm.local', name: 'Lina Vuong', initials: 'LV', role: Role.PROGRAM_OWNER, jobTitle: 'Project Manager' },
+    { email: 'nam.hoang@nextpm.local', name: 'Nam Hoang', initials: 'NH', role: Role.PROJECT_OWNER, jobTitle: 'Delivery Manager' },
+    { email: 'an.nguyen@nextpm.local', name: 'An Nguyen', initials: 'AN', role: Role.PROJECT_OWNER, jobTitle: 'Business Analyst' },
+    { email: 'bao.tran@nextpm.local', name: 'Bao Tran', initials: 'BT', role: Role.PROJECT_OWNER, jobTitle: 'Service Lead' },
+    { email: 'ha.pham@nextpm.local', name: 'Ha Pham', initials: 'HA', role: Role.PROJECT_OWNER, jobTitle: 'Product Owner' },
     { email: 'admin@nextpm.local', name: 'Platform Admin', initials: 'PA', role: Role.ADMIN, jobTitle: 'Administrator' },
   ];
 
@@ -40,7 +41,7 @@ async function seedInputSchemas() {
           label: field.label,
           fieldType: field.fieldType,
           options: field.options ?? [],
-          required: field.required ?? true,
+          required: field.required ?? false,
           domain: field.domain,
           signalKey: field.signalKey ?? field.key,
           order: index,
@@ -48,6 +49,9 @@ async function seedInputSchemas() {
         update: {
           label: field.label,
           options: field.options ?? [],
+          // Kept in `update` too: re-seeding an existing database must be able to relax a field
+          // that used to be required.
+          required: field.required ?? false,
           domain: field.domain,
           order: index,
           signalKey: field.signalKey ?? field.key,
@@ -150,24 +154,12 @@ async function main() {
   await seedInputSchemas();
   await seedDocumentCatalog();
 
-  console.log('▸ seeding portfolio hierarchy');
-  const portfolio = await prisma.portfolio.upsert({
-    where: { id: '00000000-0000-4000-8000-000000000001' },
-    create: {
-      id: '00000000-0000-4000-8000-000000000001',
-      name: 'FKR Delivery Portfolio',
-      businessUnit: 'FPT Software Korea',
-      strategicObjective: 'Prioritize and govern related investments',
-      ownerId: users.LV,
-    },
-    update: {},
-  });
-
+  console.log('▸ seeding programs');
   const programIds: Record<string, string> = {};
   for (const program of PROGRAMS) {
     const record = await prisma.program.upsert({
-      where: { portfolioId_key: { portfolioId: portfolio.id, key: program.key } },
-      create: { ...program, portfolioId: portfolio.id, ownerId: users.LV },
+      where: { key: program.key },
+      create: { ...program, ownerId: users.LV },
       update: { name: program.name, description: program.description },
     });
     programIds[program.key] = record.id;
@@ -175,7 +167,7 @@ async function main() {
 
   console.log('▸ seeding project workspaces');
   for (const seed of PROJECTS) {
-    const existing = await prisma.project.findFirst({ where: { name: seed.name, portfolioId: portfolio.id } });
+    const existing = await prisma.project.findFirst({ where: { name: seed.name } });
     if (existing) {
       console.log(`  · ${seed.name} already present, skipping`);
       continue;
@@ -189,8 +181,8 @@ async function main() {
 
     const project = await prisma.project.create({
       data: {
-        portfolioId: portfolio.id,
         programId: seed.programKey ? programIds[seed.programKey] : null,
+        ownerId: users[seed.members[0]],
         name: seed.name,
         type: seed.type,
         status: seed.status,
@@ -201,7 +193,7 @@ async function main() {
         members: {
           create: seed.members.map((initials, index) => ({
             userId: users[initials],
-            role: index === 0 ? Role.PROJECT_MANAGER : Role.MEMBER,
+            role: index === 0 ? ProjectRole.OWNER : ProjectRole.MEMBER,
           })),
         },
         inputValues: {
@@ -261,22 +253,19 @@ async function main() {
     }
 
     if (seed.generateSome) {
-      const { setGenerationContract, generateDraft, approveDocument } = await import('../src/modules/documents/documents.service');
+      const { generateDocumentForDefinition, approveDocument } = await import('../src/modules/documents/documents.service');
       const definitionsToDraft = await prisma.documentDefinition.findMany({
         where: { projectType: seed.type, domain: 'GOVERNANCE' },
-        include: { templates: true },
         orderBy: { order: 'asc' },
         take: 2,
       });
       for (const [index, definition] of definitionsToDraft.entries()) {
-        const template = definition.templates.find((item) => item.recommended) ?? definition.templates[0];
-        const document = await setGenerationContract({
-          projectId: project.id,
-          definitionId: definition.id,
-          templateId: template.id,
-        });
         try {
-          await generateDraft({ projectId: project.id, documentId: document!.id, actorId: users.LV });
+          const document = await generateDocumentForDefinition({
+            projectId: project.id,
+            definitionId: definition.id,
+            actorId: users.LV,
+          });
           if (index === 0) await approveDocument({ projectId: project.id, documentId: document!.id, actorId: users.LV });
         } catch (error) {
           console.log(`    · skipped draft for ${definition.name}: ${(error as Error).message}`);
@@ -297,7 +286,9 @@ async function main() {
   }
 
   console.log('\n✓ seed complete');
-  console.log('  login: lina.vuong@nextpm.local / NextPM!2026');
+  console.log('  program owner: lina.vuong@nextpm.local / NextPM!2026');
+  console.log('  project owner: nam.hoang@nextpm.local / NextPM!2026');
+  console.log('  administrator: admin@nextpm.local      / NextPM!2026');
 }
 
 main()

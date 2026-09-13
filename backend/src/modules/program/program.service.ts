@@ -1,4 +1,12 @@
-import { DocumentStatus, ProjectStatus, ProjectType, Prisma, Role } from '@prisma/client';
+import {
+  DocumentStatus,
+  InputSource as ProjectInputSource,
+  ProjectRole,
+  ProjectStatus,
+  ProjectType,
+  Prisma,
+  Role,
+} from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 import { conflict, forbidden, notFound } from '../../lib/http-error';
 import { slugify } from '../../lib/slug';
@@ -8,53 +16,21 @@ import { logEvent } from '../audit/audit.service';
 
 const COLOR_ROTATION = ['blue', 'violet', 'green', 'orange'];
 
-/**
- * Projects are isolated per user: a portfolio is visible if the requester owns it, is ADMIN,
- * or is a member of at least one project inside it. This keeps the portfolio list from leaking
- * other teams' work.
- */
-export async function listPortfolios(user: { id: string; role: Role }) {
-  return prisma.portfolio.findMany({
-    where:
-      user.role === Role.ADMIN
-        ? undefined
-        : { OR: [{ ownerId: user.id }, { projects: { some: { members: { some: { userId: user.id } } } } }] },
-    orderBy: { createdAt: 'asc' },
-    include: {
-      owner: { select: { id: true, name: true, initials: true } },
-      _count: { select: { programs: true, projects: true } },
-    },
-  });
-}
-
-export async function createPortfolio(params: {
-  name: string;
-  businessUnit?: string;
-  strategicObjective?: string;
-  ownerId: string;
-}) {
-  return prisma.portfolio.create({
-    data: {
-      name: params.name,
-      businessUnit: params.businessUnit,
-      strategicObjective: params.strategicObjective,
-      ownerId: params.ownerId,
-    },
-  });
-}
-
+/** Programs are the top of the hierarchy — only a PROGRAM_OWNER may create one. */
 export async function createProgram(params: {
-  portfolioId: string;
   name: string;
   description?: string;
   targetOutcome?: string;
-  ownerId?: string;
+  ownerId: string;
 }) {
-  const count = await prisma.program.count({ where: { portfolioId: params.portfolioId } });
+  const key = slugify(params.name);
+  const existing = await prisma.program.findUnique({ where: { key } });
+  if (existing) throw conflict('A program with a similar name already exists');
+
+  const count = await prisma.program.count();
   return prisma.program.create({
     data: {
-      portfolioId: params.portfolioId,
-      key: slugify(params.name),
+      key,
       name: params.name,
       description: params.description,
       targetOutcome: params.targetOutcome,
@@ -62,6 +38,60 @@ export async function createProgram(params: {
       ownerId: params.ownerId,
     },
   });
+}
+
+export async function updateProgram(
+  programId: string,
+  data: { name?: string; description?: string | null; targetOutcome?: string | null },
+) {
+  const program = await prisma.program.findUnique({ where: { id: programId } });
+  if (!program) throw notFound('Program not found');
+
+  // The key is the slug the UI filters by, so it follows the name — but it must stay unique.
+  let key = program.key;
+  if (data.name && data.name !== program.name) {
+    key = slugify(data.name);
+    const clash = await prisma.program.findFirst({ where: { key, NOT: { id: programId } } });
+    if (clash) throw conflict('A program with a similar name already exists');
+  }
+
+  return prisma.program.update({ where: { id: programId }, data: { ...data, key } });
+}
+
+/**
+ * Deletes a program. Its projects are NOT deleted: `Project.programId` is `onDelete: SetNull`, so
+ * they survive as standalone projects. The caller is told how many were released so the UI can
+ * say so before the user confirms.
+ */
+export async function deleteProgram(programId: string) {
+  const program = await prisma.program.findUnique({
+    where: { id: programId },
+    include: { _count: { select: { projects: true } } },
+  });
+  if (!program) throw notFound('Program not found');
+
+  await prisma.program.delete({ where: { id: programId } });
+  return { deleted: true, name: program.name, projectsReleased: program._count.projects };
+}
+
+/**
+ * Deletes a project and everything hanging off it — inputs, uploaded references, recommendations,
+ * decisions, generated documents, tasks and the audit trail all cascade. There is no undo, which
+ * is why the route restricts this to the project's own owner or the program owner.
+ */
+export async function deleteProject(projectId: string, user: { id: string; role: Role }) {
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { id: true, name: true, ownerId: true, _count: { select: { documents: true } } },
+  });
+  if (!project) throw notFound('Project not found');
+
+  if (user.role !== Role.PROGRAM_OWNER && project.ownerId !== user.id) {
+    throw forbidden('Only the project owner or the program owner can delete a project');
+  }
+
+  await prisma.project.delete({ where: { id: projectId } });
+  return { deleted: true, name: project.name, documentsRemoved: project._count.documents };
 }
 
 /** Readiness for one project: input readiness blended with approved-output share. */
@@ -95,59 +125,64 @@ async function projectReadiness(projectId: string) {
   };
 }
 
-/** The portfolio overview screen: programs, their projects, and roll-up health. */
-export async function portfolioOverview(portfolioId: string, user: { id: string; role: Role }) {
-  const portfolio = await prisma.portfolio.findUnique({
-    where: { id: portfolioId },
-    include: {
-      programs: { orderBy: { createdAt: 'asc' } },
-      projects: {
-        orderBy: { createdAt: 'asc' },
-        include: {
-          program: true,
-          members: { include: { user: { select: { id: true, initials: true, name: true } } } },
-          _count: { select: { actionItems: true } },
-        },
+/**
+ * The program overview screen: every program, its projects, and roll-up health.
+ *
+ * Both delivery roles see the same board — isolation happens on `canOpen`: a PROJECT_OWNER may
+ * only open the workspaces it owns or was granted membership on, while a PROGRAM_OWNER, who is
+ * accountable for the whole program, may open any of them.
+ */
+export async function programOverview(user: { id: string; role: Role }) {
+  const [programs, projects] = await Promise.all([
+    prisma.program.findMany({ orderBy: { createdAt: 'asc' } }),
+    prisma.project.findMany({
+      orderBy: { createdAt: 'asc' },
+      include: {
+        program: true,
+        members: { include: { user: { select: { id: true, initials: true, name: true } } } },
       },
-    },
-  });
-  if (!portfolio) throw notFound('Portfolio not found');
+    }),
+  ]);
 
-  // Isolation: only see the projects you own the portfolio for, are ADMIN, or are a member of.
-  const canSeeAll = user.role === Role.ADMIN || portfolio.ownerId === user.id;
-  const visibleProjects = canSeeAll
-    ? portfolio.projects
-    : portfolio.projects.filter((project) => project.members.some((member) => member.userId === user.id));
-  if (!canSeeAll && visibleProjects.length === 0) throw forbidden('You are not a member of any project in this portfolio');
+  const isProgramOwner = user.role === Role.PROGRAM_OWNER;
 
   const enriched = await Promise.all(
-    visibleProjects.map(async (project) => {
+    projects.map(async (project) => {
       const stats = await projectReadiness(project.id);
       const [decision, openActions] = await Promise.all([
         prisma.approachDecision.findFirst({ where: { projectId: project.id, active: true } }),
         prisma.actionItem.count({ where: { projectId: project.id, status: 'OPEN' } }),
       ]);
+      const membership = project.members.find((member) => member.userId === user.id);
+      const isProjectOwner = project.ownerId === user.id;
       return {
         id: project.id,
         name: project.name,
         type: project.type,
         status: project.status,
         summary: project.summary,
+        customer: project.customer,
+        programId: project.programId,
         targetLabel: project.targetLabel,
         programKey: project.program?.key ?? 'standalone',
         programName: project.program?.name ?? 'Standalone',
         approach: decision?.approach ?? null,
         openDecisions: openActions,
         members: project.members.map((member) => member.user),
+        canOpen: isProgramOwner || isProjectOwner || Boolean(membership),
+        /** Rename, re-file, change status — anyone with the OWNER role inside the project. */
+        canEdit: isProgramOwner || isProjectOwner || membership?.role === ProjectRole.OWNER,
+        /** Deletion is irreversible, so it stays with the project's own owner (or the program owner). */
+        canDelete: isProgramOwner || isProjectOwner,
         ...stats,
       };
     }),
   );
 
   const groups = [
-    ...portfolio.programs.map((program) => {
-      const projects = enriched.filter((project) => project.programKey === program.key);
-      const active = projects.filter((project) => project.status === ProjectStatus.ACTIVE);
+    ...programs.map((program) => {
+      const grouped = enriched.filter((project) => project.programKey === program.key);
+      const active = grouped.filter((project) => project.status === ProjectStatus.ACTIVE);
       const rollup = active.length
         ? Math.round(active.reduce((sum, project) => sum + project.readiness, 0) / active.length)
         : null;
@@ -156,17 +191,19 @@ export async function portfolioOverview(portfolioId: string, user: { id: string;
         id: program.id,
         name: program.name,
         description: program.description,
+        targetOutcome: program.targetOutcome,
         colorKey: program.colorKey,
         readiness: rollup,
         health: rollup === null ? 'none' : rollup >= 75 ? 'good' : rollup >= 60 ? 'watch' : 'risk',
-        projects,
+        projects: grouped,
       };
     }),
     {
       key: 'standalone',
       id: null,
       name: 'Standalone projects',
-      description: 'Projects managed directly at portfolio level',
+      description: 'Projects that do not belong to a program',
+      targetOutcome: null,
       colorKey: 'none',
       readiness: null,
       health: 'none',
@@ -175,18 +212,20 @@ export async function portfolioOverview(portfolioId: string, user: { id: string;
   ];
 
   const active = enriched.filter((project) => project.status === ProjectStatus.ACTIVE);
+  const mine = enriched.filter((project) => project.canOpen);
   const summary = {
-    programs: portfolio.programs.length,
+    programs: programs.length,
     activePrograms: groups.filter((group) => group.health === 'good').length,
     activeProjects: active.length,
+    myProjects: mine.length,
     byType: {
       SI: active.filter((project) => project.type === ProjectType.SI).length,
       SM: active.filter((project) => project.type === ProjectType.SM).length,
       PRODUCT: active.filter((project) => project.type === ProjectType.PRODUCT).length,
     },
-    needsAttention: enriched.filter((project) => project.openDecisions > 0).length,
-    pendingDecisions: enriched.reduce((sum, project) => sum + project.openDecisions, 0),
-    portfolioReadiness: active.length
+    needsAttention: mine.filter((project) => project.openDecisions > 0).length,
+    pendingDecisions: mine.reduce((sum, project) => sum + project.openDecisions, 0),
+    deliveryReadiness: active.length
       ? Math.round(active.reduce((sum, project) => sum + project.readiness, 0) / active.length)
       : 0,
     statusCounts: {
@@ -198,15 +237,19 @@ export async function portfolioOverview(portfolioId: string, user: { id: string;
     },
   };
 
-  return { portfolio: { id: portfolio.id, name: portfolio.name }, summary, groups };
+  return {
+    capabilities: { canCreateProgram: isProgramOwner, canCreateProject: true, canOpenAll: isProgramOwner },
+    summary,
+    groups,
+  };
 }
 
 /**
  * Creating a project provisions the type-specific input profile, the default
  * dashboard layout and the initial planning tasks — nothing is generated yet.
+ * The creator becomes the project owner, which is what grants them workspace access.
  */
 export async function createProject(params: {
-  portfolioId: string;
   programId?: string | null;
   name: string;
   type: ProjectType;
@@ -217,10 +260,14 @@ export async function createProject(params: {
 }) {
   const definitions = await prisma.inputFieldDefinition.findMany({ where: { projectType: params.type } });
 
+  // The name the PM typed in the create dialog is the same fact the form's first field asks for,
+  // so seed it rather than making them type it twice. It counts as PM input, not a suggestion.
+  const nameKeys = ['projectName', 'serviceName', 'productName'];
+
   const project = await prisma.project.create({
     data: {
-      portfolioId: params.portfolioId,
       programId: params.programId || null,
+      ownerId: params.ownerId,
       name: params.name,
       type: params.type,
       status: ProjectStatus.DRAFT,
@@ -229,9 +276,14 @@ export async function createProject(params: {
       phaseLabel: `${params.type} · INITIATING`,
       targetStart: params.targetStart ? new Date(params.targetStart) : null,
       targetEnd: params.targetEnd ? new Date(params.targetEnd) : null,
-      members: { create: { userId: params.ownerId, role: 'PROJECT_MANAGER' } },
+      members: { create: { userId: params.ownerId, role: ProjectRole.OWNER } },
       inputValues: {
-        create: definitions.map((definition) => ({ definitionId: definition.id, value: null, verified: false })),
+        create: definitions.map((definition) => ({
+          definitionId: definition.id,
+          value: nameKeys.includes(definition.key) ? params.name : null,
+          source: ProjectInputSource.PM_INPUT,
+          verified: false,
+        })),
       },
       tasks: {
         create: [
@@ -280,7 +332,6 @@ export async function projectWorkspace(projectId: string) {
     where: { id: projectId },
     include: {
       program: true,
-      portfolio: { select: { id: true, name: true } },
       members: { include: { user: { select: { id: true, name: true, initials: true } } } },
     },
   });
@@ -298,7 +349,6 @@ export async function projectWorkspace(projectId: string) {
     type: project.type,
     status: project.status,
     phaseLabel: project.phaseLabel ?? `${project.type} · INITIATING`,
-    portfolio: project.portfolio,
     program: project.program ? { id: project.program.id, name: project.program.name, key: project.program.key } : null,
     members: project.members.map((member) => member.user),
     approach: decision
@@ -316,9 +366,10 @@ export async function updateProject(projectId: string, data: Prisma.ProjectUpdat
 }
 
 /** Invites an existing registered user onto a project — the only way an isolated project gains teammates. */
-export async function addProjectMember(params: { projectId: string; email: string; role?: Role }) {
+export async function addProjectMember(params: { projectId: string; email: string; role?: ProjectRole }) {
   const user = await prisma.user.findUnique({ where: { email: params.email.toLowerCase() } });
   if (!user) throw notFound('No user found with this email — they need to register first');
+  if (user.role === Role.ADMIN) throw conflict('Administrator accounts cannot be added to a project');
 
   const existing = await prisma.projectMember.findUnique({
     where: { projectId_userId: { projectId: params.projectId, userId: user.id } },
@@ -326,12 +377,15 @@ export async function addProjectMember(params: { projectId: string; email: strin
   if (existing) throw conflict('This user is already a member of this project');
 
   return prisma.projectMember.create({
-    data: { projectId: params.projectId, userId: user.id, role: params.role ?? Role.MEMBER },
+    data: { projectId: params.projectId, userId: user.id, role: params.role ?? ProjectRole.MEMBER },
     include: { user: { select: { id: true, name: true, initials: true, jobTitle: true } } },
   });
 }
 
 export async function removeProjectMember(projectId: string, userId: string) {
+  const project = await prisma.project.findUnique({ where: { id: projectId }, select: { ownerId: true } });
+  if (project?.ownerId === userId) throw conflict('The project owner cannot be removed from their own project');
+
   const existing = await prisma.projectMember.findUnique({ where: { projectId_userId: { projectId, userId } } });
   if (!existing) throw notFound('This user is not a member of this project');
   await prisma.projectMember.delete({ where: { projectId_userId: { projectId, userId } } });

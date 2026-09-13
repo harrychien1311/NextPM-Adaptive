@@ -132,6 +132,19 @@ export function ApproachView({
         </div>
       </div>
 
+      {/* The AI call silently falls back to a keyword heuristic on any error. Say so, rather than
+          letting a mock result pass for a real recommendation. */}
+      {data.evaluation.aiProvider === 'mock' && (
+        <div className="mock-warning">
+          <strong>⚠ This recommendation was not produced by the AI.</strong>
+          <span>
+            The model could not be reached, so a keyword heuristic scored it instead. It reads English wording only and
+            ignores the meaning of the document. Check <code>AI_PROVIDER</code>, <code>ANTHROPIC_API_KEY</code> and{' '}
+            <code>ANTHROPIC_MODEL</code> on the server, then run the recommendation again.
+          </span>
+        </div>
+      )}
+
       <div className="rule-flow-explainer">
         <div>
           <span>1</span>

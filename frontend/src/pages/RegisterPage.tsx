@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from '../store/auth';
 import { ApiError } from '../api/client';
 
@@ -14,7 +14,7 @@ export function RegisterPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  if (user) navigate('/', { replace: true });
+  if (user) return <Navigate to="/" replace />;
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -51,7 +51,11 @@ export function RegisterPage() {
           </div>
         </div>
         <h1>Create your workspace account</h1>
-        <p>Sign up to plan, verify and approve projects in NextPM Adaptive.</p>
+        <p>
+          Sign up to plan, verify and approve projects in NextPM Adaptive. New accounts are created as{' '}
+          <strong>project owners</strong> — you can create your own projects and invite teammates onto them. Program
+          owner and administrator accounts are issued by an administrator.
+        </p>
         {error && <div className="auth-error">{error}</div>}
         <label>
           Full name

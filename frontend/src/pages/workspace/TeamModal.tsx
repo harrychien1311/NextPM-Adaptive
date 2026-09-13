@@ -4,8 +4,14 @@ import { projectApi } from '../../api/endpoints';
 import { useToast } from '../../components/Toast';
 import { Backdrop, ModalShell } from '../../components/Modal';
 import { ApiError } from '../../api/client';
+import type { ProjectRole } from '../../api/types';
 
-const ROLE_OPTIONS = ['MEMBER', 'PROJECT_MANAGER', 'VIEWER', 'PORTFOLIO_MANAGER'];
+/** Project-scoped roles only — granting workspace access never changes an account's global role. */
+const ROLE_OPTIONS: { value: ProjectRole; label: string }[] = [
+  { value: 'MEMBER', label: 'Member — read the workspace' },
+  { value: 'OWNER', label: 'Owner — edit inputs, decide and approve' },
+  { value: 'VIEWER', label: 'Viewer — read only' },
+];
 
 export function TeamModal({
   projectId,
@@ -19,7 +25,7 @@ export function TeamModal({
   const notify = useToast();
   const queryClient = useQueryClient();
   const [email, setEmail] = useState('');
-  const [role, setRole] = useState('MEMBER');
+  const [role, setRole] = useState<ProjectRole>('MEMBER');
 
   const { data } = useQuery({
     queryKey: ['team', projectId],
@@ -66,8 +72,8 @@ export function TeamModal({
         <div className="rationale">
           <h3>Who can access this project</h3>
           <p>
-            Only the members listed below (plus admins and the portfolio owner) can view or edit this project —
-            everyone else is isolated from it.
+            Only the members listed below — plus the program owner — can open this project. Everyone else sees the
+            card on the program overview but cannot enter the workspace.
           </p>
         </div>
 
@@ -107,10 +113,10 @@ export function TeamModal({
           </label>
           <label>
             Project role
-            <select value={role} onChange={(event) => setRole(event.target.value)}>
+            <select value={role} onChange={(event) => setRole(event.target.value as ProjectRole)}>
               {ROLE_OPTIONS.map((option) => (
-                <option key={option} value={option}>
-                  {option}
+                <option key={option.value} value={option.value}>
+                  {option.label}
                 </option>
               ))}
             </select>

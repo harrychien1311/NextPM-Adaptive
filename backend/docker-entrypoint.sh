@@ -1,12 +1,11 @@
 #!/bin/sh
 set -e
 
-echo "[entrypoint] applying schema to the database"
-# db push is used instead of "migrate deploy" because the repository ships the
-# schema without a migration history. Generate migrations with
-# "npx prisma migrate dev" locally and switch this line to "migrate deploy"
-# once prisma/migrations exists.
-npx prisma db push --skip-generate --accept-data-loss
+echo "[entrypoint] applying migrations"
+# The repository now ships a real migration history (prisma/migrations), so apply it properly.
+# The previous "db push --accept-data-loss" would silently drop columns and tables to make the
+# database match the schema — acceptable for a throwaway dev volume, never for real data.
+npx prisma migrate deploy
 
 # Seed only an empty database, so restarting the stack never duplicates data.
 COUNT=$(node -e "
