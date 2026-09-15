@@ -6,8 +6,11 @@ import { ApiError } from '../api/client';
 export function LoginPage() {
   const { login, user } = useAuth();
   const navigate = useNavigate();
-  const [email, setEmail] = useState('lina.vuong@nextpm.local');
-  const [password, setPassword] = useState('NextPM!2026');
+  // Empty, not prefilled with a seeded account: a sign-in form that arrives already holding
+  // somebody's credentials invites signing in as them by accident, and publishes a working
+  // password to anyone who opens the page.
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -53,11 +56,6 @@ export function LoginPage() {
         <button type="submit" disabled={busy}>
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
-        <p className="auth-hint">
-          Seeded demo accounts · NextPM!2026
-          <br />
-          lina.vuong@nextpm.local (program owner) · nam.hoang@nextpm.local (project owner) · admin@nextpm.local
-        </p>
         <p className="auth-hint">
           Don't have an account? <Link to="/register">Sign up</Link>
         </p>

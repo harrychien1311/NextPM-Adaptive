@@ -3,6 +3,7 @@ import { useAuth } from './store/auth';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { AdminPage } from './pages/AdminPage';
+import { CustomerLibraryPage } from './pages/CustomerLibraryPage';
 import { ProgramOverviewPage } from './pages/ProgramOverviewPage';
 import { WorkspacePage } from './pages/WorkspacePage';
 
@@ -60,6 +61,20 @@ export function App() {
               <AdminOnly>
                 <AdminPage />
               </AdminOnly>
+            </RequireAuth>
+          }
+        />
+        {/*
+          The one screen both sides of the app share. The customer library is configuration rather
+          than delivery data — which checklist a customer requires, which template their kickoff
+          deck follows — so an administrator may set it up, and a project owner may read it to see
+          what their project will be assessed against. Write access is gated in the API, not here.
+        */}
+        <Route
+          path="/customers"
+          element={
+            <RequireAuth>
+              <CustomerLibraryPage />
             </RequireAuth>
           }
         />

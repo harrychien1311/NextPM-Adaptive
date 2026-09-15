@@ -9,9 +9,11 @@ import { errorHandler, notFoundHandler } from './middleware/error';
 import { authRouter } from './modules/auth/auth.routes';
 import { programRouter, projectRouter } from './modules/program/program.routes';
 import { adminRouter } from './modules/admin/admin.routes';
+import { customerRouter } from './modules/customer/customer.routes';
 import { inputRouter } from './modules/input/input.routes';
 import { rulesRouter } from './modules/rules/rules.routes';
 import { documentsRouter } from './modules/documents/documents.routes';
+import { checklistRouter } from './modules/checklist/checklist.routes';
 import { dashboardRouter } from './modules/dashboard/dashboard.routes';
 import { agentRouter } from './modules/agent/agent.routes';
 
@@ -35,11 +37,13 @@ export function createApp() {
   const api = express.Router();
   api.use(authenticate);
   api.use('/admin', adminRouter);
+  api.use('/customers', customerRouter);
   api.use('/programs', programRouter);
   api.use('/projects', projectRouter);
   api.use('/projects', inputRouter);
   api.use('/projects', rulesRouter);
   api.use('/projects', documentsRouter);
+  api.use('/projects', checklistRouter);
   api.use('/projects', dashboardRouter);
   api.use('/projects', agentRouter);
   app.use('/api', api);

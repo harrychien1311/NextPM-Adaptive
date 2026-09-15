@@ -61,7 +61,12 @@ async function seedInputSchemas() {
   }
 }
 
-async function seedDocumentCatalog() {
+/**
+ * Exported so the catalog can be re-seeded on its own (`npm run db:seed:catalog`). The catalog
+ * grows over time — a new document type has to reach an existing database without wiping the
+ * projects on it, and every write here is an upsert for exactly that reason.
+ */
+export async function seedDocumentCatalog() {
   for (const [type, domains] of Object.entries(DOCUMENT_CATALOG) as [ProjectType, Record<ManagementDomain, { name: string; requirement: Requirement; conditionKey?: string }[]>][]) {
     for (const [domain, entries] of Object.entries(domains) as [ManagementDomain, { name: string; requirement: Requirement; conditionKey?: string }[]][]) {
       for (const [index, entry] of entries.entries()) {
@@ -302,11 +307,15 @@ async function main() {
   console.log('  administrator: admin@nextpm.local      / NextPM!2026');
 }
 
-main()
-  .catch((error) => {
-    console.error(error);
-    process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+// Only seed when this file is the entry point. `seed-catalog.ts` imports `seedDocumentCatalog`
+// from here, and importing must never drag the whole demo seed along with it.
+if (require.main === module) {
+  main()
+    .catch((error) => {
+      console.error(error);
+      process.exit(1);
+    })
+    .finally(async () => {
+      await prisma.$disconnect();
+    });
+}

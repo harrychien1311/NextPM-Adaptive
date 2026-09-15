@@ -1,6 +1,9 @@
 import {
+  AlignmentType,
   BorderStyle,
   Document,
+  Footer,
+  ImageRun,
   Packer,
   Paragraph,
   ShadingType,
@@ -14,16 +17,211 @@ import { DocumentStatus, ManagementDomain, Prisma, Requirement } from '@prisma/c
 import { prisma } from '../../lib/prisma';
 import { badRequest, conflict, notFound } from '../../lib/http-error';
 import {
+  fillTemplatePlaceholders,
   generateDocument,
   generateGovernanceArtifact,
   type DocumentGap,
+  type DocumentTable,
   type GenerationOutput,
+  type OrgChart,
   type RaciRow,
   type RiskRow,
 } from '../ai/provider';
+import { tableSchema } from '../../data/table-documents';
+import { buildOrgChartDeck } from '../../lib/pptx-orgchart';
+import fsp from 'node:fs/promises';
+import path from 'node:path';
+import { DEFAULT_ALIAS, matchCustomer } from '../../lib/customer-match';
+import { fillPptxTemplate } from '../../lib/pptx-fill';
+import { fillXlsxTemplate } from '../../lib/xlsx-fill';
+import { buildDeck, fitWithin } from '../../lib/pptx-build';
+import { readDeckText } from '../../lib/pptx-read';
+import { readWorkbook } from '../../lib/xlsx-read';
+import {
+  MIN_PLACEHOLDERS_TO_FILL,
+  fillabilityNote,
+  type TemplatePlaceholder,
+} from '../../lib/pptx-template';
+import { env } from '../../config/env';
 import { logEvent } from '../audit/audit.service';
 import { DELIVERY_TEMPLATE } from '../../data/document-catalog';
 import { artifactGuidance, governanceModelMeta, isGovernanceArtifact } from '../../data/governance-models';
+import {
+  DOC_COLORS,
+  GAP_LABEL,
+  documentExportFormat,
+  isChartDocument,
+  isStructureOnlyDocument,
+  readGaps,
+  slugForFile,
+  splitOnGaps,
+} from './document-format';
+import { buildDocumentXlsx } from './xlsx-export';
+import { markAssessmentStale, reassessAfterApproval } from '../checklist/checklist.service';
+
+export { documentExportFormat, readGaps } from './document-format';
+
+/**
+ * What `PlanningDocument.structuredData` can hold. `templateFill` marks a document that was
+ * produced by filling a customer's own file rather than by drafting prose — the sections then hold
+ * placeholder → value pairs, and the export fills that file instead of building a new one.
+ */
+export interface DocumentStructuredData {
+  raciTable?: RaciRow[];
+  riskRegister?: RiskRow[];
+  /** The whole deliverable for an Organization Chart — drawn, never described. */
+  orgChart?: OrgChart;
+  /** The whole deliverable for a register document — see data/table-documents.ts. */
+  table?: DocumentTable;
+  templateFill?: {
+    templateId: string;
+    customerKey: string;
+    documentType: string;
+    fileType: string;
+    sourceFile: string;
+  };
+}
+
+const readStructured = (value: unknown): DocumentStructuredData | null =>
+  (value ?? null) as DocumentStructuredData | null;
+
+/**
+ * Forces a returned table onto the schema it was asked for.
+ *
+ * The columns come from `data/table-documents.ts`, never from the model: it is asked to echo them
+ * back, and a model that renames, reorders or drops one would otherwise silently reshape the
+ * spreadsheet and the preview. Rows are padded or trimmed to the column count for the same reason
+ * — a ragged grid is a broken file, and a short row is better rendered as an empty cell than as a
+ * column shifted one place left.
+ */
+function normalizeTable(documentName: string, table: DocumentTable | undefined): DocumentTable | undefined {
+  const schema = tableSchema(documentName);
+  if (!schema || !table?.rows?.length) return undefined;
+
+  const width = schema.columns.length;
+  return {
+    columns: schema.columns,
+    rows: table.rows
+      .filter((row) => Array.isArray(row) && row.some((cell) => String(cell ?? '').trim()))
+      .map((row) => Array.from({ length: width }, (_cell, index) => String(row[index] ?? '').trim())),
+  };
+}
+
+interface ResolvedTemplate {
+  id: string;
+  customerKey: string;
+  customerName: string;
+  documentType: string;
+  fileType: 'DOCX' | 'XLSX' | 'PPTX';
+  sourceFile: string;
+  storageKey: string;
+  placeholders: TemplatePlaceholder[];
+  usableForFill: boolean;
+  fillNote: string;
+  /** True when this came from the house default rather than from the project's own customer. */
+  house: boolean;
+}
+
+/**
+ * Every active template that applies to this project, keyed by the document name it fills.
+ *
+ * Two layers, and the order between them is the whole point. The **house default** — the customer
+ * holding the `*` alias — supplies the templates every project uses whatever the customer, which is
+ * how the Project Plan workbook reaches an SK project and an LG one alike. The project's **own**
+ * customer is then laid on top, so SKAX's kickoff deck beats the house kickoff deck. A customer who
+ * later uploads their own Project Plan template overrides the house one automatically, with no code
+ * change here.
+ *
+ * An empty map is a normal case, not a failure: a document with no template anywhere gets the
+ * ordinary drafted document. Resolution goes through the free-text customer name, the same alias
+ * matching the checklist uses.
+ */
+async function customerTemplatesForProject(projectId: string) {
+  const resolved = new Map<string, ResolvedTemplate>();
+
+  const project = await prisma.project.findUnique({ where: { id: projectId } });
+  if (!project) return resolved;
+
+  const customers = await prisma.customer.findMany({
+    where: { active: true },
+    include: { templates: { where: { active: true } } },
+  });
+
+  // No early return on an empty Customer field: the library's house-default customer is meant to
+  // claim exactly that case, so the decision belongs to `matchCustomer` and nowhere else.
+  const match = matchCustomer(project.customer, customers);
+  if (!match) return resolved;
+
+  const house = customers.find((customer) => customer.aliases.some((alias) => alias.trim() === DEFAULT_ALIAS));
+
+  const add = (
+    customer: { key: string; name: string },
+    templates: (typeof customers)[number]['templates'],
+    fromHouse: boolean,
+  ) => {
+    for (const template of templates) {
+      const placeholders = (template.placeholders ?? []) as unknown as TemplatePlaceholder[];
+      resolved.set(template.documentType, {
+        id: template.id,
+        customerKey: customer.key,
+        customerName: customer.name,
+        documentType: template.documentType,
+        fileType: template.fileType as 'DOCX' | 'XLSX' | 'PPTX',
+        sourceFile: template.sourceFile,
+        storageKey: template.storageKey,
+        placeholders,
+        // A template with almost no blanks is an outline deck, not a fill-in-the-blank one.
+        usableForFill: placeholders.length >= MIN_PLACEHOLDERS_TO_FILL,
+        fillNote: fillabilityNote(placeholders.length),
+        house: fromHouse,
+      });
+    }
+  };
+
+  if (house && house.id !== match.customer.id) add(house, house.templates, true);
+  add(match.customer, match.customer.templates, house?.id === match.customer.id);
+
+  return resolved;
+}
+
+/**
+ * The template that will actually be filled for one named document, or null.
+ *
+ * Returns null for a template with too few blanks. That is not a failure to find one — it is the
+ * deliberate refusal described in `MIN_PLACEHOLDERS_TO_FILL`: filling an outline deck would ship
+ * its example content under this project's name, so the neutral deck is the honest output and the
+ * catalog explains why.
+ */
+async function customerTemplateForProject(projectId: string, documentName: string) {
+  const template = (await customerTemplatesForProject(projectId)).get(documentName) ?? null;
+  return template?.usableForFill ? template : null;
+}
+
+/**
+ * Text from the project's other documents, so a kickoff deck names the same people and dates the
+ * charter does. Capped hard — this is context for consistency, not a second source of truth.
+ */
+async function relatedDocumentExcerpts(projectId: string, excludeDocumentId: string) {
+  const documents = await prisma.planningDocument.findMany({
+    where: {
+      projectId,
+      id: { not: excludeDocumentId },
+      status: { in: [DocumentStatus.PM_REVIEW, DocumentStatus.APPROVED] },
+    },
+    include: { sections: { orderBy: { order: 'asc' } } },
+    orderBy: { approvedAt: 'desc' },
+    take: 4,
+  });
+
+  return documents.map((document) => ({
+    name: document.name,
+    excerpt: document.sections
+      .filter((section) => section.included && section.content)
+      .map((section) => `${section.title}: ${section.content}`)
+      .join('\n')
+      .slice(0, 1_500),
+  }));
+}
 
 /**
  * After the PM confirms a governance model, every document in the type's catalog is
@@ -74,12 +272,22 @@ export async function catalogForProject(projectId: string, domain?: ManagementDo
   });
   const byDefinition = new Map(documents.map((doc) => [doc.definitionId, doc]));
 
+  // Which documents this project's customer has a template for — those export as the customer's
+  // own file type, whatever the name-based rule would otherwise say.
+  const templates = await customerTemplatesForProject(projectId);
+
   return definitions.map((definition) => ({
     definitionId: definition.id,
     name: definition.name,
     domain: definition.domain,
     requirement: definition.requirement,
     conditionKey: definition.conditionKey,
+    /** Which real file this document downloads as. */
+    exportFormat: templates.get(definition.name)?.fileType ?? documentExportFormat(definition.name),
+    /** Set when this document is produced by filling the customer's own file, for the UI to say so. */
+    customerTemplate: templates.get(definition.name) ?? null,
+    /** A register's own columns, so the grid shows the right header even before generation. */
+    tableColumns: tableSchema(definition.name)?.columns ?? null,
     document: byDefinition.get(definition.id)
       ? {
           id: byDefinition.get(definition.id)!.id,
@@ -197,21 +405,82 @@ export async function generateDraft(params: { projectId: string; documentId: str
   };
 
   let output: GenerationOutput;
-  let structuredData: { raciTable?: RaciRow[]; riskRegister?: RiskRow[] } | null = null;
+  let structuredData: DocumentStructuredData | null = null;
 
-  if (isGovernanceArtifact(document.name)) {
+  const templateForDocument = await customerTemplateForProject(projectId, document.name);
+
+  if (templateForDocument) {
+    // The customer's own file is the document. Skill 2c fills its blanks instead of writing
+    // prose, and each placeholder is stored as one section so everything downstream — preview,
+    // "Edit content", the gap panel, "Fill out the document" — keeps working unchanged.
+    const fill = await fillTemplatePlaceholders({
+      ...generationContext,
+      customerName: templateForDocument.customerName,
+      documentType: templateForDocument.documentType,
+      relatedDocuments: await relatedDocumentExcerpts(projectId, documentId),
+      placeholders: templateForDocument.placeholders.map((placeholder) => ({
+        token: placeholder.token,
+        occurrences: placeholder.occurrences,
+        locations: placeholder.locations,
+      })),
+    });
+
+    output = {
+      // The placeholder token is the section title on purpose: the PM sees exactly which blank in
+      // the customer's deck they are editing, and the export can map a section straight back to it.
+      sections: fill.values.map((value) => ({ title: value.token, content: value.value })),
+      gaps: fill.gaps,
+      unresolved: fill.unresolved,
+      provider: fill.provider,
+    };
+    structuredData = {
+      templateFill: {
+        templateId: templateForDocument.id,
+        customerKey: templateForDocument.customerKey,
+        documentType: templateForDocument.documentType,
+        fileType: templateForDocument.fileType,
+        sourceFile: templateForDocument.sourceFile,
+      },
+    };
+  } else if (isGovernanceArtifact(document.name)) {
     const artifactOutput = await generateGovernanceArtifact({
       ...generationContext,
       artifactName: document.name,
       structureGuidance: artifactGuidance(document.name, decision.approach),
     });
     output = artifactOutput;
-    if (artifactOutput.raciTable || artifactOutput.riskRegister) {
-      structuredData = { raciTable: artifactOutput.raciTable, riskRegister: artifactOutput.riskRegister };
+    if (
+      artifactOutput.raciTable ||
+      artifactOutput.riskRegister ||
+      artifactOutput.orgChart ||
+      artifactOutput.table
+    ) {
+      structuredData = {
+        raciTable: artifactOutput.raciTable,
+        riskRegister: artifactOutput.riskRegister,
+        orgChart: artifactOutput.orgChart,
+        table: normalizeTable(document.name, artifactOutput.table),
+      };
     }
   } else {
-    output = await generateDocument(generationContext);
+    const documentOutput = await generateDocument(generationContext);
+    output = documentOutput;
+    // A catalog document outside the six artifacts can still be a RACI matrix (SM's
+    // "Support Organization & RACI") or a register (the change log, the WBS), and its .xlsx
+    // export needs those rows.
+    if (documentOutput.raciTable || documentOutput.riskRegister || documentOutput.table) {
+      structuredData = {
+        raciTable: documentOutput.raciTable,
+        riskRegister: documentOutput.riskRegister,
+        table: normalizeTable(document.name, documentOutput.table),
+      };
+    }
   }
+
+  // A chart or a register IS the document. Anything the model wrote alongside it is the noise the
+  // PM asked not to receive, and dropping it in one place means the export, the preview and the
+  // studio panel cannot disagree about whether prose exists.
+  if (isStructureOnlyDocument(document.name)) output = { ...output, sections: [] };
 
   // The model's structure replaces whatever was there — a regeneration may legitimately return a
   // different set of sections.
@@ -263,21 +532,6 @@ export async function generateDraft(params: { projectId: string; documentId: str
     where: { id: documentId },
     include: { sections: { orderBy: { order: 'asc' } } },
   });
-}
-
-/** Normalises the JSON column, which held plain strings before gaps existed. */
-export function readGaps(value: unknown): DocumentGap[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((entry, index): DocumentGap | null => {
-      if (typeof entry === 'string') return { token: `{{gap:${index + 1}}}`, question: entry, answer: null };
-      if (entry && typeof entry === 'object' && 'question' in entry) {
-        const gap = entry as DocumentGap;
-        return { token: gap.token, question: gap.question, answer: gap.answer ?? null };
-      }
-      return null;
-    })
-    .filter((gap): gap is DocumentGap => gap !== null);
 }
 
 /** PM edits the draft in place — titles and body text, add or remove sections. */
@@ -376,9 +630,25 @@ export async function fillDocumentGaps(params: { projectId: string; documentId: 
     ),
   );
 
-  const structured = (document.structuredData ?? null) as { raciTable?: RaciRow[]; riskRegister?: RiskRow[] } | null;
+  const structured = readStructured(document.structuredData);
   const nextStructured = structured
     ? {
+        // A register document's answers live in its cells, so they have to be substituted there
+        // too — otherwise "Fill out the document" would appear to do nothing on a table.
+        table: structured.table
+          ? { columns: structured.table.columns, rows: structured.table.rows.map((row) => row.map(substitute)) }
+          : undefined,
+        orgChart: structured.orgChart
+          ? {
+              columns: structured.orgChart.columns.map((column) => ({
+                organisation: substitute(column.organisation),
+                groups: column.groups.map((group) => ({
+                  name: group.name,
+                  nodes: group.nodes.map((node) => ({ ...node, person: substitute(node.person) })),
+                })),
+              })),
+            }
+          : undefined,
         raciTable: structured.raciTable?.map((row) => ({
           activity: substitute(row.activity),
           responsible: substitute(row.responsible),
@@ -444,7 +714,71 @@ export async function approveDocument(params: { projectId: string; documentId: s
     payload: { documentId },
   });
 
+  // An approved document is new evidence, so the customer-checklist readiness may have moved.
+  // Mark it out of date synchronously — the PM must never see a score that quietly no longer
+  // reflects the project — then re-assess in the background, because approval must not wait on
+  // (or fail because of) a model call. The re-run only looks at items that are not already MET:
+  // an approval can add evidence, never remove it.
+  await markAssessmentStale(projectId);
+  void reassessAfterApproval(projectId, actorId).catch((error) => {
+    // A failure is recorded on the assessment row (runState ERROR) and surfaced in the UI.
+    console.error('[checklist] background re-assessment failed for project', projectId, error);
+  });
+
   return updated;
+}
+
+/**
+ * The slides of the deck this document downloads as — read out of the real file.
+ *
+ * The preview is generated from the export itself rather than from the data behind it, because
+ * for a document filled from a customer's template the file is *their* 30-slide deck and the fill
+ * values alone would show a handful of blanks and none of the deck. Rendering the export costs
+ * milliseconds and no model call, and it guarantees preview and download cannot disagree.
+ */
+export async function documentSlides(projectId: string, documentId: string) {
+  const document = await prisma.planningDocument.findFirst({
+    where: { id: documentId, projectId },
+    select: { name: true, structuredData: true },
+  });
+  if (!document) throw notFound('Planning document not found');
+
+  const fill = readStructured(document.structuredData)?.templateFill;
+  // The template's own file type decides, not the fact that a template exists: a document filled
+  // from a customer's *workbook* downloads as a workbook and has no slides to read.
+  const format = fill?.fileType ?? documentExportFormat(document.name);
+  if (format !== 'PPTX') throw badRequest('This document does not download as a deck.');
+
+  const { buffer, fileName } = await renderDocumentExport(projectId, documentId);
+  return {
+    fileName,
+    /** Null when the deck is built by the app rather than filled from a customer's file. */
+    template: fill ? { customerKey: fill.customerKey, sourceFile: fill.sourceFile } : null,
+    slides: await readDeckText(buffer),
+  };
+}
+
+/**
+ * The sheets of the workbook this document downloads as — read out of the real file, for the same
+ * reason `documentSlides` reads the real deck. Only a document filled from a workbook template
+ * needs this: a register's grid is its own `structuredData` and the preview already has it.
+ */
+export async function documentSheets(projectId: string, documentId: string) {
+  const document = await prisma.planningDocument.findFirst({
+    where: { id: documentId, projectId },
+    select: { name: true, structuredData: true },
+  });
+  if (!document) throw notFound('Planning document not found');
+
+  const fill = readStructured(document.structuredData)?.templateFill;
+  if (fill?.fileType !== 'XLSX') throw badRequest('This document is not filled from a workbook template.');
+
+  const { buffer, fileName } = await renderDocumentExport(projectId, documentId);
+  return {
+    fileName,
+    template: { customerKey: fill.customerKey, sourceFile: fill.sourceFile },
+    sheets: await readWorkbook(buffer),
+  };
 }
 
 /** One generated document, shaped for the preview panel (which the dashboard also opens). */
@@ -457,7 +791,15 @@ export async function documentDetail(projectId: string, documentId: string) {
     },
   });
   if (!document) throw notFound('Planning document not found');
-  return { ...document, gaps: readGaps(document.pmQuestions) };
+  const fill = readStructured(document.structuredData)?.templateFill;
+  return {
+    ...document,
+    gaps: readGaps(document.pmQuestions),
+    // A document generated from a customer template downloads as that customer's file type.
+    exportFormat: (fill?.fileType as 'DOCX' | 'XLSX' | 'PPTX' | undefined) ?? documentExportFormat(document.name),
+    templateFill: fill ?? null,
+    tableColumns: tableSchema(document.name)?.columns ?? null,
+  };
 }
 
 /** Template fit panel: why this template is recommended for this project. */
@@ -526,37 +868,18 @@ export async function createExport(params: { projectId: string; format: string; 
 // ---------------------------------------------------------------------------
 
 /** Builds a real .docx file for one planning document (any document, not just the six governance artifacts). */
-/** Brand palette for the Word export — same navy/blue as the app's design system. */
-const DOCX = {
-  navy: '10243D',
-  blue: '1F5FA9',
-  rule: 'C9D6E6',
-  headerBg: '10243D',
-  zebra: 'F4F7FB',
-  gapText: 'B26A00',
-  gapBg: 'FFF1D6',
-  muted: '6B7C93',
-} as const;
-
-const GAP_PATTERN = /\{\{gap:\d+\}\}/g;
+const DOCX = DOC_COLORS;
 
 /**
  * Splits section text on unanswered gap tokens so each one renders as a visible, highlighted
  * blank instead of leaking `{{gap:3}}` into the Word file.
  */
 function runsWithGaps(text: string, bold = false): TextRun[] {
-  const runs: TextRun[] = [];
-  let cursor = 0;
-  for (const match of text.matchAll(GAP_PATTERN)) {
-    const index = match.index ?? 0;
-    if (index > cursor) runs.push(new TextRun({ text: text.slice(cursor, index), bold }));
-    runs.push(
-      new TextRun({ text: '[ answer needed ]', bold: true, color: DOCX.gapText, highlight: 'yellow' }),
-    );
-    cursor = index + match[0].length;
-  }
-  if (cursor < text.length) runs.push(new TextRun({ text: text.slice(cursor), bold }));
-  return runs.length ? runs : [new TextRun({ text, bold })];
+  return splitOnGaps(text).map((part) =>
+    part.gap
+      ? new TextRun({ text: GAP_LABEL, bold: true, color: DOCX.gapText, highlight: 'yellow' })
+      : new TextRun({ text: part.text, bold }),
+  );
 }
 
 export async function renderDocumentDocx(projectId: string, documentId: string): Promise<{ fileName: string; buffer: Buffer }> {
@@ -567,7 +890,6 @@ export async function renderDocumentDocx(projectId: string, documentId: string):
   if (!document) throw notFound('Planning document not found');
 
   const structured = (document.structuredData ?? null) as { raciTable?: RaciRow[]; riskRegister?: RiskRow[] } | null;
-  const gaps = readGaps(document.pmQuestions);
 
   const heading = (text: string) =>
     new Paragraph({
@@ -576,7 +898,31 @@ export async function renderDocumentDocx(projectId: string, documentId: string):
       children: [new TextRun({ text, bold: true, size: 26, color: DOCX.blue })],
     });
 
+  const { logo } = await customerBranding(document.project.customer);
+
   const children: (Paragraph | Table)[] = [
+    /**
+     * The customer's logo above the title block, right-aligned — where a letterhead sits.
+     * `docx` takes pixel dimensions, so the image is fitted to a 180×48px box first: dropping it
+     * into a fixed box would stretch it, which is worse than showing no logo at all.
+     */
+    ...(logo
+      ? [
+          new Paragraph({
+            alignment: AlignmentType.RIGHT,
+            spacing: { after: 120 },
+            children: [
+              new ImageRun({
+                data: logo.data,
+                transformation: fitWithin(logo.data, 180, 48),
+                // `docx` names the embedded media part after this, so leaving it undefined
+                // produced `…​.undefined` inside the package — a media part with no usable type.
+                ...docxImageType(logo.extension),
+              } as ConstructorParameters<typeof ImageRun>[0]),
+            ],
+          }),
+        ]
+      : []),
     new Paragraph({
       spacing: { after: 80 },
       children: [new TextRun({ text: document.name.toUpperCase(), bold: true, size: 44, color: DOCX.navy })],
@@ -610,22 +956,6 @@ export async function renderDocumentDocx(projectId: string, documentId: string):
     }
   }
 
-  if (document.name === 'Organization Chart') {
-    children.push(
-      new Paragraph({
-        spacing: { before: 120 },
-        children: [
-          new TextRun({
-            text: 'Rendered as a structured text/table representation of the reporting hierarchy — not a graphical diagram.',
-            italics: true,
-            size: 18,
-            color: DOCX.muted,
-          }),
-        ],
-      }),
-    );
-  }
-
   if (structured?.raciTable?.length) {
     children.push(heading('RACI Matrix'));
     children.push(
@@ -646,33 +976,39 @@ export async function renderDocumentDocx(projectId: string, documentId: string):
     );
   }
 
-  if (gaps.length) {
-    children.push(heading('PM confirmation needed'));
-    children.push(
-      new Paragraph({
-        spacing: { after: 120 },
-        children: [
-          new TextRun({
-            text: 'These facts were not present in the project data, so they were left blank rather than guessed:',
-            italics: true,
-            size: 18,
-            color: DOCX.muted,
-          }),
-        ],
-      }),
-    );
-    for (const gap of gaps) {
-      children.push(
-        new Paragraph({
-          bullet: { level: 0 },
-          spacing: { after: 60 },
-          children: [new TextRun({ text: gap.question, color: DOCX.gapText })],
-        }),
-      );
-    }
-  }
+  // No "PM confirmation needed" list. The open questions are a working aid for the PM and belong
+  // in the app, not in a file that gets sent to a customer — a deliverable carrying a list of what
+  // its author did not know reads as an unfinished draft no matter how it is labelled. The blanks
+  // themselves stay: `runsWithGaps` renders each unanswered `{{gap:N}}` as a highlighted
+  // "[ answer needed ]" in place, which is the honest thing and the point of the mechanism.
 
-  const docx = new Document({ sections: [{ children }] });
+  /**
+   * The customer's mark on every page, not only the first.
+   *
+   * A planning document gets printed, split and pasted from; page two travelling without any
+   * identity is how a page ends up in the wrong pack. Smaller than the title-block logo — a
+   * footer mark, not a second letterhead — and aspect-ratio-fitted for the same reason.
+   */
+  const footers = logo
+    ? {
+        default: new Footer({
+          children: [
+            new Paragraph({
+              alignment: AlignmentType.RIGHT,
+              children: [
+                new ImageRun({
+                  data: logo.data,
+                  transformation: fitWithin(logo.data, 90, 24),
+                  ...docxImageType(logo.extension),
+                } as ConstructorParameters<typeof ImageRun>[0]),
+              ],
+            }),
+          ],
+        }),
+      }
+    : undefined;
+
+  const docx = new Document({ sections: [{ footers, children }] });
   const buffer = await Packer.toBuffer(docx);
   const fileName = `${slugForFile(document.name)}-v${document.version}.docx`;
   return { fileName, buffer };
@@ -722,11 +1058,306 @@ function docxTable(headers: string[], rows: string[][]): Table {
   });
 }
 
-function slugForFile(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '');
+/**
+ * Builds a real .xlsx file for one RACI document — the matrix as a sortable, filterable grid,
+ * and the prose on a second sheet. Reads exactly the same
+ * database rows as `renderDocumentDocx`; only the container differs.
+ */
+export async function renderDocumentXlsx(
+  projectId: string,
+  documentId: string,
+): Promise<{ fileName: string; buffer: Buffer }> {
+  const document = await prisma.planningDocument.findFirst({
+    where: { id: documentId, projectId },
+    include: { sections: { orderBy: { order: 'asc' } }, project: true },
+  });
+  if (!document) throw notFound('Planning document not found');
+
+  const structured = readStructured(document.structuredData);
+
+  return buildDocumentXlsx({
+    name: document.name,
+    version: document.version,
+    status: document.status,
+    projectName: document.project.name,
+    sections: document.sections.map((section) => ({
+      title: section.title,
+      content: section.content,
+      included: section.included,
+    })),
+    raciTable: structured?.raciTable ?? [],
+    // From the schema, not from the stored data: a register that has not been generated yet still
+    // has its own columns, and must never borrow the RACI sheet to stand in for them.
+    tableColumns: tableSchema(document.name)?.columns ?? null,
+    table: structured?.table ?? null,
+  });
+}
+
+/**
+ * Fills the customer's own file with what the PM has for this document.
+ *
+ * The sections *are* the fill map: each section's title is the placeholder token and its content
+ * is the value, which is why "Edit content" and "Fill out the document" work on a template-backed
+ * document without any special handling.
+ */
+export async function renderDocumentFromTemplate(
+  projectId: string,
+  documentId: string,
+): Promise<{ fileName: string; buffer: Buffer; contentType: string } | null> {
+  const document = await prisma.planningDocument.findFirst({
+    where: { id: documentId, projectId },
+    include: { sections: { orderBy: { order: 'asc' } }, project: true },
+  });
+  if (!document) throw notFound('Planning document not found');
+
+  const fill = readStructured(document.structuredData)?.templateFill;
+  if (!fill) return null;
+
+  const template = await prisma.customerTemplate.findUnique({ where: { id: fill.templateId } });
+  if (!template) {
+    throw notFound(
+      `The ${fill.customerKey} template this document was generated from is no longer in the customer library. Re-generate the document.`,
+    );
+  }
+
+  const sourcePath = path.join(env.uploadDir, template.storageKey);
+  let source: Buffer;
+  try {
+    source = await fsp.readFile(sourcePath);
+  } catch {
+    throw notFound(`"${template.sourceFile}" is recorded in the library but its stored file is missing. Re-upload it.`);
+  }
+
+  const values = new Map(document.sections.map((section) => [section.title, section.content ?? '']));
+
+  // The filler follows the template's own file type, not the document's name-based export rule: a
+  // workbook template stays a workbook, a deck stays a deck. `template.fileType` is what the parser
+  // recorded at upload, so a customer swapping a .pptx for a .docx needs no change here.
+  if (template.fileType === 'XLSX') {
+    const { buffer } = await fillXlsxTemplate(source, values);
+    return {
+      fileName: `${slugForFile(document.project.name)}-${slugForFile(document.name)}-v${document.version}.xlsx`,
+      buffer,
+      contentType: XLSX_CONTENT_TYPE,
+    };
+  }
+
+  const { buffer } = await fillPptxTemplate(source, values);
+
+  return {
+    fileName: `${slugForFile(document.project.name)}-${slugForFile(document.name)}-v${document.version}.pptx`,
+    buffer,
+    contentType: PPTX_CONTENT_TYPE,
+  };
+}
+
+const PPTX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+const XLSX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+/**
+ * The image kind `docx` expects, from a file extension.
+ *
+ * It names the embedded media part after this value, so getting it wrong (or leaving it out)
+ * writes a part called `…​.undefined` that Word cannot resolve. SVG additionally requires a raster
+ * fallback; the same bytes are supplied, which is what `docx` does for a viewer that cannot render
+ * the vector — imperfect, but the alternative is refusing the logo.
+ */
+function docxImageType(extension: string): { type: 'png' | 'jpg' | 'gif' | 'bmp' | 'svg'; fallback?: unknown } {
+  switch (extension.toLowerCase()) {
+    case '.jpg':
+    case '.jpeg':
+      return { type: 'jpg' };
+    case '.gif':
+      return { type: 'gif' };
+    case '.bmp':
+      return { type: 'bmp' };
+    case '.svg':
+      // A raster fallback is mandatory for SVG in OOXML.
+      return { type: 'svg', fallback: { type: 'png' as const } };
+    default:
+      return { type: 'png' };
+  }
+}
+
+export interface CustomerBranding {
+  /** The library's name for the customer when the project's free text resolved to one. */
+  customerName: string | null;
+  logo: { data: Buffer; extension: string; mimeType: string } | null;
+}
+
+/**
+ * The customer's name and logo for a project, resolved through the same alias matching everything
+ * else uses.
+ *
+ * One lookup for every generated document, so a new export path cannot quietly ship unbranded:
+ * forgetting to call this is visible, whereas duplicating the lookup and omitting the logo is not
+ * — which is exactly how the org chart and the Word documents ended up without one.
+ *
+ * A logo file that has gone missing yields `null` rather than throwing. Losing the branding is a
+ * blemish; losing the PM their document over it is not a trade worth making.
+ */
+export async function customerBranding(customerText: string | null | undefined): Promise<CustomerBranding> {
+  // An empty Customer field is not a reason to skip branding: the house-default customer exists
+  // to cover it, so a project is never left unbranded just because nobody typed a name.
+  const customers = await prisma.customer.findMany({ where: { active: true } });
+  const match = matchCustomer(customerText, customers);
+  if (!match) return { customerName: customerText ?? null, logo: null };
+
+  const { customer } = match;
+  if (!customer.logoStorageKey) return { customerName: customer.name, logo: null };
+
+  try {
+    return {
+      customerName: customer.name,
+      logo: {
+        data: await fsp.readFile(path.join(env.uploadDir, customer.logoStorageKey)),
+        extension: path.extname(customer.logoFileName ?? '.png'),
+        mimeType: customer.logoMimeType ?? 'image/png',
+      },
+    };
+  } catch {
+    console.warn(`[branding] ${customer.key} has a logo recorded but its file is missing`);
+    return { customerName: customer.name, logo: null };
+  }
+}
+
+/**
+ * Builds a deck for a customer who has no template of their own.
+ *
+ * Deliberately *not* another customer's template with the name swapped. The SKAX kickoff deck is
+ * written about SKAX — a whole slide of R&R prose naming what they supply — so reusing it would
+ * assert things about a company nobody checked. This builds a neutral deck from **this** project's
+ * own sections, carrying **this** customer's logo.
+ */
+async function renderNeutralDeck(
+  projectId: string,
+  documentId: string,
+): Promise<{ fileName: string; buffer: Buffer; contentType: string }> {
+  const document = await prisma.planningDocument.findFirst({
+    where: { id: documentId, projectId },
+    include: { sections: { orderBy: { order: 'asc' } }, project: true },
+  });
+  if (!document) throw notFound('Planning document not found');
+
+  const branding = await customerBranding(document.project.customer);
+  const { logo } = branding;
+  const customerName = branding.customerName;
+
+  const slides = document.sections
+    .filter((section) => section.included && section.content)
+    .map((section) => ({
+      title: section.title,
+      // One bullet per line or paragraph — the model writes prose, a slide needs points.
+      bullets: (section.content ?? '')
+        .split(/\n+/)
+        .map((line) => line.replace(/^[-•*]\s*/, '').trim())
+        .filter(Boolean),
+    }));
+
+  const buffer = await buildDeck({
+    projectName: document.project.name,
+    documentName: document.name,
+    customerName,
+    subtitle: `Version ${document.version} · ${document.status === DocumentStatus.APPROVED ? 'PM approved · baseline' : 'AI draft · PM review required'}`,
+    slides,
+    logo,
+  });
+
+  return {
+    fileName: `${slugForFile(document.project.name)}-${slugForFile(document.name)}-v${document.version}.pptx`,
+    buffer,
+    contentType: PPTX_CONTENT_TYPE,
+  };
+}
+
+/**
+ * The Organization Chart, drawn: one slide, boxes, one column per organisation.
+ *
+ * Reuses `buildDeck` for the package scaffolding (content types, master, layout, theme) and then
+ * replaces its single slide, so there is one definition of that scaffolding rather than two that
+ * could drift apart.
+ */
+async function renderOrgChartDeck(
+  projectId: string,
+  documentId: string,
+): Promise<{ fileName: string; buffer: Buffer; contentType: string }> {
+  const document = await prisma.planningDocument.findFirst({
+    where: { id: documentId, projectId },
+    include: { project: true },
+  });
+  if (!document) throw notFound('Planning document not found');
+
+  const chart = readStructured(document.structuredData)?.orgChart ?? { columns: [] };
+  const subtitle =
+    `${document.project.name} · version ${document.version} · ` +
+    (document.status === DocumentStatus.APPROVED ? 'PM approved · baseline' : 'AI draft · PM review required');
+
+  const { customerName, logo } = await customerBranding(document.project.customer);
+
+  // The scaffold is what embeds the logo's media part and slide relationship; `buildOrgChartDeck`
+  // only draws it. Both calls have to see the same buffer.
+  const scaffold = await buildDeck({
+    projectName: document.project.name,
+    documentName: document.name,
+    customerName,
+    subtitle,
+    slides: [],
+    logo,
+  });
+
+  return {
+    fileName: `${slugForFile(document.project.name)}-${slugForFile(document.name)}-v${document.version}.pptx`,
+    buffer: await buildOrgChartDeck({
+      chart,
+      title: document.name,
+      subtitle,
+      scaffold,
+      logo: logo?.data ?? null,
+    }),
+    contentType: PPTX_CONTENT_TYPE,
+  };
+}
+
+/**
+ * The one download entry point: picks the container so a caller never has to know which, and the
+ * renderers can never be wired to the wrong document. A document generated from a customer
+ * template wins over the name-based rule — it *is* that customer's file.
+ */
+export async function renderDocumentExport(
+  projectId: string,
+  documentId: string,
+): Promise<{ fileName: string; buffer: Buffer; contentType: string }> {
+  const fromTemplate = await renderDocumentFromTemplate(projectId, documentId);
+  if (fromTemplate) return fromTemplate;
+
+  const document = await prisma.planningDocument.findFirst({
+    where: { id: documentId, projectId },
+    select: { name: true },
+  });
+  if (!document) throw notFound('Planning document not found');
+
+  const format = documentExportFormat(document.name);
+
+  // The chart *is* the document — drawn, not described.
+  if (isChartDocument(document.name)) return renderOrgChartDeck(projectId, documentId);
+
+  // A deck stays a deck even with no customer template — never silently a Word file.
+  if (format === 'PPTX') return renderNeutralDeck(projectId, documentId);
+
+  if (format === 'XLSX') {
+    const { fileName, buffer } = await renderDocumentXlsx(projectId, documentId);
+    return {
+      fileName,
+      buffer,
+      contentType: XLSX_CONTENT_TYPE,
+    };
+  }
+  const { fileName, buffer } = await renderDocumentDocx(projectId, documentId);
+  return {
+    fileName,
+    buffer,
+    contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  };
 }
 
 /**

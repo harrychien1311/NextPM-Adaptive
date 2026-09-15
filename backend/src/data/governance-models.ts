@@ -128,7 +128,10 @@ export const GOVERNANCE_ARTIFACT_NAMES = [
   'RACI Matrix',
   'Communication Plan',
   'Change / Escalation Flow',
-  'Risk Plan',
+  // Named "Risk Plan" until the RISK domain was cut to a single document. It absorbed the separate
+  // per-type risk documents (register, contingency plan, operational/assumption plan), so it now
+  // carries the name PMs actually use. The mandated-artifact rule is unchanged: still six.
+  'Risk Management Plan',
 ] as const;
 
 export type GovernanceArtifactName = (typeof GOVERNANCE_ARTIFACT_NAMES)[number];
@@ -177,7 +180,7 @@ export const GOVERNANCE_ARTIFACT_GUIDANCE: Record<GovernanceArtifactName, Partia
     ITERATIVE: 'Changes are assessed and queued at increment boundaries rather than mid-increment.',
     STAGE_GATE: 'Changes are only accepted at a gate review; mid-stage changes require an exception approval.',
   },
-  'Risk Plan': {
+  'Risk Management Plan': {
     WATERFALL: 'A fixed Risk Register reviewed at each phase/gate.',
     SCRUM: 'Risk is surfaced and handled continuously in Sprint Planning and Retrospective.',
     KANBAN: 'Risk is tracked as blockers/blocked items directly on the board.',

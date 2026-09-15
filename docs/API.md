@@ -27,6 +27,29 @@ workspace; `PROJECT_OWNER` creates projects and may open only the ones it owns o
 | POST | `/admin/users/:userId/password` | `{ password }` — administrator password reset |
 | DELETE | `/admin/users/:userId` | refuses self-deletion, the last admin, and any account that still owns projects (deactivate instead) |
 
+## Customer reference library
+
+Each customer's checklists and document templates, uploaded once and reused by every project for
+them. **Readable by any signed-in account** — a project owner needs to see what their project will
+be assessed against. **Writable only by `PROGRAM_OWNER` and `ADMIN`**: the library is configuration
+rather than delivery data, which is the one place an administrator touches something outside the
+account console.
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/customers` | every customer with their checklists (and item counts), templates (with the placeholders found in each) and whether a logo is set |
+| GET | `/customers/resolve?customer=…` | what the library holds for a **free-text** customer name. Returns `{ matched: true, confidence: 'exact' \| 'partial', matchedOn, customer }` or `{ matched: false, known: [...] }`. A suggestion for the PM to confirm — never applied on its own |
+| POST | `/customers` | `{ name, key?, aliases? }` — `key` is derived from the name when omitted |
+| PATCH | `/customers/:customerId` | `{ name?, aliases?, active? }` |
+| DELETE | `/customers/:customerId` | cascades the checklists, items and templates, and removes their stored files |
+| POST | `/customers/:customerId/checklists` | multipart `file` (+ `name`) — `.xlsx` / `.docx`. Parsed on upload into `ChecklistItem` rows; the response carries the item count and the parse note. A new upload **supersedes** the previous version rather than replacing it |
+| GET | `/customers/checklists/:checklistId/items` | the parsed rows, so the upload can be checked against the original |
+| DELETE | `/customers/checklists/:checklistId` | |
+| POST | `/customers/:customerId/templates` | multipart `file` + `documentType` — `.pptx` / `.docx`. Scanned for placeholders; each is reported with its occurrences, locations and whether it is **split across text runs** (which filling must handle) |
+| DELETE | `/customers/templates/:templateId` | |
+| POST | `/customers/:customerId/logo` | multipart `file` — `.png` / `.jpg` / `.svg` / `.webp` |
+| GET | `/customers/(checklists\|templates\|logo)/:id/file` | the stored original. 404 with an explicit message if the row exists but its file is missing from `UPLOAD_DIR` |
+
 ## Programs & projects
 
 | Method | Path | Notes |
@@ -47,9 +70,10 @@ workspace; `PROJECT_OWNER` creates projects and may open only the ones it owns o
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| GET | `/projects/:id/input` | fields, counters, custom fields, reference groups, description document, missing information |
+| GET | `/projects/:id/input` | fields, counters, custom fields, reference groups, description document, missing information, plus `customer` and any pending `customerSuggestion` |
 | PUT | `/projects/:id/input` | `{ values: [{ definitionId, value }] }` — saves as `PM_INPUT`, resets `verified` |
-| POST | `/projects/:id/input/verify` | Two things in one step: reads every uploaded file (deterministic option matcher, then Skill 0 for what it cannot resolve) and writes what it resolved into *empty* fields as `AI_SUGGESTED` + unverified, then verifies the PM's own `PM_INPUT` values. Returns `{ verified, prefilled, documentsRead, stillEmpty, provider }` — `provider: "mock"` means the extraction model was unreachable |
+| POST | `/projects/:id/input/verify` | Two things in one step: reads every uploaded file (deterministic option matcher, then Skill 0 for what it cannot resolve) and writes what it resolved into *empty* fields as `AI_SUGGESTED` + unverified, then verifies the PM's own `PM_INPUT` values. Returns `{ verified, prefilled, documentsRead, stillEmpty, provider, customerSuggestion }` — `provider: "mock"` means the extraction model was unreachable |
+| POST | `/projects/:id/input/customer-suggestion` | `{ action: "accept" \| "dismiss", value? }` — the PM's decision on the customer Skill 0 read from the documents. **Accepting is the only thing that writes `Project.customer`**, which is what makes that customer's checklist and templates apply; `value` lets the PM correct the proposed name first. Dismissing clears the proposal and changes nothing. Both write an `AuditEvent` |
 | POST | `/projects/:id/custom-fields` | `{ name, value?, useIn: RULES\|DOCUMENT\|BOTH }` |
 | DELETE | `/projects/:id/custom-fields/:fieldId` | |
 | POST | `/projects/:id/actions/:actionId/resolve` | `{ value }` — writes the answer back into the input profile |
@@ -107,8 +131,11 @@ with `POST …/fill`.
 | POST | `/projects/:id/documents/:documentId/gaps` | `{ token, answer }` — answers one "PM confirmation needed" item. Recorded only; the document is not changed yet |
 | POST | `/projects/:id/documents/:documentId/fill` | "Fill out the document" — substitutes every answered token into the blank it came from, in section text and in the RACI / risk tables. 400 if nothing is answered |
 | POST | `/projects/:id/documents/:documentId/approve` | only from `PM_REVIEW` |
-| GET | `/projects/:id/documents/:documentId` | full draft with sections |
-| GET | `/projects/:id/documents/:documentId/export.docx` | real `.docx` file for this document, rendered on demand (any status, not just approved) |
+| GET | `/projects/:id/documents/:documentId` | full draft with sections, plus `exportFormat` |
+| GET | `/projects/:id/documents/:documentId/slides` | the deck this document downloads as, read out of the **real rendered file** — `{ fileName, template, slides: [{ number, lines, pictures, hasTable }] }`. What the on-screen preview draws, so it cannot disagree with the download. 400 for a document that is not a deck. No model call |
+| GET | `/projects/:id/documents/:documentId/export` | the real Office file for this document, rendered on demand (any status, not just approved). The **server** picks the container — a RACI document comes back as `.xlsx`, everything else as `.docx` — and reports it in `Content-Type` and `Content-Disposition`. Each catalog entry carries the same answer as `exportFormat` so the UI can label the button |
+| GET | `/projects/:id/documents/:documentId/export.docx` | forces the Word rendering, whatever the document is |
+| GET | `/projects/:id/documents/:documentId/export.xlsx` | forces the spreadsheet rendering — a register document as its own grid, or the RACI matrix as a grid with prose on a *Narrative* sheet. No exported file carries the PM question list; unanswered blanks render in place as "[ answer needed ]" |
 | GET | `/projects/:id/dashboard/export.html` | the project overview dashboard as a real, self-contained `.html` file |
 | POST | `/projects/:id/exports` | `{ format: DOCX\|XLSX\|PDF\|CONFLUENCE }` — approved documents only, recorded as an `ExportJob` |
 

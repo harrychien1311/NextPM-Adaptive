@@ -1,7 +1,7 @@
 import { DecisionOutcome, Prisma, ProjectType } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 import { badRequest, notFound } from '../../lib/http-error';
-import { recommendGovernanceModel } from '../ai/provider';
+import { normalizeEvidence, recommendGovernanceModel } from '../ai/provider';
 import { DEFAULT_GOVERNANCE_MODELS, governanceModelMeta } from '../../data/governance-models';
 import { logEvent } from '../audit/audit.service';
 import { syncDocumentsWithPack } from '../documents/documents.service';
@@ -59,6 +59,8 @@ export async function runEvaluation(projectId: string, actorId: string) {
     projectType: project.type,
     verifiedInputs,
     documentText,
+    // So each piece of evidence can name the file it came from rather than "the document".
+    documentName: descriptionFile?.fileName ?? null,
     fields,
   });
 
@@ -112,7 +114,14 @@ export async function runEvaluation(projectId: string, actorId: string) {
 }
 
 export async function latestEvaluation(projectId: string) {
-  return prisma.aiApproachSuggestion.findFirst({ where: { projectId }, orderBy: { createdAt: 'desc' } });
+  const evaluation = await prisma.aiApproachSuggestion.findFirst({
+    where: { projectId },
+    orderBy: { createdAt: 'desc' },
+  });
+  if (!evaluation) return null;
+  // Snapshots taken before evidence carried both languages hold a plain `string[]`. They are
+  // immutable by design, so they are normalised on the way out rather than rewritten in place.
+  return { ...evaluation, evidence: normalizeEvidence(evaluation.evidence) };
 }
 
 /** Required/conditional document names for this project's type — same for every governance model. */
@@ -142,6 +151,20 @@ export async function approachOptions(projectId: string) {
     { approach: evaluation.recommendedApproach, score: evaluation.confidence, recommended: true },
     ...alternatives.map((alt) => ({ approach: alt.approach, score: alt.score, recommended: false })),
   ];
+
+  /**
+   * The model the project actually runs on always gets a card, even when a newer evaluation did not
+   * score it.
+   *
+   * That happens for real: the AI may recommend a model outside the default six, and a later re-run
+   * need not list the one the PM chose. Without this the screen renders no card for the project's
+   * own governance model — nothing shows as selected, and the confirm button silently acts on
+   * whichever card happens to be first.
+   */
+  const decision = await prisma.approachDecision.findFirst({ where: { projectId, active: true } });
+  if (decision && !entries.some((entry) => entry.approach === decision.approach)) {
+    entries.push({ approach: decision.approach, score: 0, recommended: false });
+  }
 
   return entries.map((entry) => {
     const meta = governanceModelMeta(entry.approach);

@@ -5,6 +5,7 @@ import { Ring } from '../../components/Ring';
 import { useToast } from '../../components/Toast';
 import { DocumentPreview } from './DocumentPreview';
 import { UploadPreview } from './UploadPreview';
+import { CustomerReadinessPanel } from './CustomerReadinessPanel';
 import type { LibraryEntry } from '../../api/types';
 import type { WorkspaceView } from '../WorkspacePage';
 
@@ -23,15 +24,41 @@ const DOMAIN_LABEL: Record<string, string> = {
   STAKEHOLDERS: 'Stakeholders',
   RESOURCES: 'Resources',
   RISK: 'Risk',
+  PROJECT_PLAN: 'Project Plan',
+  KICKOFF: 'Kickoff',
+};
+
+/**
+ * How the Ready-to-Start percentage was built, in the PM's words. The server decides which applies
+ * (`workspace.basis`); this only names it, so the ring and the explanation cannot disagree.
+ */
+const READINESS_BASIS: Record<string, { label: string; help: string }> = {
+  CUSTOMER_AND_OUTPUTS: {
+    label: 'Customer standardization + approved planning outputs',
+    help: 'Weighted 60% on how far this project meets the standards its customer set, and 40% on the share of planning outputs the PM has approved.',
+  },
+  CUSTOMER: {
+    label: 'Customer standardization',
+    help: 'How far this project meets the standards its customer set. Approved planning outputs join the score once the document pack exists.',
+  },
+  INPUT_AND_OUTPUTS: {
+    label: 'Verified inputs + approved planning outputs',
+    help: 'This customer has no checklist in the library, so the score falls back to verified inputs and approved planning outputs, evenly weighted. Upload their checklist to score against their own standards instead.',
+  },
+  INPUT: {
+    label: 'Verified inputs',
+    help: 'Nothing has been generated yet, so this is verified input coverage alone.',
+  },
 };
 
 const WIDGET_LABELS: [string, string][] = [
   ['readiness', 'Start readiness'],
   ['approach', 'Management approach'],
-  ['outputs', 'Planning outputs'],
+  ['outputs', 'Document progress'],
   ['tasks', 'Planning tasks'],
   ['decisions', 'PM decisions'],
-  ['domains', 'Readiness by domain'],
+  ['domains', 'Project information coverage'],
+  ['customer', 'Project readiness by customer standardization'],
   ['library', 'Planning documents'],
   ['activity', 'Agent activity'],
 ];
@@ -46,6 +73,8 @@ export function DashboardView({
   const notify = useToast();
   const queryClient = useQueryClient();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  /** The document list starts folded away — it is the longest thing on the dashboard by far. */
+  const [libraryOpen, setLibraryOpen] = useState(false);
 
   const { data, isLoading, refetch, isRefetching } = useQuery({
     queryKey: ['dashboard', projectId],
@@ -135,7 +164,7 @@ export function DashboardView({
           <article className="metric widget">
             <div className="metric-label">
               <span>READY TO START</span>
-              <button className="help" title="Based on verified inputs and PM-approved planning outputs.">
+              <button className="help" title={READINESS_BASIS[data.workspace.basis].help}>
                 ?
               </button>
             </div>
@@ -145,6 +174,8 @@ export function DashboardView({
                 <strong className={data.startReadiness.verdict.tone === 'green' ? '' : 'amber'}>
                   {data.startReadiness.verdict.label}
                 </strong>
+                {/* A percentage with no stated basis is a number nobody can argue with or act on. */}
+                <small className="readiness-basis">{READINESS_BASIS[data.workspace.basis].label}</small>
                 <p>{data.startReadiness.note}</p>
                 <button className="text-button" onClick={() => onNavigate('studio')}>
                   Review blockers →
@@ -185,7 +216,10 @@ export function DashboardView({
         {show('outputs') && (
           <article className="metric widget">
             <div className="metric-label">
-              <span>PLANNING OUTPUTS</span>
+              {/* "Planning outputs" named the same thing three widgets away from "Planning
+                  documents" (the file list) — this one is the pack's progress through generation
+                  and approval, so it says that. */}
+              <span>DOCUMENT PROGRESS</span>
               <span className="delta">
                 {data.outputs.generated} of {data.outputs.total} generated
               </span>
@@ -274,8 +308,14 @@ export function DashboardView({
           <article className="panel widget">
             <div className="panel-head">
               <div>
-                <h2>Planning readiness by domain</h2>
-                <p>Coverage of required, verified and approved information</p>
+                {/*
+                  This measures INPUT FIELDS, not documents — `recomputeDomainReadiness` scores the
+                  share of each domain's inputs that are filled and PM-verified. The old name
+                  ("Planning readiness by domain") read as if it were about generated documents,
+                  which is a different widget entirely.
+                */}
+                <h2>Project information coverage</h2>
+                <p>Share of each domain’s input fields that are filled and PM-verified</p>
               </div>
               <span className="legend">
                 <i />
@@ -300,16 +340,36 @@ export function DashboardView({
           </article>
         )}
 
+        {/* The readiness the customer would actually ask about, next to the one we ask ourselves. */}
+        {show('customer') && (
+          <article className="widget wide">
+            <CustomerReadinessPanel projectId={projectId} />
+          </article>
+        )}
+
         {show('library') && (
           <article className="panel widget wide">
+            {/*
+              The list runs to every upload plus every generated document, which pushed the rest of
+              the dashboard off the screen. It is collapsed until asked for; the count stays visible
+              so nothing about the project is hidden, only its detail.
+            */}
             <div className="panel-head">
               <div>
                 <h2>Planning documents</h2>
                 <p>Everything attached to this project — what you uploaded and what the AI wrote</p>
               </div>
               <span className="copilot-badge">{data.library.length} total</span>
+              <button
+                className="disclosure"
+                aria-expanded={libraryOpen}
+                title={libraryOpen ? 'Hide the document list' : 'Show the document list'}
+                onClick={() => setLibraryOpen((open) => !open)}
+              >
+                {libraryOpen ? '▴' : '▾'}
+              </button>
             </div>
-            {data.library.length === 0 ? (
+            {!libraryOpen ? null : data.library.length === 0 ? (
               <div className="program-empty">
                 Nothing yet. Upload reference files on Project Input, or generate a document in the Planning Studio.
               </div>
@@ -351,7 +411,7 @@ export function DashboardView({
                 <h2>Agent &amp; approval activity</h2>
                 <p>Traceable rule, generation and PM actions</p>
               </div>
-              <span className="copilot-badge">✦ Copilot Studio</span>
+              <span className="copilot-badge">✦ {data.activity.length} recent</span>
             </div>
             <ul className="activity">
               {data.activity.map((event) => (
@@ -405,9 +465,12 @@ export function DashboardView({
       {preview?.kind === 'GENERATED' && previewDoc.data && (
         <DocumentPreview
           document={previewDoc.data}
+          projectId={projectId}
           projectName={data.workspace.name}
           onClose={() => setPreview(null)}
-          onDownload={() => documentsApi.downloadDocx(projectId, preview.id, preview.name)}
+          onDownload={() =>
+            documentsApi.download(projectId, preview.id, preview.name, previewDoc.data.exportFormat)
+          }
         />
       )}
     </section>

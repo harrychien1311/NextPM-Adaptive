@@ -14,7 +14,9 @@ export type ManagementDomain =
   | 'FINANCE'
   | 'STAKEHOLDERS'
   | 'RESOURCES'
-  | 'RISK';
+  | 'RISK'
+  | 'PROJECT_PLAN'
+  | 'KICKOFF';
 export type DocumentStatus = 'NOT_GENERATED' | 'GENERATING' | 'PM_REVIEW' | 'APPROVED' | 'SUPERSEDED';
 
 /** Global account role. ADMIN manages accounts only and never sees a project workspace. */
@@ -84,6 +86,9 @@ export interface ProjectCard {
   /** May delete it — stricter than canEdit, since deletion cascades and cannot be undone. */
   canDelete: boolean;
   readiness: number;
+  /** See `Workspace.basis` — the same number, built the same way, on the overview card. */
+  basis: 'CUSTOMER_AND_OUTPUTS' | 'CUSTOMER' | 'INPUT_AND_OUTPUTS' | 'INPUT';
+  outputShare: number;
   inputReadiness: number;
   verifiedInputs: number;
   totalInputs: number;
@@ -116,12 +121,29 @@ export interface Workspace {
   name: string;
   type: ProjectType;
   status: ProjectStatus;
+  /** What the customer reference library matches on — free text, set only by the PM. */
+  customer: string | null;
   phaseLabel: string;
   program: { id: string; name: string; key: string } | null;
   members: { id: string; name: string; initials: string }[];
   approach: { approach: Approach; rigor: string; outcome: string; decidedAt: string } | null;
   recommendation: { approach: Approach; confidence: number } | null;
+  /**
+   * The viewer's role **on this project**. `OWNER` may write; `MEMBER` and `VIEWER` are read-only,
+   * and the workspace disables its controls for them rather than offering buttons the server will
+   * refuse. Never a substitute for the server's own check — see `requireProjectRole`.
+   */
+  projectRole: 'OWNER' | 'MEMBER' | 'VIEWER' | null;
   readiness: number;
+  /**
+   * What `readiness` was built from. Once the customer's own standard has been assessed it is that
+   * standard plus the approved planning outputs; a project whose customer has no checklist in the
+   * library falls back to verified inputs plus approved outputs. The dashboard names whichever
+   * applies rather than showing a bare percentage.
+   */
+  basis: 'CUSTOMER_AND_OUTPUTS' | 'CUSTOMER' | 'INPUT_AND_OUTPUTS' | 'INPUT';
+  /** Share of this project's planning documents that the PM has approved. */
+  outputShare: number;
   inputReadiness: number;
   verifiedInputs: number;
   totalInputs: number;
@@ -227,6 +249,9 @@ export interface InputField {
 
 export interface InputProfile {
   projectType: ProjectType;
+  /** What the customer library matches on. Free text, set only by the PM. */
+  customer: string | null;
+  customerSuggestion: CustomerSuggestion | null;
   fields: InputField[];
   readiness: number;
   counters: { total: number; pmInput: number; fileReference: number; missing: number; verified: number };
@@ -258,6 +283,24 @@ export interface InputProfile {
   }[];
 }
 
+/**
+ * A customer name read out of the uploaded documents, waiting for the PM to accept or dismiss it.
+ * Never applied on its own: the wrong customer means the project is scored against the wrong
+ * checklist and another company's template gets filled with it.
+ */
+export interface CustomerSuggestion {
+  name: string;
+  /** A verbatim quote from the document, so the PM can judge it without opening the file. */
+  evidence: string;
+  sourceLabel: string | null;
+  /** Set when the name resolves to a customer already in the reference library. */
+  matchedKey: string | null;
+  matchedName: string | null;
+  /** What the Customer field said when this was proposed — accepting replaces it. */
+  replaces: string | null;
+  suggestedAt: string;
+}
+
 /** What "Verify input" reports back: what it read, what it prefilled, and what it verified. */
 export interface VerifyResult {
   verified: number;
@@ -265,12 +308,28 @@ export interface VerifyResult {
   documentsRead: number;
   stillEmpty: number;
   provider: 'anthropic' | 'mock';
+  customerSuggestion: CustomerSuggestion | null;
 }
 
 export interface GovernanceAlternative {
   approach: Approach;
   score: number;
   rationale: string;
+}
+
+/**
+ * One piece of evidence behind the recommendation, in both languages.
+ *
+ * The interface is English, so `english` is what is read. `original` is the same sentence as the
+ * uploaded document writes it — kept because that is the only string a PM can search their own
+ * file for — and `source` names the file it came from, shown in bold red so it is obvious at a
+ * glance which document each line rests on. Snapshots taken before this shape existed are
+ * normalised on the server, so `original` and `source` may be empty but the field is always there.
+ */
+export interface EvidenceItem {
+  english: string;
+  original?: string;
+  source: string;
 }
 
 export interface ApproachResponse {
@@ -283,7 +342,7 @@ export interface ApproachResponse {
     confidenceLevel: 'HIGH' | 'MEDIUM' | 'LOW';
     rationale: string;
     reasons: string[];
-    evidence: string[];
+    evidence: EvidenceItem[];
     risks: string[];
     alternatives: GovernanceAlternative[];
     summary: string | null;
@@ -340,9 +399,43 @@ export interface RiskRow {
 }
 
 /** Tables the model returned alongside the prose, for the two documents that need one. */
+/** One box on the org chart. `person` may hold a `{{gap:N}}` token — an unnamed role is normal. */
+export interface OrgChartNode {
+  role: string;
+  person: string;
+  /** The box holding decision authority in its column. */
+  lead?: boolean;
+}
+
+/**
+ * The org chart as data, so it can be drawn rather than described. Columns are organisations —
+ * customer, partner, delivery team — laid out left to right.
+ */
+export interface OrgChart {
+  columns: { organisation: string; groups: { name: string | null; nodes: OrgChartNode[] }[] }[];
+}
+
 export interface DocumentStructuredData {
   raciTable?: RaciRow[];
   riskRegister?: RiskRow[];
+  /** The whole deliverable for an Organization Chart. */
+  orgChart?: OrgChart;
+  /**
+   * The whole deliverable for a register document — a change log, an escalation path, a work
+   * breakdown. `columns` comes from the document's own schema, so the preview never guesses it.
+   */
+  table?: { columns: string[]; rows: string[][] };
+  /**
+   * Set when this document is produced by filling a customer's own file rather than by drafting.
+   * The document's sections are then placeholder → value pairs, not prose.
+   */
+  templateFill?: {
+    templateId: string;
+    customerKey: string;
+    documentType: string;
+    fileType: string;
+    sourceFile: string;
+  };
 }
 
 export interface DocumentSection {
@@ -362,6 +455,33 @@ export interface CatalogEntry {
   domain: ManagementDomain;
   requirement: 'REQUIRED' | 'CONDITIONAL';
   conditionKey: string | null;
+  /** Which real file this document downloads as. */
+  exportFormat: DocumentExportFormat;
+  /** Set when this document is produced by filling the customer's own file rather than drafted. */
+  customerTemplate: {
+    id: string;
+    customerKey: string;
+    customerName: string;
+    documentType: string;
+    fileType: 'DOCX' | 'XLSX' | 'PPTX';
+    sourceFile: string;
+    placeholders: TemplatePlaceholder[];
+    /** False for an outline template — too few blanks to fill, so a neutral deck is built instead. */
+    usableForFill: boolean;
+    /** Says, in the PM's terms, what will happen and why. */
+    fillNote: string;
+    /**
+     * True when this template comes from the house default rather than from the project's own
+     * customer — the Project Plan workbook every project uses whoever the customer is. The PM is
+     * entitled to know which of the two they are looking at.
+     */
+    house: boolean;
+  } | null;
+  /**
+   * A register document's own columns, from its schema. Present whether or not it has been
+   * generated, so the grid never borrows another document's header to stand in for a missing one.
+   */
+  tableColumns: string[] | null;
   document: {
     id: string;
     status: DocumentStatus;
@@ -374,6 +494,141 @@ export interface CatalogEntry {
     approvedAt: string | null;
   } | null;
 }
+
+// ---------------------------------------------------------------- customer reference library
+
+/** One fill-in-the-blank slot the template scanner found. */
+export interface TemplatePlaceholder {
+  token: string;
+  occurrences: number;
+  locations: string[];
+  /** The token is broken across text runs, so filling it needs the runs merged first. */
+  splitAcrossRuns: boolean;
+}
+
+export interface CustomerChecklistSummary {
+  id: string;
+  name: string;
+  sourceFile: string;
+  mimeType: string;
+  version: number;
+  active: boolean;
+  parseNote: string | null;
+  uploadedAt: string;
+  itemCount: number;
+}
+
+export interface CustomerTemplateSummary {
+  id: string;
+  documentType: string;
+  fileType: string;
+  sourceFile: string;
+  version: number;
+  active: boolean;
+  parseNote: string | null;
+  uploadedAt: string;
+  placeholders: TemplatePlaceholder[];
+  placeholderCount: number;
+}
+
+export interface CustomerSummary {
+  id: string;
+  key: string;
+  name: string;
+  /** Spellings of this customer's name that a PM may type into the project's free-text field. */
+  aliases: string[];
+  active: boolean;
+  hasLogo: boolean;
+  checklists: CustomerChecklistSummary[];
+  templates: CustomerTemplateSummary[];
+}
+
+export interface ChecklistItemRow {
+  id: string;
+  order: number;
+  section: string | null;
+  code: string | null;
+  text: string;
+  guidance: string | null;
+  expected: string | null;
+}
+
+export interface ChecklistDetail extends Omit<CustomerChecklistSummary, 'itemCount'> {
+  customer: { id: string; key: string; name: string };
+  items: ChecklistItemRow[];
+}
+
+// ---------------------------------------------------------------- checklist readiness
+
+/**
+ * The real file a planning document downloads as. The server decides it — a RACI document is a
+ * spreadsheet, a document filled from a customer's own template is whatever that template is, and
+ * everything else is Word — so the client only ever labels the button.
+ */
+export type DocumentExportFormat = 'DOCX' | 'XLSX' | 'PPTX';
+
+/**
+ * How a project's free-text Customer field was matched to the library, weakest last.
+ * `default` means nothing recognised it and the house-default customer took it — which is not
+ * the same as knowing who the customer is, and the UI must not present it as if it were.
+ */
+export type MatchConfidence = 'exact' | 'prefix' | 'partial' | 'default';
+
+export type ChecklistStatus = 'MET' | 'PARTIAL' | 'NOT_MET' | 'NOT_APPLICABLE' | 'UNKNOWN';
+export type AssessmentSource = 'DETERMINISTIC' | 'AI' | 'PM';
+
+export interface ChecklistScore {
+  score: number;
+  applicable: number;
+  assessed: number;
+  met: number;
+  partial: number;
+  notMet: number;
+  unknown: number;
+  notApplicable: number;
+  /** How much of the checklist has been looked at — the score's own confidence. */
+  coverage: number;
+}
+
+export interface ChecklistAssessedItem {
+  id: string;
+  order: number;
+  section: string | null;
+  text: string;
+  guidance: string | null;
+  /**
+   * The English readings, written once when the checklist was uploaded. The interface is English,
+   * so these are what the screen shows, with the customer's own wording kept beneath — that is the
+   * string a PM quotes back at the audit. Null when the source is already English, or when no
+   * model was available to translate; the UI then shows the original alone.
+   */
+  sectionEn: string | null;
+  textEn: string | null;
+  guidanceEn: string | null;
+  status: ChecklistStatus;
+  source: AssessmentSource | null;
+  evidence: string | null;
+  note: string | null;
+}
+
+export type ChecklistReadiness =
+  | { applies: false; typedCustomer: string | null; reason: string }
+  | {
+      applies: true;
+      customer: { id: string; key: string; name: string };
+      match: { confidence: MatchConfidence; matchedOn: string; typed: string | null };
+      checklist: { id: string; name: string; version: number; sourceFile: string };
+      assessment: {
+        assessedAt: string | null;
+        stale: boolean;
+        runState: string;
+        lastError: string | null;
+        aiProvider: string;
+      };
+      score: ChecklistScore;
+      items: ChecklistAssessedItem[];
+      sections: (ChecklistScore & { section: string; sectionEn: string | null; total: number })[];
+    };
 
 export interface StudioResponse {
   catalog: CatalogEntry[];

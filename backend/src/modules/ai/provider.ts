@@ -1,4 +1,5 @@
 import { env } from '../../config/env';
+import { tableSchema } from '../../data/table-documents';
 import { DEFAULT_GOVERNANCE_MODELS } from '../../data/governance-models';
 
 /**
@@ -75,9 +76,51 @@ export interface GovernanceArtifactContext extends GenerationContext {
   structureGuidance: string;
 }
 
+/**
+ * One box on the org chart: the role, and who holds it. `person` may be a `{{gap:N}}` token —
+ * an unnamed role is the normal state early in planning, and a box reading "[ answer needed ]"
+ * is the honest rendering of it.
+ */
+export interface OrgChartNode {
+  role: string;
+  person: string;
+  /** Marks a box the chart should emphasise — the PM, the sponsor, the single point of control. */
+  lead?: boolean;
+}
+
+/** A team inside an organisation. `name` is null when the organisation has no sub-teams. */
+export interface OrgChartGroup {
+  name: string | null;
+  nodes: OrgChartNode[];
+}
+
+/**
+ * The org chart as data rather than prose, so it can be *drawn*.
+ *
+ * Columns are organisations — the customer, the delivery partner, us — laid out left to right, the
+ * same shape the SKAX kickoff deck uses for its own chart. That is the layout PMs in this domain
+ * read, and it is what "who is on the other side of this project" actually looks like; a tree with
+ * one root cannot express it.
+ */
+export interface OrgChart {
+  columns: { organisation: string; groups: OrgChartGroup[] }[];
+}
+
+/**
+ * A register-style document: the table *is* the deliverable. `columns` is echoed back from the
+ * schema it was asked for so the renderer never has to guess the header row, and every cell is a
+ * plain string that may hold a `{{gap:N}}` token.
+ */
+export interface DocumentTable {
+  columns: string[];
+  rows: string[][];
+}
+
 export interface GovernanceArtifactOutput extends GenerationOutput {
   raciTable?: RaciRow[];
   riskRegister?: RiskRow[];
+  orgChart?: OrgChart;
+  table?: DocumentTable;
 }
 
 export interface GovernanceRecommendationField {
@@ -92,6 +135,8 @@ export interface GovernanceRecommendationContext {
   verifiedInputs: { label: string; value: string }[];
   /** Extracted text from the uploaded project description document, if any. */
   documentText: string | null;
+  /** That document's file name, so a piece of evidence can say which file it came from. */
+  documentName?: string | null;
   fields: GovernanceRecommendationField[];
 }
 
@@ -108,6 +153,22 @@ export interface GovernanceAlternative {
  */
 export type AiProvider = 'anthropic' | 'mock';
 
+/**
+ * One piece of evidence behind a recommendation, in both languages.
+ *
+ * The app's interface is English, so `english` is what the screen reads. `original` is the same
+ * sentence exactly as the source writes it, kept because that — and only that — is what lets a PM
+ * or an auditor find it in the uploaded file; a translation cannot be searched for in a Korean
+ * document. `source` names the file or the verified input it came from, which the UI shows in bold
+ * red, since evidence whose provenance is unstated is not evidence.
+ */
+export interface EvidenceItem {
+  english: string;
+  /** Omitted when the source is already English — there is nothing to show twice. */
+  original?: string;
+  source: string;
+}
+
 export interface GovernanceRecommendationOutput {
   candidates: { fieldKey: string; value: string }[];
   recommendedApproach: string;
@@ -115,7 +176,7 @@ export interface GovernanceRecommendationOutput {
   confidenceLevel: 'HIGH' | 'MEDIUM' | 'LOW';
   rationale: string;
   reasons: string[];
-  evidence: string[];
+  evidence: EvidenceItem[];
   risks: string[];
   alternatives: GovernanceAlternative[];
   summary: string;
@@ -141,6 +202,11 @@ export interface InputExtractionContext {
 
 export interface InputExtractionOutput {
   values: { fieldKey: string; value: string; evidence?: string }[];
+  /**
+   * The organisation the project is delivered *for*, if the documents say so unambiguously.
+   * A proposal, never a decision: the caller stores it as a suggestion for the PM to confirm.
+   */
+  customer?: { name: string; evidence: string } | null;
   provider: AiProvider;
 }
 
@@ -262,6 +328,22 @@ async function callAnthropicJson<T>(params: { system: string; prompt: string; la
  * Shared across both Skill 2 prompts: the model owns the structure, and never fills a gap in the
  * project data with a plausible guess.
  */
+/**
+ * Shared by both Skill 2 prompts. Only reaches the model when the document being written has a
+ * schema in `data/table-documents.ts`; the caller supplies the columns.
+ */
+const TABLE_DOCUMENT_RULES = `If this document is given a COLUMN LIST below, then the table IS the document:
+- Return "table": { "columns": [...exactly the columns you were given, in that order...],
+                    "rows": [ [cell, cell, ...], ... ] } — one array per row, one cell per column,
+  every cell a plain string.
+- Return "sections": [] — no prose, no introduction, no notes, no explanation of the table. The
+  grid is the deliverable and anything around it is noise the PM asked not to receive.
+- A cell you cannot fill from the project data is a "{{gap:N}}" token with a matching question,
+  exactly as in prose. Never write "TBD", "N/A" or an invented name to fill a cell.
+- Order the rows the way the document is read: a flow in step order, a log newest-first, a work
+  breakdown in WBS ID order.
+- Only rows the project data supports. A short honest table beats a padded one.`;
+
 const NO_FABRICATION_RULES = `You decide the section structure yourself. Choose the sections this document type genuinely
 needs for this project type and governance model, in a sensible reading order — do not pad it with
 sections the project has no information for.
@@ -276,7 +358,8 @@ NEVER INVENT ANYTHING. This is the rule that matters most:
 - The sentence around a token must still read naturally once the token is replaced by the answer,
   e.g. "The executive sponsor is {{gap:1}}." not "Executive sponsor: {{gap:1}} (to be confirmed)".
 - Each gap question must be specific and answerable in one line ("Who is the executive sponsor?"),
-  never a task ("Confirm the sponsor").
+  never a task ("Confirm the sponsor"). **Write every gap question in English**, whatever language
+  the project data is in — the PM reads these in the application, and the application is English.
 - You draft; the PM approves. Never state that anything is approved or baselined.
 
 Write 2-5 sentences per section in professional PM English.`;
@@ -285,11 +368,37 @@ const SYSTEM_PROMPT = `You are the NextPM planning agent, drafting one planning 
 
 ${NO_FABRICATION_RULES}
 
+${TABLE_DOCUMENT_RULES}
+
+- If the document's name mentions RACI, also return "raciTable": an array of
+  { activity, responsible, accountable, consulted, informed } rows covering the project's key
+  activities. A role you do not know is a gap token too. The prose sections then explain the
+  matrix — do not repeat its rows as a list inside them.
+- If the document is a kickoff deck, each section is ONE SLIDE. Write it as short lines, one point
+  per line, never paragraphs — this is read in a room, on a screen. Aim for 4-6 lines a slide and
+  8-12 slides covering, in this order: purpose and objective; scope in and out; the delivery team
+  and who does what; schedule and milestones; ways of working (cadence, meetings, reporting);
+  communication and escalation; risks and dependencies; and what happens next. Skip any of those
+  the project data cannot support rather than padding it, and leave unknown names, dates and
+  owners as gap tokens.
+
 Return strict JSON and nothing else:
 { "sections": [{ "title": string, "content": string }],
   "gaps": [{ "token": "{{gap:1}}", "question": string }],
-  "unresolved": string[] }
+  "unresolved": string[], "raciTable"?: [...], "table"?: { "columns": [...], "rows": [[...]] } }
 "unresolved" is a short plain-English list of what was left blank, for the audit trail.`;
+
+/** The column list for a register-style document, or nothing for a prose one. */
+function tableInstruction(documentName: string): string[] {
+  const schema = tableSchema(documentName);
+  if (!schema) return [];
+  return [
+    '',
+    `COLUMN LIST for "${documentName}" — return a table with exactly these columns and no sections:`,
+    schema.columns.map((column, index) => `  ${index + 1}. ${column}`).join('\n'),
+    `Each row is ${schema.rowMeaning}`,
+  ];
+}
 
 function buildPrompt(context: GenerationContext): string {
   const inputs = context.verifiedInputs.map((input) => `- ${input.label}: ${input.value}`).join('\n');
@@ -297,6 +406,7 @@ function buildPrompt(context: GenerationContext): string {
 
   return [
     `Document to write: ${context.documentName}`,
+    ...tableInstruction(context.documentName),
     `Project: ${context.projectName} · type ${context.projectType} · governance model ${context.approach} · ${context.rigor}`,
     '',
     'Verified inputs (your only source of facts):',
@@ -312,7 +422,7 @@ function buildPrompt(context: GenerationContext): string {
  * same contract as the model — including leaving gaps rather than inventing facts — so the rest of
  * the flow (preview, answer, fill, export) behaves identically without a key.
  */
-function mockGenerate(context: GenerationContext): GenerationOutput {
+function mockGenerate(context: GenerationContext): GovernanceArtifactOutput {
   const lookup = new Map(context.verifiedInputs.map((input) => [input.label.toLowerCase(), input.value]));
   const pick = (...labels: string[]) => labels.map((label) => lookup.get(label.toLowerCase())).find(Boolean);
 
@@ -349,13 +459,42 @@ function mockGenerate(context: GenerationContext): GenerationOutput {
     },
   ];
 
+  // A register document is a table and nothing else — the mock has to produce that shape too, or
+  // the no-key demo would show prose where the real path shows a grid.
+  const schema = tableSchema(context.documentName);
+  if (schema) {
+    const rows = [0, 1].map((index) =>
+      schema.columns.map((column, columnIndex) =>
+        columnIndex === 0
+          ? `${index + 1}`
+          : gap(`For ${context.documentName} row ${index + 1}, what is the "${column}"?`, column),
+      ),
+    );
+    return { sections: [], gaps, unresolved, table: { columns: schema.columns, rows }, provider: 'mock' };
+  }
+
+  // A RACI document exports as a spreadsheet, so the mock owes it rows as well as prose.
+  if (/raci/i.test(context.documentName)) {
+    const raciTable: RaciRow[] = [
+      { activity: 'Day-to-day delivery of the agreed scope', responsible: 'Delivery lead', accountable: 'PM', consulted: 'Team', informed: 'Stakeholders' },
+      { activity: 'Acceptance of completed work', responsible: 'PM', accountable: gap('Who accepts completed work?', 'Acceptance owner'), consulted: 'Delivery lead', informed: 'Team' },
+      { activity: 'Escalation and change handling', responsible: 'PM', accountable: gap('Who is the escalation authority?', 'Escalation authority'), consulted: 'Delivery lead', informed: 'Stakeholders' },
+    ];
+    return { sections, gaps, unresolved, raciTable, provider: 'mock' };
+  }
+
   return { sections, gaps, unresolved, provider: 'mock' };
 }
 
-export async function generateDocument(context: GenerationContext): Promise<GenerationOutput> {
+/**
+ * Returns `GovernanceArtifactOutput` rather than plain `GenerationOutput` because a catalog
+ * document outside the six mandated artifacts can still be a RACI matrix — SM projects have
+ * "Support Organization & RACI" — and those export as a spreadsheet, which needs the rows.
+ */
+export async function generateDocument(context: GenerationContext): Promise<GovernanceArtifactOutput> {
   if (env.ai.provider === 'anthropic' && env.ai.anthropicKey) {
     try {
-      const result = await callAnthropicJson<Omit<GenerationOutput, 'provider'>>({
+      const result = await callAnthropicJson<Omit<GovernanceArtifactOutput, 'provider'>>({
         system: SYSTEM_PROMPT,
         prompt: buildPrompt(context),
         label: `skill2:document:${context.documentName}`,
@@ -381,16 +520,33 @@ which sections this artifact needs.
 
 ${NO_FABRICATION_RULES}
 
+${TABLE_DOCUMENT_RULES}
+
 - If the artifact is "RACI Matrix", also return "raciTable": an array of
   { activity, responsible, accountable, consulted, informed } rows covering the project's key
   activities under this governance model's structure. A role you do not know is a gap token too.
-- If the artifact is "Risk Plan", also return "riskRegister": an array of
+- If the artifact is "Risk Management Plan", also return "riskRegister": an array of
   { risk, severity, owner, mitigation } rows (severity is one of Critical, High, Medium, Low).
+- If the artifact is "Organization Chart", the deliverable IS the chart. Return "orgChart" and
+  return "sections": [] — no prose, no narrative, no notes. The chart is:
+    { "columns": [ { "organisation": string,
+                     "groups": [ { "name": string|null,
+                                   "nodes": [ { "role": string, "person": string, "lead"?: bool } ] } ] } ] }
+  * One column per ORGANISATION involved, left to right: the customer first, then any partner or
+    vendor, then the delivering team. This is a project org chart — who sits on each side of the
+    engagement — not a single company's internal tree.
+  * "groups" splits a column into named teams where that is real (e.g. "On-shore Team",
+    "Off-shore Development Team"); use one group with "name": null when it is not.
+  * "role" is the position ("Project Manager", "QA Lead"). "person" is who holds it — and a person
+    you were not told about is a gap token, never a guess and never "TBD".
+  * Mark "lead": true on the one box per column that holds decision authority.
+  * Keep it to the roles this project's data actually supports. Do not pad it out.
 
 Return strict JSON and nothing else:
 { "sections": [{ "title": string, "content": string }],
   "gaps": [{ "token": "{{gap:1}}", "question": string }],
-  "unresolved": string[], "raciTable"?: [...], "riskRegister"?: [...] }`;
+  "unresolved": string[], "raciTable"?: [...], "riskRegister"?: [...], "orgChart"?: {...},
+  "table"?: { "columns": [...], "rows": [[...]] } }`;
 
 function buildGovernanceArtifactPrompt(context: GovernanceArtifactContext): string {
   const inputs = context.verifiedInputs.map((input) => `- ${input.label}: ${input.value}`).join('\n');
@@ -398,6 +554,7 @@ function buildGovernanceArtifactPrompt(context: GovernanceArtifactContext): stri
 
   return [
     `Artifact: ${context.artifactName} for governance model ${context.approach}`,
+    ...tableInstruction(context.artifactName),
     `Structure guidance for this artifact under this model: ${context.structureGuidance}`,
     `Project: ${context.projectName} · type ${context.projectType} · ${context.rigor}`,
     '',
@@ -434,7 +591,43 @@ function mockGenerateGovernanceArtifact(context: GovernanceArtifactContext): Gov
     return { ...base, gaps, unresolved, raciTable };
   }
 
-  if (context.artifactName === 'Risk Plan') {
+  if (context.artifactName === 'Organization Chart') {
+    // The chart is the whole deliverable, so the mock returns no prose either — matching the real
+    // prompt, so the two paths produce the same shape of document.
+    const customer = lookup.get('client') ?? lookup.get('customer') ?? 'Customer';
+    const orgChart: OrgChart = {
+      columns: [
+        {
+          organisation: customer,
+          groups: [
+            {
+              name: null,
+              nodes: [
+                { role: 'Sponsor', person: gap('Who is the sponsor on the customer side?', 'Customer sponsor'), lead: true },
+                { role: 'Business owner', person: gap('Who is the customer’s business owner?', 'Business owner') },
+              ],
+            },
+          ],
+        },
+        {
+          organisation: 'Delivery team',
+          groups: [
+            {
+              name: null,
+              nodes: [
+                { role: 'Project Manager', person: gap('Who is the project manager?', 'Project manager'), lead: true },
+                { role: 'Delivery lead', person: gap('Who is the delivery lead?', 'Delivery lead') },
+                { role: 'QA lead', person: gap('Who is the QA lead?', 'QA lead') },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    return { ...base, sections: [], gaps, unresolved, orgChart };
+  }
+
+  if (context.artifactName === 'Risk Management Plan') {
     const complexity = lookup.get('integration complexity') ?? lookup.get('technical uncertainty');
     const riskRegister: RiskRow[] = [
       {
@@ -490,8 +683,11 @@ Language:
   which option the document's meaning corresponds to, then return that option EXACTLY as written
   in the list, character for character. Never translate an option, reword it, or invent a new one.
   If no option fits the evidence, omit the field.
-- For free-text fields, answer in the language of the document, so the PM sees the customer's own
-  wording. Dates: return ISO format (YYYY-MM-DD), or "YYYY-MM-DD..YYYY-MM-DD" for a date range.
+- For free-text fields, answer in **English** — this application's interface is English and every
+  document it generates is written in English, so a Korean answer here would have to be translated
+  again further down the line. Names are the exception: a person, a company, a system, a place or a
+  product keeps the spelling the document uses. Never transliterate or translate a proper noun.
+  Dates: return ISO format (YYYY-MM-DD), or "YYYY-MM-DD..YYYY-MM-DD" for a date range.
 
 Rules you must never break:
 - Answer a field ONLY when the document actually states or clearly implies it. Omit every field
@@ -500,8 +696,20 @@ Rules you must never break:
   fields. Documents are your only source.
 - "evidence" must be a short verbatim quote from the document, in its original language.
 
+Also identify the CUSTOMER — the organisation this project is delivered FOR:
+- It is the client, not the supplier. The company writing the proposal, staffing the team or
+  signing as the vendor is NOT the customer. If a document is an FPT proposal to LG CNS, the
+  customer is LG CNS.
+- It is not a partner, a subcontractor, a system vendor, or a company merely mentioned in passing.
+  A name that appears only inside a list of interfaces or third-party products is not the customer.
+- Return the organisation's name as the document writes it, with no added suffix or expansion.
+- Omit "customer" entirely unless the documents make it unambiguous. This is the one answer a
+  wrong guess is most expensive on, so silence is strongly preferred to a plausible name.
+
 Return strict JSON and nothing else:
-{ "values": [{ "fieldKey": string, "value": string, "evidence": string }] }
+{ "values": [{ "fieldKey": string, "value": string, "evidence": string }],
+  "customer": { "name": string, "evidence": string } }
+"customer" is optional — omit the key when the documents do not make it unambiguous.
 Return { "values": [] } when the documents support no field at all.`;
 
 function buildInputExtractionPrompt(context: InputExtractionContext): string {
@@ -533,16 +741,26 @@ function buildInputExtractionPrompt(context: InputExtractionContext): string {
  * only the fields it could not resolve, so this call is as small as the remaining work.
  */
 export async function extractInputValues(context: InputExtractionContext): Promise<InputExtractionOutput> {
-  if (!context.fields.length || !context.documents.length) return { values: [], provider: 'mock' };
+  // No documents means nothing to read. Note this does *not* bail when every field is already
+  // filled: the call still has a job then, identifying the customer.
+  if (!context.documents.length) return { values: [], customer: null, provider: 'mock' };
 
   if (env.ai.provider === 'anthropic' && env.ai.anthropicKey) {
     try {
-      const result = await callAnthropicJson<{ values: InputExtractionOutput['values'] }>({
+      const result = await callAnthropicJson<{
+        values: InputExtractionOutput['values'];
+        customer?: { name?: string; evidence?: string } | null;
+      }>({
         system: INPUT_EXTRACTION_SYSTEM_PROMPT,
         prompt: buildInputExtractionPrompt(context),
         label: 'skill0:input-extraction',
       });
-      return { values: result.values ?? [], provider: 'anthropic' };
+      // A customer without evidence is a guess wearing a citation's clothes — drop it.
+      const customer =
+        result.customer?.name?.trim() && result.customer.evidence?.trim()
+          ? { name: result.customer.name.trim(), evidence: result.customer.evidence.trim() }
+          : null;
+      return { values: result.values ?? [], customer, provider: 'anthropic' };
     } catch (error) {
       console.error('[ai] input extraction failed, no values proposed:', error);
     }
@@ -550,7 +768,463 @@ export async function extractInputValues(context: InputExtractionContext): Promi
 
   // There is no useful mock for this: the deterministic matcher already ran and found nothing,
   // and guessing here would put invented values in front of the PM.
-  return { values: [], provider: 'mock' };
+  return { values: [], customer: null, provider: 'mock' };
+}
+
+// ---------------------------------------------------------------------------
+// Skill 2c — filling a customer's own document template
+//
+// Same no-fabrication contract as the other Skill 2 calls, applied to placeholders instead of
+// prose: a blank the project data cannot answer becomes a {{gap:N}} token plus a question, so the
+// deck reaches the PM with visible holes rather than invented names.
+// ---------------------------------------------------------------------------
+
+export interface TemplateFillContext {
+  projectName: string;
+  projectType: string;
+  customerName: string;
+  approach: string | null;
+  documentType: string;
+  verifiedInputs: { label: string; value: string }[];
+  /** Supporting prose already approved for this project, so names and dates stay consistent. */
+  relatedDocuments: { name: string; excerpt: string }[];
+  /** The blanks in the customer's file, with where each appears so the model can read intent. */
+  placeholders: { token: string; occurrences: number; locations: string[] }[];
+}
+
+export interface TemplateFillOutput {
+  /** One entry per placeholder. `value` may itself contain `{{gap:N}}` tokens. */
+  values: { token: string; value: string }[];
+  gaps: DocumentGap[];
+  unresolved: string[];
+  provider: 'anthropic' | 'mock';
+}
+
+const TEMPLATE_FILL_SYSTEM_PROMPT = `You fill in a customer's own document template for one project. The template is
+already designed — you are only supplying the text that goes into its blanks.
+
+${NO_FABRICATION_RULES}
+
+Applied to placeholders:
+- Work out what each placeholder means from its own name and from the slides/pages it appears on.
+- Fill it ONLY from the project data you are given. A person's name, an email address, a room, a
+  date or a team member you were not told about is NOT something to invent — it becomes a gap.
+- A placeholder that appears several times (a name and email repeated down a team table) still gets
+  ONE value. If the project data names fewer people than the template has slots, fill the ones you
+  know and make each remaining slot its own gap.
+- Keep values short: these go into a slide or a spreadsheet cell, not a paragraph. A person
+  placeholder gets a name, not a sentence.
+- Write values in English, like every other document this application generates. A proper noun —
+  a person's name, a company, a system, a place — keeps the spelling the project data uses; do not
+  transliterate or translate one.
+- **Every gap question is in English**, whatever language the template or the project data is in:
+  the PM answers these inside the application, and the application is English.
+
+Not every bracketed string is a blank. A large template also brackets its own **guidance and worked
+examples** — "<The following section can be replaced with the project's own diagram>", "<Group
+review or one-person review>", "<Weekly>", "<Describe how changes are approved>". Those show the PM
+what belongs there; they are not gaps waiting on a fact.
+
+So there are three things you can do with a token, and choosing the right one matters more than
+filling everything:
+1. **Fill it** when the project data actually answers it. This is the only case that produces a value.
+2. **Omit it** when the project data does not answer it but the template's own text is sensible
+   guidance or a reasonable example. An omitted token is left exactly as the template wrote it, so
+   the PM keeps that guidance and can edit it. For a large template most tokens end up here — that
+   is the correct outcome, not a failure.
+3. **Make it a gap** only when the token names a specific project fact that MUST be this project's
+   own — its name, code, dates, the PM, the customer, a signatory — and the data does not have it.
+   Leaving the template's example there would be a lie about this project; a gap is honest.
+Never turn a paragraph of guidance into a gap: that deletes advice and replaces it with a blank.
+
+Return strict JSON and nothing else:
+{ "values": [{ "token": string, "value": string }],
+  "gaps": [{ "token": "{{gap:1}}", "question": string }],
+  "unresolved": string[] }
+Each placeholder you were given appears at most once in "values" — once if it is a blank to fill,
+not at all if it is the template's own guidance. "gaps" describes the {{gap:N}} tokens you put
+inside those values — the question must tell the PM precisely what to supply, naming the
+placeholder it belongs to.`;
+
+function buildTemplateFillPrompt(context: TemplateFillContext): string {
+  const inputs = context.verifiedInputs.map((input) => `- ${input.label}: ${input.value}`).join('\n');
+  const related = context.relatedDocuments
+    .map((document) => `--- ${document.name} ---\n${document.excerpt}`)
+    .join('\n\n');
+  const placeholders = context.placeholders
+    .map(
+      (placeholder) =>
+        `- ${placeholder.token} (appears ${placeholder.occurrences}× on ${placeholder.locations.join(', ')})`,
+    )
+    .join('\n');
+
+  return [
+    `Template: ${context.customerName}'s ${context.documentType}`,
+    `Project: ${context.projectName} · type ${context.projectType}${
+      context.approach ? ` · governance model ${context.approach}` : ''
+    }`,
+    '',
+    'PM-verified project inputs (your only source of facts):',
+    inputs || '- none verified yet',
+    '',
+    'Planning documents already written for this project (for consistent names and dates):',
+    related || '- none yet',
+    '',
+    `Placeholders to fill (${context.placeholders.length}):`,
+    placeholders,
+  ].join('\n');
+}
+
+/**
+ * How many placeholders go into one model call.
+ *
+ * The kickoff decks have 16 and 4 blanks and fit in a single call each. The house Project Plan
+ * workbook has **274**, whose answers alone would run past the output ceiling and take the JSON
+ * with them — so the blanks are filled in batches. The cost of batching is that the project context
+ * is re-sent per batch (a kilobyte or so); the cost of not batching is a truncated response and a
+ * wasted call, which is strictly worse.
+ */
+const PLACEHOLDERS_PER_CALL = 50;
+
+/**
+ * Gap tokens are numbered per call, so the second batch hands back another `{{gap:1}}` that would
+ * collide with the first batch's — and a collision means one PM answer silently lands in two places.
+ * Each batch's tokens are therefore remapped onto a fresh, strictly increasing global sequence,
+ * inside the values as well as in the gap list, since the token is embedded in the text the PM
+ * reads. Remapping rather than adding an offset is deliberate: a model that numbers its gaps
+ * 1, 2, 5 would still collide under a simple `+3`.
+ */
+function renumberGaps(batch: Omit<TemplateFillOutput, 'provider'>, offset: number) {
+  if (!offset) return batch;
+
+  const mapping = new Map<string, string>();
+  for (const gap of batch.gaps) {
+    if (!mapping.has(gap.token)) mapping.set(gap.token, `{{gap:${offset + mapping.size + 1}}}`);
+  }
+  const shift = (text: string) =>
+    text.replace(/\{\{gap:\d+\}\}/g, (token) => mapping.get(token) ?? token);
+
+  return {
+    values: batch.values.map((value) => ({ ...value, value: shift(value.value ?? '') })),
+    gaps: batch.gaps.map((gap) => ({ ...gap, token: shift(gap.token) })),
+    unresolved: batch.unresolved,
+  };
+}
+
+export async function fillTemplatePlaceholders(context: TemplateFillContext): Promise<TemplateFillOutput> {
+  if (!context.placeholders.length) return { values: [], gaps: [], unresolved: [], provider: 'mock' };
+
+  if (env.ai.provider === 'anthropic' && env.ai.anthropicKey) {
+    const values: TemplateFillOutput['values'] = [];
+    const gaps: DocumentGap[] = [];
+    const unresolved: string[] = [];
+    let degraded = false;
+
+    for (let index = 0; index < context.placeholders.length; index += PLACEHOLDERS_PER_CALL) {
+      const slice = context.placeholders.slice(index, index + PLACEHOLDERS_PER_CALL);
+      // Each batch is caught on its own. A failure on batch 4 of 6 must not throw away three calls
+      // that already succeeded and were already paid for — those blanks stay filled, and only the
+      // batch that failed degrades into visible, answerable gaps.
+      let batch: Omit<TemplateFillOutput, 'provider'>;
+      try {
+        const result = await callAnthropicJson<Omit<TemplateFillOutput, 'provider'>>({
+          system: TEMPLATE_FILL_SYSTEM_PROMPT,
+          prompt: buildTemplateFillPrompt({ ...context, placeholders: slice }),
+          label: `skill2c:template-fill:${context.documentType}:${index + 1}-${index + slice.length}`,
+        });
+        batch = { values: result.values ?? [], gaps: result.gaps ?? [], unresolved: result.unresolved ?? [] };
+      } catch (error) {
+        console.error(`[ai] template fill batch ${index + 1}-${index + slice.length} failed:`, error);
+        degraded = true;
+        batch = mockFillTemplate({ ...context, placeholders: slice });
+      }
+
+      const shifted = renumberGaps(batch, gaps.length);
+      values.push(...shifted.values);
+      gaps.push(...shifted.gaps);
+      unresolved.push(...shifted.unresolved);
+    }
+
+    // `mock` here means "not all of this came from the model" — the PM must not read a partly
+    // degraded fill as a complete one, which is the same reason Skill 1 carries its provenance.
+    return { values, gaps, unresolved, provider: degraded ? 'mock' : 'anthropic' };
+  }
+  return mockFillTemplate(context);
+}
+
+/**
+ * Every placeholder becomes a gap. That is not a cop-out: without a model there is nothing that
+ * could legitimately answer "who is the QA lead", so the honest mock output is a deck full of
+ * visible, answerable blanks — exactly what the PM would get from a real call that knew nothing.
+ */
+function mockFillTemplate(context: TemplateFillContext): TemplateFillOutput {
+  const lookup = new Map(context.verifiedInputs.map((input) => [input.label.toLowerCase(), input.value]));
+  const gaps: DocumentGap[] = [];
+  const unresolved: string[] = [];
+
+  const values = context.placeholders.map((placeholder) => {
+    // The project name is the one thing the mock genuinely knows.
+    if (/project\s*name/i.test(placeholder.token)) {
+      return { token: placeholder.token, value: context.projectName };
+    }
+    const direct = lookup.get(placeholder.token.replace(/[[\]<>]/g, '').trim().toLowerCase());
+    if (direct) return { token: placeholder.token, value: direct };
+
+    const token = `{{gap:${gaps.length + 1}}}`;
+    gaps.push({
+      token,
+      question: `What goes in ${placeholder.token} on ${placeholder.locations.join(', ')}?`,
+    });
+    unresolved.push(placeholder.token);
+    return { token: placeholder.token, value: token };
+  });
+
+  return { values, gaps, unresolved, provider: 'mock' };
+}
+
+// ---------------------------------------------------------------------------
+// Skill 3 — assessing the project against its customer's checklist
+//
+// Runs on "Re-assess readiness", and again (for the not-yet-MET items only) when a document is
+// approved. Like Skill 0 it has NO mock fallback: a guessed "MET" would tell a PM that a customer
+// requirement is covered when nothing covers it, which is worse than an honest UNKNOWN.
+// ---------------------------------------------------------------------------
+
+export type ChecklistVerdict = 'MET' | 'PARTIAL' | 'NOT_MET' | 'NOT_APPLICABLE' | 'UNKNOWN';
+
+export interface ChecklistAssessmentContext {
+  projectName: string;
+  projectType: string;
+  customerName: string;
+  approach: string | null;
+  /** PM-verified inputs only — the same "verified precedes everything" rule as the other skills. */
+  verifiedInputs: { label: string; value: string }[];
+  /** What has actually been produced, with enough text to be evidence rather than a title list. */
+  documents: { name: string; status: string; excerpt: string }[];
+  items: { id: string; section: string | null; text: string; guidance: string | null }[];
+}
+
+export interface ChecklistAssessmentOutput {
+  verdicts: { id: string; status: ChecklistVerdict; evidence: string; reason: string }[];
+  provider: 'anthropic' | 'none';
+}
+
+const CHECKLIST_ASSESSMENT_SYSTEM_PROMPT = `You audit one project against a checklist its customer requires. For each checklist
+item, decide whether the project's own evidence shows the item is satisfied.
+
+The checklist may be in any language (Korean, Vietnamese, English...). Read it in its original
+language. **Write "evidence" and "reason" in English** — this application's interface is English and
+the PM reads these on screen. The one exception is a verbatim quote: keep the quoted words exactly
+as the source wrote them, inside quotation marks, and put your English rendering around them, so
+the PM can still find the sentence in the file.
+
+Status — choose exactly one per item:
+- "MET": the supplied project evidence clearly satisfies the item. You must be able to point at
+  the specific input or document section that does it.
+- "PARTIAL": the evidence covers part of the item, or covers it but is not yet PM-approved.
+- "NOT_MET": the evidence is sufficient to conclude the item is genuinely not covered yet.
+- "NOT_APPLICABLE": the item cannot apply to this project — a different service type, or the
+  checklist's own scope section excludes it.
+- "UNKNOWN": you cannot tell from what you were given. Use this freely.
+
+Rules you must never break:
+- The supplied inputs and documents are your ONLY source. Never assume a project does something
+  because projects usually do, because the governance model implies it, or because the item sounds
+  routine. That assumption is exactly how a readiness score becomes a lie.
+- "MET" REQUIRES a quote or a named section from the evidence. If you cannot cite it, it is not MET.
+- Prefer "UNKNOWN" to a confident guess. An honest blank costs a PM one look; a wrong "MET" costs
+  them the finding at the customer's audit.
+- "evidence" is a short verbatim quote or the exact name of the input/document section it rests on.
+  For UNKNOWN and NOT_MET, say what would settle it instead.
+- Return a verdict for EVERY item id you were given, and invent no ids.
+
+Return strict JSON and nothing else:
+{ "verdicts": [{ "id": string, "status": "MET"|"PARTIAL"|"NOT_MET"|"NOT_APPLICABLE"|"UNKNOWN",
+                 "evidence": string, "reason": string }] }`;
+
+// ---------------------------------------------------------------------------
+// Checklist translation — run once, when a checklist is uploaded
+//
+// Not a "skill": it decides nothing and asserts nothing about a project. It exists because the
+// application's interface is English while the checklists it audits against are usually Korean,
+// and a PM cannot act on a requirement they cannot read. It runs at upload rather than at display
+// time so the cost is paid once per file instead of once per viewer, and so an item's English
+// reading belongs to the checklist itself rather than to one project's assessment.
+//
+// Like Skill 0 and Skill 3 it has no mock: an invented translation of a customer requirement is
+// worse than the untranslated original, which the UI shows anyway.
+// ---------------------------------------------------------------------------
+
+export interface ChecklistTranslationItem {
+  id: string;
+  text: string;
+  section?: string | null;
+  guidance?: string | null;
+}
+
+export interface ChecklistTranslation {
+  id: string;
+  textEn?: string;
+  sectionEn?: string;
+  guidanceEn?: string;
+}
+
+/** Same reasoning as Skill 3's batch size: the checklists we have fit in one call, a larger one degrades. */
+const TRANSLATION_ITEMS_PER_CALL = 40;
+
+const CHECKLIST_TRANSLATION_SYSTEM_PROMPT = `You translate a customer's project checklist into English for a project-management
+application whose interface is English. The checklist is usually Korean, sometimes Vietnamese or
+Japanese.
+
+This is translation, not interpretation:
+- Translate what the item says. Do not expand it, explain it, shorten it, or turn a question into
+  an instruction. The PM will be audited against the original wording, so a "helpful" rewording is
+  a defect.
+- Keep the source's own terms of art where they are names rather than words: a system name, a
+  document code, a standard (ISO 27001), a tool, a company. Do not transliterate a proper noun.
+- An item already written in English needs no translation — omit it from your answer entirely.
+- Keep it to one line per field, like the original.
+
+Return strict JSON and nothing else:
+{ "items": [{ "id": string, "textEn": string, "sectionEn": string, "guidanceEn": string }] }
+Omit "sectionEn" / "guidanceEn" when that field was not supplied or is already English, and omit an
+item completely when nothing about it needs translating. Never invent an id.`;
+
+function buildChecklistTranslationPrompt(items: ChecklistTranslationItem[]): string {
+  return [
+    `Translate these ${items.length} checklist entries into English:`,
+    ...items.map((item) =>
+      [
+        `- id ${item.id}`,
+        `  text: ${item.text}`,
+        item.section ? `  section: ${item.section}` : null,
+        item.guidance ? `  note: ${item.guidance}` : null,
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    ),
+  ].join('\n');
+}
+
+export async function translateChecklistItems(items: ChecklistTranslationItem[]): Promise<ChecklistTranslation[]> {
+  if (!items.length) return [];
+  if (env.ai.provider !== 'anthropic' || !env.ai.anthropicKey) return [];
+
+  const translated: ChecklistTranslation[] = [];
+  for (let index = 0; index < items.length; index += TRANSLATION_ITEMS_PER_CALL) {
+    const batch = items.slice(index, index + TRANSLATION_ITEMS_PER_CALL);
+    try {
+      const result = await callAnthropicJson<{ items?: ChecklistTranslation[] }>({
+        system: CHECKLIST_TRANSLATION_SYSTEM_PROMPT,
+        prompt: buildChecklistTranslationPrompt(batch),
+        label: `checklist-translation:${batch.length}-items`,
+      });
+      translated.push(...(result.items ?? []));
+    } catch (error) {
+      // A failed batch leaves those items untranslated and the upload succeeds regardless: losing
+      // the English reading is a blemish, losing the uploaded checklist over it is not.
+      console.error('[ai] checklist translation batch failed, items stay in their own language:', error);
+    }
+  }
+  return translated;
+}
+
+/**
+ * Rewrites PM-facing questions into English.
+ *
+ * `PlanningDocument.pmQuestions` is written once, at generation time, so documents drafted before
+ * the English rule existed hold questions in the project's own language — the prompt that produced
+ * them cannot reach back and fix them. Regenerating would fix it too, but it costs a full drafting
+ * call and throws away any answers the PM has already given; rewriting the question text keeps the
+ * token and the answer exactly as they are.
+ *
+ * No mock, for the same reason as the other translation pass: a guessed question is worse than one
+ * the PM can at least read in the original.
+ */
+export async function translateGapQuestions(
+  items: { id: string; text: string }[],
+): Promise<{ id: string; english: string }[]> {
+  if (!items.length) return [];
+  if (env.ai.provider !== 'anthropic' || !env.ai.anthropicKey) return [];
+
+  const system = `You translate questions that a project manager is asked inside an English-language
+application. The questions are currently written in another language (usually Korean).
+
+- Translate the question, do not answer it, expand it or merge it with another.
+- Keep every proper noun exactly as written: a person, company, system, product, place, or a
+  bracketed placeholder such as [PM Name] or <Code of the project>. Never transliterate one.
+- A question already in English needs no work — omit it from your answer.
+- Keep it to a single line, phrased as a question the PM can answer in one sentence.
+
+Return strict JSON and nothing else: { "items": [{ "id": string, "english": string }] }
+Never invent an id.`;
+
+  const prompt = [
+    `Translate these ${items.length} questions into English:`,
+    ...items.map((item) => `- id ${item.id}\n  ${item.text}`),
+  ].join('\n');
+
+  try {
+    const result = await callAnthropicJson<{ items?: { id: string; english: string }[] }>({
+      system,
+      prompt,
+      label: `gap-question-translation:${items.length}-questions`,
+    });
+    return result.items ?? [];
+  } catch (error) {
+    console.error('[ai] gap question translation failed, questions left as they are:', error);
+    return [];
+  }
+}
+
+function buildChecklistAssessmentPrompt(context: ChecklistAssessmentContext): string {
+  const inputs = context.verifiedInputs.map((input) => `- ${input.label}: ${input.value}`).join('\n');
+  const documents = context.documents
+    .map((document) => `--- ${document.name} (${document.status}) ---\n${document.excerpt}`)
+    .join('\n\n');
+  const items = context.items
+    .map((item) =>
+      `- id ${item.id}${item.section ? ` · section: ${item.section}` : ''}\n  check: ${item.text}${
+        item.guidance ? `\n  source note: ${item.guidance}` : ''
+      }`,
+    )
+    .join('\n');
+
+  return [
+    `Project: ${context.projectName} · type ${context.projectType} · customer ${context.customerName}`,
+    context.approach ? `Confirmed governance model: ${context.approach}` : 'No governance model confirmed yet.',
+    '',
+    'PM-verified project inputs (evidence):',
+    inputs || '- none verified yet',
+    '',
+    'Planning documents produced so far (evidence, may be truncated):',
+    documents || '- none generated yet',
+    '',
+    `Checklist items to assess (${context.items.length}):`,
+    items,
+  ].join('\n');
+}
+
+export async function assessChecklistItems(
+  context: ChecklistAssessmentContext,
+): Promise<ChecklistAssessmentOutput> {
+  if (!context.items.length) return { verdicts: [], provider: 'none' };
+
+  if (env.ai.provider === 'anthropic' && env.ai.anthropicKey) {
+    try {
+      const result = await callAnthropicJson<{ verdicts: ChecklistAssessmentOutput['verdicts'] }>({
+        system: CHECKLIST_ASSESSMENT_SYSTEM_PROMPT,
+        prompt: buildChecklistAssessmentPrompt(context),
+        label: `skill3:checklist:${context.items.length}-items`,
+      });
+      return { verdicts: result.verdicts ?? [], provider: 'anthropic' };
+    } catch (error) {
+      console.error('[ai] checklist assessment failed, items left unknown:', error);
+    }
+  }
+
+  // No mock: see the note above the prompt. Items simply stay UNKNOWN, and the UI says so.
+  return { verdicts: [], provider: 'none' };
 }
 
 // ---------------------------------------------------------------------------
@@ -577,11 +1251,16 @@ Your job has two parts:
    You may recommend a model outside the default list (e.g. PRINCE2, Lean) only when the evidence
    clearly calls for it.
 
-Language:
+Language — the application's interface is English, whatever language the documents are in:
 - Inputs and documents may be in ANY language (Vietnamese, Korean, Japanese, English...). Read
   them in their original language; never refuse for lack of a translation.
-- Quote evidence in the language it was written in, so the PM can find the sentence in the source.
-  Write your rationale, reasons and risks in English.
+- Write the rationale, every reason and every risk in English. No exceptions: these are read on an
+  English screen.
+- Each piece of evidence carries BOTH languages. "english" is the statement in English, so the PM
+  reads it without a translator. "original" is the same sentence copied VERBATIM from the source,
+  in the source's own language, so it can be found in the file — omit "original" only when the
+  source sentence is already English. "source" names where it came from: the exact document file
+  name as given below, or the label of the verified input.
 - Governance model codes and SELECT option strings are fixed identifiers: return them exactly as
   given, in English, character for character. Never translate or reword one.
 
@@ -593,8 +1272,10 @@ Rules you must never break:
   the PM makes the final call.
 Return strict JSON: { "recommendedApproach": one of the model codes, "confidence": number (0-100,
 the suitability score), "confidenceLevel": "HIGH" | "MEDIUM" | "LOW", "rationale": string
-(2-3 sentences), "reasons": string[] (key reasons, each traceable to evidence), "evidence": string[]
-(the specific inputs/document statements the reasons are grounded in), "risks": string[] (risks or
+(2-3 sentences), "reasons": string[] (key reasons, each traceable to evidence),
+"evidence": [{ "english": string, "original": string (omit when the source is English),
+"source": string }] (the specific inputs/document statements the reasons are grounded in),
+"risks": string[] (risks or
 limitations of the recommendation), "alternatives": [{ "approach": string, "score": number,
 "rationale": string }] (every other model scored), "summary": string (one sentence describing what
 was read), "candidates": [{ "fieldKey": string, "value": string }] (only for fields you can
@@ -616,7 +1297,9 @@ function buildGovernanceRecommendationPrompt(context: GovernanceRecommendationCo
     'Fields you may propose values for from the document text:',
     fields || '- none',
     '',
-    'Project description document (verbatim, may be truncated):',
+    // The file name is given so "source" can name it exactly. Evidence that cites "the document"
+    // is unverifiable the moment a second file is uploaded.
+    `Project description document — file name "${context.documentName ?? 'uploaded document'}" (verbatim, may be truncated):`,
     context.documentText ?? '- no document uploaded — score from verified inputs only',
   ].join('\n');
 }
@@ -672,7 +1355,12 @@ function mockRecommendGovernanceModel(context: GovernanceRecommendationContext):
     confidenceLevel,
     rationale,
     reasons: primary.hits.length ? primary.hits.map((hit) => `Evidence of "${hit}"`) : ['Limited evidence available — treat this as a low-confidence starting point'],
-    evidence: primary.hits,
+    // The mock matches English keywords, so there is no original-language sentence to show: it
+    // never read one. Saying so is more honest than echoing the keyword into both fields.
+    evidence: primary.hits.map((hit) => ({
+      english: `The text contains "${hit}".`,
+      source: context.documentName ?? (context.documentText ? 'uploaded document' : 'verified project inputs'),
+    })),
     risks: topScore < 60 ? ['Not enough verified input or document evidence to score this confidently — PM should confirm the model directly.'] : [],
     alternatives: scored.slice(1).map((entry) => ({
       approach: entry.approach,
@@ -686,6 +1374,36 @@ function mockRecommendGovernanceModel(context: GovernanceRecommendationContext):
   };
 }
 
+/**
+ * Forces whatever the model returned onto `EvidenceItem`.
+ *
+ * Evidence used to be a plain `string[]`, and a model occasionally still answers that way. A bare
+ * string is treated as the English statement with no citable original — the alternative is a
+ * runtime crash on the one screen whose whole purpose is explaining the recommendation.
+ */
+export function normalizeEvidence(evidence: unknown): EvidenceItem[] {
+  if (!Array.isArray(evidence)) return [];
+  return evidence
+    .map((entry): EvidenceItem | null => {
+      if (typeof entry === 'string') {
+        const text = entry.trim();
+        return text ? { english: text, source: '' } : null;
+      }
+      if (!entry || typeof entry !== 'object') return null;
+      const item = entry as { english?: unknown; original?: unknown; source?: unknown; text?: unknown };
+      const english = String(item.english ?? item.text ?? '').trim();
+      if (!english) return null;
+      const original = String(item.original ?? '').trim();
+      return {
+        english,
+        // A model that echoes the English back as the "original" is not giving a second language.
+        ...(original && original !== english ? { original } : {}),
+        source: String(item.source ?? '').trim(),
+      };
+    })
+    .filter((entry): entry is EvidenceItem => entry !== null);
+}
+
 export async function recommendGovernanceModel(
   context: GovernanceRecommendationContext,
 ): Promise<GovernanceRecommendationOutput> {
@@ -696,7 +1414,7 @@ export async function recommendGovernanceModel(
         prompt: buildGovernanceRecommendationPrompt(context),
         label: 'skill1:governance-recommendation',
       });
-      return { ...result, provider: 'anthropic' };
+      return { ...result, evidence: normalizeEvidence(result.evidence), provider: 'anthropic' };
     } catch (error) {
       console.error('[ai] falling back to mock governance recommendation:', error);
     }

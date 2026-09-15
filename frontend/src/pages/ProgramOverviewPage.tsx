@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { programApi, projectApi } from '../api/endpoints';
 import type { ProgramGroup, ProjectCard, ProjectStatus, ProjectType } from '../api/types';
@@ -278,6 +278,10 @@ export function ProgramOverviewPage() {
                 </span>
               </div>
               <div className="portfolio-create-actions">
+                {/* The per-customer checklists and templates every project here is measured against. */}
+                <Link className="secondary button-link" to="/customers">
+                  Customer library
+                </Link>
                 {capabilities.canCreateProgram && (
                   <button className="secondary" onClick={() => setOpenModal('program')}>
                     + Program

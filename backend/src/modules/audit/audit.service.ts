@@ -1,9 +1,13 @@
 import { ActorType, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 
-/** Every rule run, generation and PM decision is traceable. */
+/**
+ * Every rule run, generation and PM decision is traceable. `projectId` is omitted only for a
+ * platform-level event that belongs to no single project — a change to the customer reference
+ * library, say. Project activity feeds filter on projectId, so those never surface here.
+ */
 export async function logEvent(params: {
-  projectId: string;
+  projectId?: string | null;
   actorId?: string | null;
   actorType?: ActorType;
   type: string;
@@ -13,7 +17,7 @@ export async function logEvent(params: {
 }) {
   return prisma.auditEvent.create({
     data: {
-      projectId: params.projectId,
+      projectId: params.projectId ?? null,
       actorId: params.actorId ?? null,
       actorType: params.actorType ?? ActorType.PM,
       type: params.type,

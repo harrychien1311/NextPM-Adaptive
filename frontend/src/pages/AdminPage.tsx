@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { adminApi } from '../api/endpoints';
 import type { AdminAccount, Role } from '../api/types';
@@ -136,6 +137,10 @@ export function AdminPage() {
               </span>
             </div>
             <div className="portfolio-create-actions">
+              {/* Configuration, not delivery data — see the route comment in App.tsx. */}
+              <Link className="secondary button-link" to="/customers">
+                Customer library
+              </Link>
               <button className="primary" onClick={() => setCreateOpen(true)}>
                 + New account
               </button>

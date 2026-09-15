@@ -12,6 +12,7 @@ import { conflict, forbidden, notFound } from '../../lib/http-error';
 import { slugify } from '../../lib/slug';
 import { INPUT_SCHEMAS } from '../../data/input-schemas';
 import { computeInputReadiness } from '../../lib/readiness';
+import { checklistScoreForProject } from '../checklist/checklist.service';
 import { logEvent } from '../audit/audit.service';
 
 const COLOR_ROTATION = ['blue', 'violet', 'green', 'orange'];
@@ -94,11 +95,29 @@ export async function deleteProject(projectId: string, user: { id: string; role:
   return { deleted: true, name: project.name, documentsRemoved: project._count.documents };
 }
 
-/** Readiness for one project: input readiness blended with approved-output share. */
+/**
+ * Readiness for one project — the number the Ready-to-Start ring shows.
+ *
+ * **Once the customer's own standard has been assessed, that standard and the approved planning
+ * outputs are the whole score.** Input readiness drops out of it deliberately: how much of *our*
+ * intake form is filled in is our administration, not a measure of whether this project can start.
+ * What can be defended in front of the customer is how far the project meets the criteria that
+ * customer standardised, and how much of the plan the PM has actually approved.
+ *
+ * The customer standard carries the heavier weight of the two for the same reason it used to: it
+ * is the one the customer will ask about. It only enters the score once something has actually
+ * been assessed (`coverage > 0`), so an un-assessed checklist cannot silently halve a project.
+ *
+ * Projects whose customer has no checklist in the library — most of them — keep the older basis
+ * (input readiness blended with approved outputs), because the alternative is scoring them on
+ * approved documents alone and telling a PM who has just filled in a careful profile that they are
+ * at 0%. `basis` reports which of the two produced the number, so no screen has to guess.
+ */
 async function projectReadiness(projectId: string) {
-  const [values, documents] = await Promise.all([
+  const [values, documents, checklist] = await Promise.all([
     prisma.projectInputValue.findMany({ where: { projectId }, include: { definition: true } }),
     prisma.planningDocument.findMany({ where: { projectId } }),
+    checklistScoreForProject(projectId),
   ]);
 
   const input = computeInputReadiness(
@@ -109,12 +128,33 @@ async function projectReadiness(projectId: string) {
   const approved = documents.filter((doc) => doc.status === DocumentStatus.APPROVED).length;
   const outputShare = documents.length ? Math.round((approved / documents.length) * 100) : 0;
 
-  const readiness = documents.length
+  const ownScore = documents.length
     ? Math.round(input.readiness * 0.5 + outputShare * 0.5)
     : input.readiness;
 
+  const checklistCounts = Boolean(checklist && checklist.coverage > 0);
+  const readiness = checklistCounts
+    ? documents.length
+      ? Math.round(checklist!.score * 0.6 + outputShare * 0.4)
+      : checklist!.score
+    : ownScore;
+
   return {
     readiness,
+    /**
+     * What the number was actually built from, so the dashboard can name it rather than showing a
+     * percentage with no stated meaning.
+     */
+    basis: checklistCounts
+      ? documents.length
+        ? ('CUSTOMER_AND_OUTPUTS' as const)
+        : ('CUSTOMER' as const)
+      : documents.length
+        ? ('INPUT_AND_OUTPUTS' as const)
+        : ('INPUT' as const),
+    outputShare,
+    /** Split out so the dashboard can show what moved the number, not just the number. */
+    checklistReadiness: checklist ? { score: checklist.score, coverage: checklist.coverage, stale: checklist.stale } : null,
     inputReadiness: input.readiness,
     verifiedInputs: input.verified,
     totalInputs: input.total,
@@ -348,6 +388,12 @@ export async function projectWorkspace(projectId: string) {
     name: project.name,
     type: project.type,
     status: project.status,
+    /**
+     * The field the customer reference library matches on. Omitting it here was a real defect:
+     * it is what decides which checklist scores the project and whose template its kickoff deck
+     * fills, so a workspace payload that hides it makes "why did nothing apply?" unanswerable.
+     */
+    customer: project.customer,
     phaseLabel: project.phaseLabel ?? `${project.type} · INITIATING`,
     program: project.program ? { id: project.program.id, name: project.program.name, key: project.program.key } : null,
     members: project.members.map((member) => member.user),

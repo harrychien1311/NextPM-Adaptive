@@ -111,7 +111,7 @@ export function FloatingAgentButton({ onOpen }: { onOpen: () => void }) {
       <span>✦</span>
       <div>
         <strong>Ask Planning Agent</strong>
-        <small>Copilot Studio</small>
+        <small>Advisory only</small>
       </div>
     </button>
   );

@@ -11,11 +11,15 @@ import {
   catalogForProject,
   createExport,
   documentDetail,
+  documentSheets,
+  documentSlides,
   domainSummary,
   fillDocumentGaps,
   generateDocumentForDefinition,
   renderDashboardHtml,
   renderDocumentDocx,
+  renderDocumentExport,
+  renderDocumentXlsx,
   templateFit,
   updateDocumentSections,
 } from './documents.service';
@@ -135,12 +139,60 @@ documentsRouter.post(
   }),
 );
 
-/** Real .docx download for one planning document — rendered on demand, nothing persisted. */
+/**
+ * The slides of the deck this document downloads as, read out of the real rendered file — what
+ * the on-screen preview draws. No model call; it renders the export and reads it back.
+ */
+documentsRouter.get(
+  '/:projectId/documents/:documentId/slides',
+  asyncHandler(async (req, res) => {
+    res.json(await documentSlides(req.params.projectId, req.params.documentId));
+  }),
+);
+
+/** The same, for a document filled from a customer's workbook: the real sheets of the real file. */
+documentsRouter.get(
+  '/:projectId/documents/:documentId/sheets',
+  asyncHandler(async (req, res) => {
+    res.json(await documentSheets(req.params.projectId, req.params.documentId));
+  }),
+);
+
+/**
+ * Real Office download for one planning document — rendered on demand, nothing persisted.
+ * The server picks the container: RACI documents come back as `.xlsx`, everything else `.docx`,
+ * so the client never has to guess. The real name and type ride on the response headers.
+ */
+documentsRouter.get(
+  '/:projectId/documents/:documentId/export',
+  asyncHandler(async (req, res) => {
+    const { fileName, buffer, contentType } = await renderDocumentExport(
+      req.params.projectId,
+      req.params.documentId,
+    );
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', contentDisposition('attachment', fileName));
+    res.send(buffer);
+  }),
+);
+
+/** Kept so links saved before the format-aware route above still resolve. */
 documentsRouter.get(
   '/:projectId/documents/:documentId/export.docx',
   asyncHandler(async (req, res) => {
     const { fileName, buffer } = await renderDocumentDocx(req.params.projectId, req.params.documentId);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', contentDisposition('attachment', fileName));
+    res.send(buffer);
+  }),
+);
+
+/** Direct spreadsheet download, for a caller that wants the matrix regardless of the default. */
+documentsRouter.get(
+  '/:projectId/documents/:documentId/export.xlsx',
+  asyncHandler(async (req, res) => {
+    const { fileName, buffer } = await renderDocumentXlsx(req.params.projectId, req.params.documentId);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', contentDisposition('attachment', fileName));
     res.send(buffer);
   }),

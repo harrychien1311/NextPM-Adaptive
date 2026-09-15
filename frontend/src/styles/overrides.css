@@ -942,3 +942,1235 @@
   font-size: 1rem;
   line-height: 1;
 }
+
+/* ------------------------------------------------------------------ preview shaped like the file
+   A preview exists to show what downloads. A deck previews as slides and a matrix as a grid,
+   because a page-shaped preview of a .pptx is a preview of something that does not exist. */
+
+/* --- deck: 16:9 slide cards, matching what lib/pptx-build.ts writes */
+.deck-slides {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 24px 0 60px;
+}
+.deck-slide {
+  position: relative;
+  width: min(920px, 92vw);
+  aspect-ratio: 16 / 9;
+  background: #fff;
+  border: 1px solid var(--line, #e3e9f2);
+  border-radius: 6px;
+  box-shadow: 0 6px 22px rgba(16, 36, 61, 0.1);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.deck-slide-band {
+  height: 23%;
+  background: #10243d;
+  flex-shrink: 0;
+}
+.deck-slide-rule {
+  height: 5px;
+  background: #1f5fa9;
+  flex-shrink: 0;
+}
+.deck-slide-body {
+  padding: 30px 44px;
+  overflow: hidden;
+}
+.deck-slide-title .deck-slide-body {
+  padding-top: 42px;
+}
+.deck-slide-title h1 {
+  margin: 0;
+  font-size: 2rem;
+  color: #10243d;
+}
+.deck-slide-title h2 {
+  margin: 4px 0 0;
+  font-size: 1.05rem;
+  font-weight: 500;
+  color: #1f5fa9;
+}
+.deck-slide-title p {
+  margin: 26px 0 0;
+  font-size: 0.8rem;
+  color: #6b7c93;
+}
+.deck-slide h2 {
+  margin: 0 0 14px;
+  font-size: 1.25rem;
+  color: #10243d;
+}
+.deck-slide ul {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.deck-slide li {
+  font-size: 0.86rem;
+  color: #10243d;
+  line-height: 1.45;
+}
+.deck-slide-number {
+  position: absolute;
+  left: 44px;
+  bottom: 18px;
+  font-size: 0.7rem;
+  color: #9aa8b9;
+}
+/* The gap list is not a slide in the file — a dashed card keeps that distinction visible. */
+.deck-slide-notes {
+  aspect-ratio: auto;
+  min-height: 0;
+  border-style: dashed;
+  box-shadow: none;
+  padding: 20px 44px;
+}
+.deck-slide-notes h2 {
+  font-size: 0.95rem;
+  color: #1f5fa9;
+}
+
+/* What the deck is and what the preview is not showing — stated once, above the slides. */
+.deck-caption {
+  width: min(920px, 92vw);
+  margin: 4px auto -4px;
+  font-size: 0.78rem;
+  color: #6b7c93;
+}
+/* Images and tables are in the file but not extracted; say so on the slides that have them. */
+.deck-slide-contains {
+  position: absolute;
+  right: 44px;
+  bottom: 18px;
+  font-size: 0.68rem;
+  color: #9aa8b9;
+  background: #f4f7fb;
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+
+/* A register's grid inside the Planning Studio panel, which is narrower than the preview. */
+.studio-grid-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line, #e3e9f2);
+  border-radius: 8px;
+}
+
+/* A chart document generated before it became a drawn chart — say what to do, do not show prose. */
+.org-chart-empty {
+  font-size: 0.82rem;
+  color: #b26a00;
+  background: #fff1d6;
+  padding: 12px 14px;
+  border-radius: 8px;
+  max-width: 78ch;
+}
+
+/* --- org chart: drawn, not described. Mirrors lib/pptx-orgchart.ts so preview and slide agree. */
+.org-chart-page {
+  width: min(1100px, 95vw);
+  margin: 24px auto 60px;
+  background: #fff;
+  border: 1px solid var(--line, #e3e9f2);
+  border-radius: 10px;
+  padding: 28px 30px 34px;
+}
+.org-chart-page h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  color: #10243d;
+}
+.org-columns {
+  display: flex;
+  gap: 22px;
+  align-items: flex-start;
+  margin-top: 24px;
+  overflow-x: auto;
+}
+.org-column {
+  flex: 1 1 0;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/* The organisation band: who this column belongs to. */
+.org-org {
+  background: #10243d;
+  color: #fff;
+  border-radius: 8px;
+  padding: 9px 12px;
+  text-align: center;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+.org-group {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.org-group + .org-group {
+  margin-top: 10px;
+}
+.org-group-name {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #1f5fa9;
+  text-align: center;
+}
+.org-node {
+  border: 1px solid var(--line, #e3e9f2);
+  border-radius: 8px;
+  padding: 9px 10px;
+  text-align: center;
+  background: #fff;
+}
+/* The box holding decision authority — the one a reader should find first. */
+.org-node.lead {
+  background: #1f5fa9;
+  border-color: #1f5fa9;
+}
+.org-node strong {
+  display: block;
+  font-size: 0.8rem;
+  color: #10243d;
+}
+.org-node span {
+  font-size: 0.78rem;
+  color: #6b7c93;
+}
+.org-node.lead strong,
+.org-node.lead span {
+  color: #fff;
+}
+/* An unanswered blank stays amber even on a filled box, where white-on-blue would hide it. */
+.org-node.lead .gap-marker {
+  background: #fff1d6;
+  color: #b26a00;
+}
+
+@media (max-width: 760px) {
+  .org-columns {
+    flex-direction: column;
+  }
+}
+
+/* --- spreadsheet: lettered columns, numbered rows, sheet tabs at the bottom */
+.sheet-book {
+  width: min(1040px, 94vw);
+  margin: 24px auto 60px;
+  background: #fff;
+  border: 1px solid var(--line, #e3e9f2);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.sheet-head {
+  padding: 22px 26px 14px;
+  border-bottom: 1px solid var(--line, #e3e9f2);
+}
+.sheet-head h1 {
+  margin: 0;
+  font-size: 1.4rem;
+  color: #10243d;
+}
+.sheet-grid-wrap {
+  overflow-x: auto;
+  padding: 0;
+  min-height: 260px;
+}
+.sheet-grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+.sheet-grid th,
+.sheet-grid td {
+  border: 1px solid #dfe6f0;
+  padding: 6px 9px;
+  vertical-align: top;
+  text-align: left;
+}
+/* The grey frame of column letters and row numbers is what makes it read as a spreadsheet. */
+.sheet-grid .sheet-col,
+.sheet-grid .sheet-row-number,
+.sheet-grid .sheet-corner {
+  background: #eef2f7;
+  color: #6b7c93;
+  font-weight: 500;
+  font-size: 0.7rem;
+  text-align: center;
+}
+.sheet-grid .sheet-row-number {
+  width: 34px;
+}
+.sheet-grid .sheet-header-cell {
+  background: #10243d;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.sheet-grid tbody tr:nth-child(even) td {
+  background: #f7fafd;
+}
+.sheet-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 12px;
+  border-top: 1px solid var(--line, #e3e9f2);
+  background: #f4f7fb;
+}
+.sheet-tabs button {
+  border: 1px solid var(--line, #e3e9f2);
+  border-top: 0;
+  border-radius: 0 0 6px 6px;
+  background: #eef2f7;
+  padding: 7px 14px;
+  font-size: 0.74rem;
+  color: #45566b;
+  cursor: pointer;
+}
+.sheet-tabs button.active {
+  background: #fff;
+  color: #10243d;
+  font-weight: 600;
+}
+.sheet-tabs b {
+  color: #9aa8b9;
+  font-weight: 500;
+}
+
+@media (max-width: 700px) {
+  .deck-slide {
+    aspect-ratio: auto;
+    min-height: 300px;
+  }
+  .deck-slide-body {
+    padding: 20px;
+  }
+  .deck-slide-number {
+    left: 20px;
+  }
+}
+
+/* ------------------------------------------------------------------ proposed customer, awaiting PM
+   Blue, not amber: this is a normal question the agent is asking, not a warning. It only ever
+   proposes — the PM's click is what changes anything. */
+.customer-confirm {
+  margin: 0 0 18px;
+  padding: 16px 18px;
+  border: 1px solid #b9cbe6;
+  border-left: 3px solid #1f5fa9;
+  border-radius: 10px;
+  background: #f7fafd;
+}
+.customer-confirm-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.customer-confirm-glyph {
+  color: #1f5fa9;
+  font-size: 1.05rem;
+  line-height: 1.4;
+}
+.customer-confirm-head strong {
+  display: block;
+  font-size: 0.98rem;
+  color: #10243d;
+}
+.customer-confirm-head p {
+  margin: 3px 0 0;
+  font-size: 0.8rem;
+  color: #45566b;
+  max-width: 78ch;
+}
+.customer-confirm-evidence {
+  margin: 12px 0 10px 30px;
+  padding: 9px 12px;
+  border-left: 2px solid #c9d6e6;
+  background: #fff;
+  border-radius: 0 6px 6px 0;
+  font-size: 0.82rem;
+  color: #10243d;
+  font-style: italic;
+  max-width: 90ch;
+}
+.customer-confirm-match {
+  margin: 0 0 12px 30px;
+  font-size: 0.78rem;
+  color: #2e8b57;
+  max-width: 90ch;
+}
+/* A name the library does not know will not unlock anything — say so before they accept it. */
+.customer-confirm-match.unknown {
+  color: #b26a00;
+}
+.customer-confirm-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: 30px;
+  flex-wrap: wrap;
+}
+.customer-confirm-actions input {
+  min-width: 240px;
+}
+@media (max-width: 760px) {
+  .customer-confirm-evidence,
+  .customer-confirm-match,
+  .customer-confirm-actions {
+    margin-left: 0;
+  }
+}
+
+/* ------------------------------------------------------------------ customer checklist readiness
+   Status colours are load-bearing, not decoration: "not checked" must never look like "not met",
+   so UNKNOWN is grey (absence of information) while NOT_MET is red (information we have). */
+.customer-readiness .panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.customer-readiness .panel-head h3 {
+  margin: 0 0 2px;
+  font-size: 1rem;
+}
+.customer-readiness .panel-head small {
+  color: #6b7c93;
+  font-size: 0.76rem;
+}
+.customer-readiness .panel-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.customer-readiness .panel-actions button {
+  font-size: 0.74rem;
+  padding: 7px 11px;
+}
+
+.readiness-headline {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--line, #e3e9f2);
+  border-radius: 10px;
+  background: #fbfcfe;
+}
+.readiness-dial {
+  min-width: 120px;
+  text-align: center;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #eef4fb;
+}
+.readiness-dial strong {
+  display: block;
+  font-size: 1.7rem;
+  line-height: 1.1;
+  color: #10243d;
+}
+.readiness-dial span {
+  font-size: 0.7rem;
+  color: #6b7c93;
+}
+.readiness-dial.green {
+  background: #e8f6ee;
+}
+.readiness-dial.amber {
+  background: #fdf3e0;
+}
+.readiness-dial.red {
+  background: #fdeced;
+}
+.readiness-facts p {
+  margin: 0 0 4px;
+  font-size: 0.8rem;
+  color: #45566b;
+}
+.readiness-warn {
+  color: #b26a00 !important;
+}
+
+.readiness-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 14px 0 10px;
+}
+.readiness-filters button {
+  font-size: 0.72rem;
+  padding: 5px 10px;
+  border: 1px solid var(--line, #e3e9f2);
+  border-radius: 999px;
+  background: #fff;
+  cursor: pointer;
+}
+.readiness-filters button.active {
+  border-color: #1f5fa9;
+  background: #eef4fb;
+  color: #1f5fa9;
+}
+
+.readiness-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 14px;
+}
+.readiness-section-bar {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) 2fr 46px;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.76rem;
+  color: #45566b;
+}
+.readiness-bar {
+  height: 7px;
+  border-radius: 999px;
+  background: #eef2f7;
+  overflow: hidden;
+}
+.readiness-bar i {
+  display: block;
+  height: 100%;
+  background: #1f5fa9;
+}
+.readiness-section-bar b {
+  text-align: right;
+  color: #10243d;
+}
+
+.readiness-items,
+.readiness-items ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+/*
+  A customer section folds away. The header stays a full-width row so the whole thing is the click
+  target, not just the little chevron.
+*/
+.readiness-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line, #e3e9f2);
+  border-radius: 8px;
+  background: #f7fafd;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.readiness-group-head:hover {
+  border-color: #c3d4e8;
+}
+.readiness-group.open .readiness-group-head {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.readiness-group-head h4 {
+  flex: 1;
+  margin: 0;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #1f5fa9;
+}
+.readiness-group-head .readiness-original {
+  text-transform: none;
+  letter-spacing: 0;
+}
+.readiness-group-count {
+  flex: none;
+  font-size: 0.72rem;
+  color: #6b7c93;
+  white-space: nowrap;
+}
+.readiness-item {
+  border: 1px solid var(--line, #e3e9f2);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  background: #fff;
+  border-left-width: 3px;
+}
+.readiness-item.status-met {
+  border-left-color: #2e8b57;
+}
+.readiness-item.status-partial {
+  border-left-color: #b26a00;
+}
+.readiness-item.status-not_met {
+  border-left-color: #c0392b;
+}
+.readiness-item.status-unknown {
+  border-left-color: #c2ccd8;
+}
+.readiness-item.status-not_applicable {
+  border-left-color: #9aa8b9;
+  opacity: 0.7;
+}
+
+.readiness-item-head {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 96px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  background: none;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.readiness-pill {
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 3px 7px;
+  border-radius: 999px;
+  text-align: center;
+}
+.status-met .readiness-pill {
+  background: #e8f6ee;
+  color: #2e8b57;
+}
+.status-partial .readiness-pill {
+  background: #fdf3e0;
+  color: #b26a00;
+}
+.status-not_met .readiness-pill {
+  background: #fdeced;
+  color: #c0392b;
+}
+.status-unknown .readiness-pill {
+  background: #eef2f7;
+  color: #6b7c93;
+}
+.status-not_applicable .readiness-pill {
+  background: #f2f4f7;
+  color: #9aa8b9;
+}
+.readiness-text {
+  font-size: 0.82rem;
+  color: #10243d;
+}
+/*
+  The source's own wording, under its English reading. Quieter and smaller: it is there to be
+  quoted back to the customer and matched against their file, not to compete with the line the
+  PM is actually reading.
+*/
+.readiness-original {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.74rem;
+  font-weight: 400;
+  color: #8496ab;
+}
+.readiness-chevron {
+  color: #9aa8b9;
+}
+
+.readiness-item-body {
+  padding: 0 12px 12px 118px;
+  font-size: 0.78rem;
+}
+.readiness-evidence {
+  margin: 0 0 6px;
+  padding: 8px 10px;
+  background: #f7fafd;
+  border-radius: 6px;
+  color: #10243d;
+}
+.readiness-evidence.muted {
+  color: #9aa8b9;
+}
+.readiness-note,
+.readiness-guidance {
+  margin: 0 0 4px;
+  color: #6b7c93;
+}
+.readiness-source {
+  margin: 6px 0 0;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9aa8b9;
+}
+
+/*
+  Governance Model — picking a card is not deciding, and the screen has to look different in the
+  two states or a PM leaves believing a change was saved.
+*/
+.approach-option button.pending-pick {
+  border-color: var(--amber);
+  color: var(--amber);
+  font-weight: 700;
+}
+.sticky-action.unsaved {
+  border-color: var(--amber);
+  box-shadow: inset 0 0 0 1px var(--amber);
+}
+.sticky-action.unsaved strong {
+  color: var(--amber);
+}
+/* Informational, not a failure — the mock-warning shell is reused for its shape, not its alarm. */
+.mock-warning.newer-recommendation {
+  border-color: #b8cbe4;
+  background: #f2f7fd;
+}
+.mock-warning.newer-recommendation strong {
+  color: var(--navy);
+}
+
+/* Read-only access, said once at the top of the workspace rather than per greyed-out button. */
+.read-only-banner {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 18px 32px -10px;
+  padding: 11px 14px;
+  border: 1px solid #d9e4f0;
+  border-radius: 10px;
+  background: #f2f7fd;
+}
+.read-only-banner p {
+  margin: 0;
+  font-size: 0.74rem;
+  color: #55637a;
+}
+.read-only-banner strong {
+  color: var(--navy);
+}
+/*
+  A control frozen for a view-only account. It must *look* unavailable while staying clickable,
+  because the browser fires no click on a `disabled` button and the reader would then get a grey
+  control with no explanation. `pointer-events` stays on for exactly that reason.
+*/
+.is-locked {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.is-locked:hover {
+  /* Nothing here responds, so nothing here should light up on hover. */
+  border-color: inherit;
+  background-image: none;
+}
+/* Cards are locked too — a reader may not move the selection, only read it. */
+article.approach-option.is-locked:hover {
+  box-shadow: none;
+}
+
+/* A disabled upload target must stop looking clickable, not just stop working. */
+.drop-zone.disabled,
+.reference-group > label.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* The fold/unfold control on a panel header — same affordance as the checklist sections. */
+.disclosure {
+  flex: none;
+  margin-left: 10px;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--line, #e3e9f2);
+  border-radius: 7px;
+  background: #fff;
+  color: #5b6b80;
+  font-size: 0.8rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.disclosure:hover {
+  border-color: #c3d4e8;
+  color: var(--navy);
+}
+
+/* What the Ready-to-Start ring was built from, under the verdict. */
+.readiness-basis {
+  display: block;
+  margin: 2px 0 4px;
+  font-size: 0.7rem;
+  color: #7b899a;
+}
+/* The checklist file behind the customer standard — provenance, not the headline. */
+.customer-source {
+  display: block;
+  margin-top: 3px;
+  color: #9aa8b9;
+}
+
+/*
+  Project Input — the form shows the required fields and whatever has an answer; the rest are
+  reached through the ⚙ drawer. These rules cover the header control, the note that says how many
+  are hidden, and the per-file remove button the reference groups had no way to offer.
+*/
+.section-title-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.section-title-actions b {
+  font-size: 0.7rem;
+  color: #7b899a;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.hidden-fields-note {
+  margin: 0;
+  padding: 12px 22px 0;
+  font-size: 0.74rem;
+  color: #6b7c93;
+}
+.hidden-fields-note b {
+  color: #10243d;
+}
+/* A file line now carries its text and a remove button, so it needs a row rather than a block. */
+.file-result {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.file-remove {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: #7b899a;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.file-remove:hover {
+  color: var(--red);
+}
+.reference-group > label.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/*
+  This drawer lists every optional field — around thirty, where the dashboard's lists eight — so the
+  list has to scroll on its own and leave the two buttons on screen.
+*/
+.input-field-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.input-field-drawer .dashboard-options {
+  flex: 1;
+  overflow-y: auto;
+  align-content: start;
+}
+/* An optional field that already has an answer cannot be hidden again — say so, don't just grey it. */
+.dashboard-options label.locked {
+  color: #9aa8b9;
+}
+.dashboard-options label em {
+  font-style: normal;
+  font-size: 0.72rem;
+}
+
+/*
+  Supporting evidence on the governance-model screen: English statement, the source's own sentence
+  beneath it, and the file it came from in bold red. The red is the palette's own --red, used here
+  because "which document said this" is the question a reviewer asks first and it must be findable
+  without reading the line.
+*/
+.evidence-list li {
+  margin-bottom: 10px;
+}
+.evidence-english {
+  display: block;
+}
+.evidence-original {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.82rem;
+  font-style: normal;
+  color: #6b7c93;
+}
+.evidence-source {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.74rem;
+  font-style: normal;
+  font-weight: 700;
+  color: var(--red);
+}
+.readiness-verdicts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line, #e3e9f2);
+}
+.readiness-verdicts span {
+  font-size: 0.72rem;
+  color: #6b7c93;
+}
+.readiness-verdicts button {
+  font-size: 0.7rem;
+  padding: 4px 9px;
+}
+
+/* The Planning Studio line naming which customer file a document fills. */
+.template-source {
+  margin: 4px 0 0;
+  font-size: 0.76rem;
+  color: #1f5fa9;
+  max-width: 70ch;
+}
+/* An outline template that will NOT be filled — amber, because the PM's expectation changes. */
+.template-source.warn {
+  color: #b26a00;
+  background: #fff1d6;
+  padding: 8px 10px;
+  border-radius: 6px;
+}
+
+@media (max-width: 900px) {
+  .readiness-item-head {
+    grid-template-columns: 1fr auto;
+  }
+  .readiness-pill {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+  .readiness-item-body {
+    padding-left: 12px;
+  }
+}
+
+/* ------------------------------------------------------------------ customer reference library
+   A router <Link> styled as one of the prototype's buttons — the design system only ever styled
+   <button>, and these actions navigate rather than mutate. */
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.customer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.customer-card {
+  background: #fff;
+  border: 1px solid var(--line, #e3e9f2);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.customer-card.open {
+  border-color: #b9cbe6;
+  box-shadow: 0 6px 20px rgba(16, 36, 61, 0.07);
+}
+.customer-card > header {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) 2fr auto;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 18px;
+  cursor: pointer;
+}
+.customer-card > header:hover {
+  background: #f7fafd;
+}
+
+.customer-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.customer-identity > div strong {
+  display: block;
+  font-size: 0.95rem;
+}
+.customer-identity > div span {
+  font-size: 0.76rem;
+  color: #6b7c93;
+}
+.customer-key {
+  min-width: 62px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #10243d;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
+.customer-aliases {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.customer-aliases em {
+  font-style: normal;
+  font-size: 0.72rem;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #eef4fb;
+  color: #1f5fa9;
+}
+.customer-aliases em.muted {
+  background: transparent;
+  color: #9aa8b9;
+}
+.customer-chevron {
+  color: #6b7c93;
+}
+
+.customer-body {
+  border-top: 1px solid var(--line, #e3e9f2);
+  padding: 16px 18px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+.customer-body h4 {
+  margin: 0 0 2px;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #1f5fa9;
+}
+.customer-hint {
+  margin: 0 0 10px;
+  font-size: 0.78rem;
+  color: #6b7c93;
+}
+.customer-empty {
+  font-size: 0.8rem;
+  color: #9aa8b9;
+  margin: 0 0 10px;
+}
+
+.customer-assets {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.customer-assets li {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line, #e3e9f2);
+  border-radius: 9px;
+  background: #fbfcfe;
+}
+.customer-assets li.superseded {
+  opacity: 0.62;
+}
+.customer-assets li strong {
+  display: block;
+  font-size: 0.86rem;
+}
+.customer-assets li strong em {
+  font-style: normal;
+  color: #6b7c93;
+  font-weight: 500;
+}
+.customer-assets li small {
+  display: block;
+  font-size: 0.73rem;
+  color: #6b7c93;
+}
+/* What the parser managed to read — deliberately always in view, never behind a click. */
+.customer-assets .parse-note {
+  margin-top: 4px;
+  color: #1f5fa9;
+}
+.customer-assets .pill {
+  margin-left: 6px;
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #eef4fb;
+  color: #1f5fa9;
+  font-weight: 700;
+}
+
+.customer-asset-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.customer-asset-actions > b {
+  min-width: 34px;
+  text-align: center;
+  font-size: 1.05rem;
+  color: #10243d;
+}
+.customer-asset-actions button {
+  font-size: 0.72rem;
+  padding: 6px 9px;
+}
+.customer-asset-actions .danger,
+.customer-danger .danger {
+  color: #a33;
+  border-color: #e9c4c4;
+}
+
+.placeholder-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 8px 0 0;
+  border-top: 1px dashed var(--line, #e3e9f2);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 4px 16px;
+}
+.placeholder-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.placeholder-list code {
+  font-size: 0.74rem;
+  color: #10243d;
+  background: #eef4fb;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.placeholder-list span {
+  font-size: 0.7rem;
+  color: #6b7c93;
+}
+/* A placeholder broken across text runs needs merging before substitution — flag it loudly. */
+.placeholder-list b {
+  font-size: 0.66rem;
+  color: #b26a00;
+  background: #fff1d6;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.customer-template-add {
+  display: flex;
+  gap: 8px;
+}
+.customer-template-add input {
+  flex: 1;
+  max-width: 320px;
+}
+
+.customer-logo-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.customer-logo-row img {
+  max-height: 46px;
+  max-width: 180px;
+  object-fit: contain;
+}
+
+.customer-danger {
+  border-top: 1px solid var(--line, #e3e9f2);
+  padding-top: 12px;
+}
+
+/* --- parsed checklist preview */
+.checklist-search {
+  min-width: 200px;
+}
+.checklist-parse-note {
+  font-size: 0.78rem;
+  color: #1f5fa9;
+  background: #eef4fb;
+  padding: 8px 12px;
+  border-radius: 8px;
+}
+.checklist-group h2 {
+  font-size: 0.95rem;
+  color: #1f5fa9;
+  margin: 22px 0 8px;
+}
+.checklist-group h2 em {
+  font-style: normal;
+  font-size: 0.74rem;
+  color: #6b7c93;
+}
+.checklist-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+.checklist-table th {
+  text-align: left;
+  background: #10243d;
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.72rem;
+  padding: 7px 10px;
+}
+.checklist-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line, #e3e9f2);
+  vertical-align: top;
+}
+.checklist-table tr:nth-child(even) td {
+  background: #f7fafd;
+}
+.checklist-table .col-order {
+  width: 42px;
+  color: #6b7c93;
+}
+.checklist-table .col-answer {
+  width: 150px;
+}
+.checklist-table .col-note {
+  width: 240px;
+  color: #6b7c93;
+}
+.checklist-table .muted {
+  color: #c2ccd8;
+}
+
+@media (max-width: 1080px) {
+  .customer-card > header {
+    grid-template-columns: 1fr auto;
+  }
+  .customer-aliases {
+    grid-column: 1 / -1;
+  }
+  .customer-assets li {
+    flex-direction: column;
+  }
+}

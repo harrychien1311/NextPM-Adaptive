@@ -5,7 +5,12 @@ import type {
   AgentSession,
   ApproachResponse,
   Approach,
+  ChecklistDetail,
+  ChecklistReadiness,
+  ChecklistStatus,
+  CustomerSummary,
   DashboardResponse,
+  DocumentExportFormat,
   DocumentGap,
   DocumentSection,
   DocumentStatus,
@@ -30,6 +35,51 @@ export const authApi = {
   register: (body: { email: string; name: string; password: string; jobTitle?: string }) =>
     api.post<{ token: string; user: User }>('/auth/register', body),
   me: () => api.get<{ user: User }>('/auth/me'),
+};
+
+/**
+ * The customer reference library — each customer's checklists and document templates, uploaded
+ * once and reused by every project for them. Readable by any delivery account; only a program
+ * owner or an administrator may change it.
+ */
+export const customersApi = {
+  list: () => api.get<{ customers: CustomerSummary[] }>('/customers'),
+  create: (body: { name: string; key?: string; aliases?: string[] }) => api.post<CustomerSummary>('/customers', body),
+  update: (customerId: string, body: { name?: string; aliases?: string[]; active?: boolean }) =>
+    api.patch<CustomerSummary>(`/customers/${customerId}`, body),
+  remove: (customerId: string) => api.delete<{ deleted: boolean }>(`/customers/${customerId}`),
+
+  uploadChecklist: (customerId: string, file: File, name: string) => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('name', name);
+    return api.upload<{ id: string; version: number; itemCount: number; parsed: string }>(
+      `/customers/${customerId}/checklists`,
+      form,
+    );
+  },
+  checklistItems: (checklistId: string) => api.get<ChecklistDetail>(`/customers/checklists/${checklistId}/items`),
+  removeChecklist: (checklistId: string) => api.delete<{ deleted: boolean }>(`/customers/checklists/${checklistId}`),
+
+  uploadTemplate: (customerId: string, file: File, documentType: string) => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('documentType', documentType);
+    return api.upload<{ id: string; version: number; parseNote: string }>(`/customers/${customerId}/templates`, form);
+  },
+  removeTemplate: (templateId: string) => api.delete<{ deleted: boolean }>(`/customers/templates/${templateId}`),
+
+  uploadLogo: (customerId: string, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.upload<CustomerSummary>(`/customers/${customerId}/logo`, form);
+  },
+
+  /** Downloads the stored original, so the parse can be checked against the real file. */
+  downloadChecklist: (checklistId: string, fileName: string) =>
+    api.download(`/customers/checklists/${checklistId}/file`, fileName),
+  downloadTemplate: (templateId: string, fileName: string) =>
+    api.download(`/customers/templates/${templateId}/file`, fileName),
 };
 
 export const programApi = {
@@ -93,6 +143,16 @@ export const inputApi = {
     api.put<InputProfile>(`/projects/${projectId}/input`, { values }),
   /** Extracts from the uploaded documents, prefills what it can, then verifies the PM's answers. */
   verify: (projectId: string) => api.post<VerifyResult>(`/projects/${projectId}/input/verify`),
+  /**
+   * The PM's decision on the customer read from the documents. Accepting sets `Project.customer`,
+   * which is what unlocks that customer's checklist and templates; `value` lets the PM correct the
+   * proposed name first.
+   */
+  resolveCustomerSuggestion: (projectId: string, action: 'accept' | 'dismiss', value?: string) =>
+    api.post<{ customer: string | null; suggestion: null }>(
+      `/projects/${projectId}/input/customer-suggestion`,
+      { action, ...(value ? { value } : {}) },
+    ),
   addCustomField: (projectId: string, body: { name: string; value?: string; useIn?: string }) =>
     api.post(`/projects/${projectId}/custom-fields`, body),
   removeCustomField: (projectId: string, id: string) => api.delete(`/projects/${projectId}/custom-fields/${id}`),
@@ -140,7 +200,38 @@ export const documentsApi = {
       sections: DocumentSection[];
       gaps: DocumentGap[];
       structuredData: DocumentStructuredData | null;
+      // Was 'DOCX' | 'XLSX' — a type that had stopped being true once decks and charts became
+      // spreadsheets' neighbours. The server has always been the one deciding this.
+      exportFormat: DocumentExportFormat;
+      /** A register's own columns — present whether or not the document has been generated. */
+      tableColumns: string[] | null;
     }>(`/projects/${projectId}/documents/${documentId}`),
+  /**
+   * The slides of the deck this document downloads as, read out of the real rendered file. Used by
+   * the preview so a deck previews as the deck — including one filled from a customer's own
+   * template, whose slides live in their file and nowhere else.
+   */
+  slides: (projectId: string, documentId: string) =>
+    api.get<{
+      fileName: string;
+      template: { customerKey: string; sourceFile: string } | null;
+      slides: { number: number; lines: string[]; pictures: number; hasTable: boolean }[];
+    }>(`/projects/${projectId}/documents/${documentId}/slides`),
+  /**
+   * The same, for a document filled from a customer's workbook: the real sheets of the real file.
+   * `merges` is 0-based against `rows`, so the grid can span the cells the workbook spans.
+   */
+  sheets: (projectId: string, documentId: string) =>
+    api.get<{
+      fileName: string;
+      template: { customerKey: string; sourceFile: string };
+      sheets: {
+        name: string;
+        rows: string[][];
+        merges: { row: number; col: number; rowSpan: number; colSpan: number }[];
+        truncated: boolean;
+      }[];
+    }>(`/projects/${projectId}/documents/${documentId}/sheets`),
   /** The model chooses the structure — there is no template or section contract to set first. */
   generate: (projectId: string, definitionId: string) =>
     api.post(`/projects/${projectId}/documents/generate`, { definitionId }),
@@ -156,8 +247,29 @@ export const documentsApi = {
     api.post(`/projects/${projectId}/documents/${documentId}/approve`),
   export: (projectId: string, format: 'DOCX' | 'XLSX' | 'PDF' | 'CONFLUENCE') =>
     api.post(`/projects/${projectId}/exports`, { format }),
-  downloadDocx: (projectId: string, documentId: string, name: string) =>
-    api.download(`/projects/${projectId}/documents/${documentId}/export.docx`, `${name}.docx`),
+  /**
+   * One download for every document — the server chooses `.docx` or `.xlsx` and says so in the
+   * response headers. `format` only shapes the fallback name used when those headers are missing.
+   */
+  download: (projectId: string, documentId: string, name: string, format: DocumentExportFormat = 'DOCX') =>
+    api.download(`/projects/${projectId}/documents/${documentId}/export`, `${name}.${format.toLowerCase()}`),
+};
+
+/**
+ * How far a project meets what its customer's checklist requires — the readiness number the
+ * customer would actually ask about, as opposed to how full our own input form is.
+ */
+export const checklistApi = {
+  readiness: (projectId: string) => api.get<ChecklistReadiness>(`/projects/${projectId}/checklist`),
+  /** Re-runs the assessment and waits. `onlyUnmet` skips items already met, which is much cheaper. */
+  assess: (projectId: string, onlyUnmet = false) =>
+    api.post<{ readiness: ChecklistReadiness; sentToModel: number; provider: string }>(
+      `/projects/${projectId}/checklist/assess`,
+      { onlyUnmet },
+    ),
+  /** The PM's own verdict on one item — outranks the deterministic pass and the model. */
+  setItem: (projectId: string, itemId: string, status: ChecklistStatus, note?: string) =>
+    api.post<ChecklistReadiness>(`/projects/${projectId}/checklist/items/${itemId}`, { status, note }),
 };
 
 export const dashboardExportApi = {

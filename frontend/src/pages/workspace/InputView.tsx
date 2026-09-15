@@ -4,8 +4,13 @@ import { inputApi, rulesApi } from '../../api/endpoints';
 import { ApiError } from '../../api/client';
 import { useToast } from '../../components/Toast';
 import { useDebouncedCallback } from '../../hooks/useDebouncedCallback';
+import { useProjectWrite } from '../../hooks/useProjectWrite';
+import { CustomerConfirmBanner } from './CustomerConfirmBanner';
 import type { InputField } from '../../api/types';
 import type { WorkspaceView } from '../WorkspacePage';
+
+/** One wording for every disabled control, so a reader is told why rather than left guessing. */
+const READ_ONLY_HINT = 'You have view-only access to this project';
 
 export function InputView({
   projectId,
@@ -17,6 +22,8 @@ export function InputView({
   const notify = useToast();
   const queryClient = useQueryClient();
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
+  /** A reader sees the same screen, with nothing on it that pretends to accept a change. */
+  const canWrite = useProjectWrite(projectId);
 
   const { data, isLoading } = useQuery({
     queryKey: ['input', projectId],
@@ -25,10 +32,46 @@ export function InputView({
 
   const [draft, setDraft] = useState<Record<string, string | null>>({});
   const [savedAt, setSavedAt] = useState<Date | null>(null);
+  const [fieldDrawerOpen, setFieldDrawerOpen] = useState(false);
+
+  /**
+   * Optional fields the PM has asked to see even though nothing has answered them yet.
+   *
+   * Only two fields per project type are required, so showing all thirty at once is what made this
+   * form read as a wall of empty boxes. The rest appear on their own once something fills them —
+   * *Verify input* is the usual way — and this is the escape hatch for a PM who wants one in front
+   * of them from the start.
+   *
+   * Kept in the browser rather than on the server: it is a per-viewer display preference, not
+   * project data, and nothing downstream reads it.
+   */
+  const [revealed, setRevealed] = useState<Record<string, boolean>>({});
+
+  const revealKey = `nextpm:input-revealed:${projectId}`;
 
   useEffect(() => {
     setDraft({});
+    setFieldDrawerOpen(false);
+    try {
+      const stored = window.localStorage.getItem(`nextpm:input-revealed:${projectId}`);
+      setRevealed(stored ? (JSON.parse(stored) as Record<string, boolean>) : {});
+    } catch {
+      // A blocked or corrupted store is not worth a broken screen — start from the default.
+      setRevealed({});
+    }
   }, [projectId]);
+
+  const reveal = (definitionId: string, show: boolean) => {
+    setRevealed((current) => {
+      const next = { ...current, [definitionId]: show };
+      try {
+        window.localStorage.setItem(revealKey, JSON.stringify(next));
+      } catch {
+        // Preference lost on reload; the form still works, which is what matters.
+      }
+      return next;
+    });
+  };
 
   const save = useMutation({
     mutationFn: (values: { definitionId: string; value: string | null }[]) => inputApi.save(projectId, values),
@@ -53,6 +96,15 @@ export function InputView({
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: ['input', projectId] });
       await queryClient.invalidateQueries({ queryKey: ['workspace', projectId] });
+
+      // A proposed customer is the one result worth interrupting for — it gates the customer
+      // checklist and the kickoff template, and it is waiting on a decision only the PM can make.
+      if (result.customerSuggestion) {
+        notify({
+          title: `Is this project for ${result.customerSuggestion.name}?`,
+          detail: 'Confirm it above the form — nothing has been changed yet.',
+        });
+      }
 
       const read = result.documentsRead
         ? `Read ${result.documentsRead} document${result.documentsRead === 1 ? '' : 's'}. `
@@ -143,6 +195,13 @@ export function InputView({
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['input', projectId] }),
   });
 
+  /** The same call, from the reference groups — without it a PM cannot clear a file they added. */
+  const removeReferenceFile = useMutation({
+    mutationFn: (id: string) => inputApi.removeReference(projectId, id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['input', projectId] }),
+    onError: (error) => notify({ title: 'Could not remove the file', detail: (error as Error).message }),
+  });
+
   if (isLoading || !data) {
     return (
       <section className="view active">
@@ -164,6 +223,18 @@ export function InputView({
   const pendingDraftValues = () =>
     Object.entries(draft).map(([definitionId, value]) => ({ definitionId, value: value || null }));
 
+  /**
+   * A field earns its place on screen by being required, by having an answer, or by the PM asking
+   * for it. "Having an answer" is what makes *Verify input* reveal exactly the fields the uploaded
+   * documents could fill: they arrive with a value, so they stop being hidden.
+   */
+  const isAnswered = (field: InputField) => Boolean(valueOf(field));
+  const isVisible = (field: InputField) => field.required || isAnswered(field) || revealed[field.definitionId];
+
+  const visibleFields = data.fields.filter(isVisible);
+  const hiddenFields = data.fields.filter((field) => !isVisible(field));
+  const optionalFields = data.fields.filter((field) => !field.required);
+
   return (
     <section className="view active">
       <div className="page-head compact">
@@ -176,10 +247,6 @@ export function InputView({
                 ? 'Provide the minimum product context.'
                 : 'Provide the minimum delivery context.'}
           </h1>
-          <span>
-            Structured answers drive the AI recommendation. Uploaded files can prefill or verify answers, but are not required to
-            create the plan.
-          </span>
         </div>
         <div className="completion">
           <span>Input readiness</span>
@@ -189,6 +256,150 @@ export function InputView({
           </div>
         </div>
       </div>
+
+      {/*
+        Above the form on purpose: the customer decides which checklist scores this project and
+        whose template its kickoff deck fills, so it should be settled before the PM works down
+        the fields — not discovered afterwards.
+      */}
+      <CustomerConfirmBanner projectId={projectId} suggestion={data.customerSuggestion} />
+
+      {/*
+        The uploads come before the form on purpose. Reading a document is the cheapest way to fill
+        this profile in, so the PM should be offered it first — answering thirty fields by hand and
+        only then finding the upload box is the wrong order.
+      */}
+      <article className="panel upload-panel description-panel">
+        <div className="upload-head">
+          <div>
+            <span className="domain-glyph navy">D</span>
+            <div>
+              <h2>Project description document</h2>
+              <p>A short brief, proposal or overview — read for AI analysis, not just structured extraction</p>
+            </div>
+          </div>
+          <span className="required-chip">Optional</span>
+        </div>
+
+        {data.descriptionDocument && (
+          <div className="requirement-cards">
+            <div className={`req-card${data.descriptionDocument.textAvailable ? '' : ' pending'}`}>
+              <span>{data.descriptionDocument.textAvailable ? '✓' : '!'}</span>
+              <div>
+                <strong>{data.descriptionDocument.fileName}</strong>
+                <small>{data.descriptionDocument.message}</small>
+              </div>
+              <button
+                type="button"
+                onClick={() => removeDescription.mutate(data.descriptionDocument!.id)}
+                disabled={!canWrite || removeDescription.isPending}
+                title={canWrite ? undefined : READ_ONLY_HINT}
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+        )}
+
+        <label className={`drop-zone${canWrite ? '' : ' disabled'}`} title={canWrite ? undefined : READ_ONLY_HINT}>
+          <span>⇧</span>
+          <strong>
+            {!canWrite
+              ? 'Uploading needs edit access'
+              : data.descriptionDocument
+                ? 'Click to replace the document'
+                : 'Click to upload'}
+          </strong>
+          <p>PDF, DOCX or TXT — read as text</p>
+          <small>Max {data.policy.maxUploadMb} MB</small>
+          <input
+            type="file"
+            accept=".pdf,.docx,.doc,.txt"
+            disabled={!canWrite}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) uploadDescription.mutate(file);
+              event.target.value = '';
+            }}
+          />
+        </label>
+
+      </article>
+
+      <article className="panel reference-panel">
+        <div className="panel-head">
+          <div>
+            <h2>Optional reference sources</h2>
+            <p>Upload a small, classified source only to prefill or verify structured data</p>
+          </div>
+          <span className="policy-chip">
+            Max {data.policy.maxFilesPerGroup} files/group · {data.policy.maxUploadMb} MB/file
+          </span>
+        </div>
+        <div className="reference-groups">
+          {data.referenceGroups.map((group) => {
+            const full = group.files.length >= data.policy.maxFilesPerGroup;
+            return (
+              <div className="reference-group" key={group.group}>
+                <span className={`domain-glyph ${group.tone}`}>{group.glyph}</span>
+                <div>
+                  <strong>{group.title}</strong>
+                  <small>{group.hint}</small>
+                  {group.files.length === 0 ? (
+                    <div className="empty-file">No file — direct input will be used</div>
+                  ) : (
+                    group.files.map((file) => (
+                      <div
+                        key={file.id}
+                        className={`file-result ${file.status === 'VERIFIED' ? 'ok-file' : 'warning-file'}`}
+                      >
+                        <span>
+                          {file.status === 'VERIFIED' ? '✓' : '!'} {file.fileName} <em>{file.message}</em>
+                        </span>
+                        {/*
+                          Without this there is no way to take a file back out of a group, which is
+                          how a message from a file the PM had already moved on from stayed on
+                          screen. An unreadable file is also cleared automatically by the next
+                          upload to the same group.
+                        */}
+                        <button
+                          type="button"
+                          className="file-remove"
+                          title={canWrite ? `Remove ${file.fileName}` : READ_ONLY_HINT}
+                          aria-label={`Remove ${file.fileName}`}
+                          onClick={() => removeReferenceFile.mutate(file.id)}
+                          disabled={!canWrite || removeReferenceFile.isPending}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <label
+                  className={full || !canWrite ? 'disabled' : undefined}
+                  title={!canWrite ? READ_ONLY_HINT : full ? 'Remove a file before adding another' : undefined}
+                >
+                  {group.files.length === 0 ? 'Add' : full ? 'Full' : 'Add another'}
+                  <input
+                    type="file"
+                    accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx"
+                    disabled={full || !canWrite}
+                    ref={(element) => {
+                      fileInputs.current[group.group] = element;
+                    }}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) uploadReference.mutate({ group: group.group, file });
+                      event.target.value = '';
+                    }}
+                  />
+                </label>
+              </div>
+            );
+          })}
+        </div>
+      </article>
 
       <div className="content-split input-split">
         <form className="panel form-panel" onSubmit={(event) => event.preventDefault()}>
@@ -200,11 +411,24 @@ export function InputView({
                 <p>Required signals for approach and document selection</p>
               </div>
             </div>
-            <b>{data.counters.total} required</b>
+            <div className="section-title-actions">
+              <b>
+                {visibleFields.length} of {data.fields.length} shown
+              </b>
+              <button
+                type="button"
+                className="primary icon-only"
+                onClick={() => setFieldDrawerOpen(true)}
+                title="Choose which fields to show"
+                aria-label="Choose which fields to show"
+              >
+                ⚙
+              </button>
+            </div>
           </div>
 
           <div className="form-grid">
-            {data.fields.map((field) => (
+            {visibleFields.map((field) => (
               <label key={field.definitionId}>
                 {field.label}
                 {field.required ? ' *' : ''}
@@ -212,7 +436,11 @@ export function InputView({
                   <span className="required-chip ai-suggested-chip">AI suggested — review</span>
                 )}
                 {field.fieldType === 'SELECT' ? (
-                  <select value={valueOf(field)} onChange={(event) => change(field, event.target.value)}>
+                  <select
+                    value={valueOf(field)}
+                    disabled={!canWrite}
+                    onChange={(event) => change(field, event.target.value)}
+                  >
                     <option value="">— select —</option>
                     {field.options.map((option) => (
                       <option key={option} value={option}>
@@ -225,6 +453,7 @@ export function InputView({
                     <input
                       type="date"
                       value={valueOf(field).split('..')[0] ?? ''}
+                      disabled={!canWrite}
                       onChange={(event) =>
                         change(field, `${event.target.value}..${valueOf(field).split('..')[1] ?? ''}`)
                       }
@@ -232,6 +461,7 @@ export function InputView({
                     <input
                       type="date"
                       value={valueOf(field).split('..')[1] ?? ''}
+                      disabled={!canWrite}
                       onChange={(event) =>
                         change(field, `${valueOf(field).split('..')[0] ?? ''}..${event.target.value}`)
                       }
@@ -241,12 +471,28 @@ export function InputView({
                   <input
                     type={field.fieldType === 'DATE' ? 'date' : field.fieldType === 'NUMBER' ? 'number' : 'text'}
                     value={valueOf(field)}
+                    disabled={!canWrite}
                     onChange={(event) => change(field, event.target.value)}
                   />
                 )}
               </label>
             ))}
           </div>
+
+          {/*
+            Says plainly that the form is not the whole form. Hiding fields without saying so would
+            leave a PM wondering where the schedule questions went.
+          */}
+          {hiddenFields.length > 0 && (
+            <p className="hidden-fields-note">
+              <b>{hiddenFields.length}</b> optional field{hiddenFields.length === 1 ? ' is' : 's are'} hidden. Press{' '}
+              <b>Verify input</b> and any the uploaded documents can answer will appear filled in, or{' '}
+              <button type="button" className="text-button" onClick={() => setFieldDrawerOpen(true)}>
+                choose them yourself
+              </button>
+              .
+            </p>
+          )}
 
           <div className="section-title second custom-head">
             <div>
@@ -259,6 +505,8 @@ export function InputView({
             <button
               type="button"
               className="ghost"
+              disabled={!canWrite}
+              title={canWrite ? undefined : READ_ONLY_HINT}
               onClick={() => {
                 const name = window.prompt('Field name', 'Release blackout');
                 if (name) addField.mutate(name);
@@ -287,11 +535,36 @@ export function InputView({
                     <option value="BOTH">Both</option>
                   </select>
                 </label>
-                <button type="button" className="remove-field" onClick={() => removeField.mutate(field.id)}>
+                <button
+                  type="button"
+                  className="remove-field"
+                  disabled={!canWrite}
+                  title={canWrite ? undefined : READ_ONLY_HINT}
+                  onClick={() => removeField.mutate(field.id)}
+                >
                   ×
                 </button>
               </div>
             ))}
+          </div>
+
+          {/*
+            Sits directly above the three buttons it describes. It explains what pressing them does,
+            so it belongs where the PM is about to press one — not at the top of the upload panel,
+            several screens away from the action.
+          */}
+          <div className="extract-note form-note">
+            <span>✦</span>
+            <div>
+              <strong>What happens next</strong>
+              <p>
+                <b>Verify input</b> reads every uploaded document into this form: fields it can answer appear filled
+                in and marked AI suggested, and the rest stay hidden until something answers them. It then marks your
+                own answers verified. <b>✦ Suggest governance model</b> reads the description document alongside your
+                verified inputs and proposes a model with a confidence score and alternatives. Nothing here is applied
+                without your confirmation.
+              </p>
+            </div>
           </div>
 
           <div className="form-actions">
@@ -303,8 +576,8 @@ export function InputView({
               type="button"
               className="secondary"
               onClick={() => save.mutate(pendingDraftValues())}
-              disabled={save.isPending}
-              title="Save what you have typed without verifying it"
+              disabled={!canWrite || save.isPending}
+              title={canWrite ? 'Save what you have typed without verifying it' : READ_ONLY_HINT}
             >
               Save draft
             </button>
@@ -312,8 +585,8 @@ export function InputView({
               type="button"
               className="secondary"
               onClick={() => verify.mutate()}
-              disabled={verify.isPending || suggestModel.isPending}
-              title="Read the uploaded documents into the form, then confirm your answers"
+              disabled={!canWrite || verify.isPending || suggestModel.isPending}
+              title={canWrite ? 'Read the uploaded documents into the form, then confirm your answers' : READ_ONLY_HINT}
             >
               {verify.isPending ? 'Reading documents…' : 'Verify input'}
             </button>
@@ -321,8 +594,8 @@ export function InputView({
               type="button"
               className="primary"
               onClick={() => suggestModel.mutate()}
-              disabled={suggestModel.isPending || verify.isPending}
-              title="Ask the AI to recommend a governance model from the verified inputs"
+              disabled={!canWrite || suggestModel.isPending || verify.isPending}
+              title={canWrite ? 'Ask the AI to recommend a governance model from the verified inputs' : READ_ONLY_HINT}
             >
               {suggestModel.isPending ? 'Asking AI…' : '✦ Suggest governance model'}
             </button>
@@ -330,27 +603,10 @@ export function InputView({
         </form>
 
         <aside className="context-aside">
-          <article className="panel verification-card">
-            <span className="ai-label">RULE VERIFICATION</span>
-            <h3>
-              {data.counters.verified} of {data.counters.total} required data points verified
-            </h3>
-            <div className="verify-meter">
-              <i style={{ width: `${Math.round((data.counters.verified / Math.max(data.counters.total, 1)) * 100)}%` }} />
-            </div>
-            <div className="verify-counts">
-              <span>
-                <b>{data.counters.pmInput}</b>PM input
-              </span>
-              <span>
-                <b>{data.counters.fileReference}</b>File reference
-              </span>
-              <span className="warn-text">
-                <b>{data.counters.missing}</b>Missing
-              </span>
-            </div>
-          </article>
-
+          {/*
+            The "Rule verification" card used to sit here restating the Input readiness meter in the
+            page header with a second set of numbers. One reading of the same thing is enough.
+          */}
           <article className="panel">
             <h3>Missing information</h3>
             {data.missingInformation.length === 0 && (
@@ -367,6 +623,8 @@ export function InputView({
                       {item.suggestions.map((suggestion) => (
                         <button
                           key={suggestion}
+                          disabled={!canWrite}
+                          title={canWrite ? undefined : READ_ONLY_HINT}
                           onClick={() => resolve.mutate({ actionId: item.id, value: suggestion })}
                         >
                           {suggestion}
@@ -376,6 +634,8 @@ export function InputView({
                   ) : (
                     <button
                       className="text-button add-answer"
+                      disabled={!canWrite}
+                      title={canWrite ? undefined : READ_ONLY_HINT}
                       onClick={() => {
                         const value = window.prompt(item.title, '');
                         if (value) resolve.mutate({ actionId: item.id, value });
@@ -391,123 +651,56 @@ export function InputView({
         </aside>
       </div>
 
-      <article className="panel upload-panel description-panel">
-        <div className="upload-head">
+      {/*
+        The same drawer pattern as the dashboard's ⚙, for the same reason: a screen that decides
+        what to show you needs one obvious place to override it. A field that already has an answer
+        is locked on — hiding a filled-in field would hide the PM's own data from them.
+      */}
+      <div className={`dashboard-drawer input-field-drawer${fieldDrawerOpen ? ' open' : ''}`}>
+        <div className="drawer-head">
           <div>
-            <span className="domain-glyph navy">D</span>
-            <div>
-              <h2>Project description document</h2>
-              <p>A short brief, proposal or overview — read for AI analysis, not just structured extraction</p>
-            </div>
+            <strong>Custom input</strong>
+            <span>Choose which optional fields stay on the form</span>
           </div>
-          <span className="required-chip">Optional</span>
+          <button onClick={() => setFieldDrawerOpen(false)}>×</button>
         </div>
-
-        {data.descriptionDocument && (
-          <div className="requirement-cards">
-            <div className={`req-card${data.descriptionDocument.textAvailable ? '' : ' pending'}`}>
-              <span>{data.descriptionDocument.textAvailable ? '✓' : '!'}</span>
-              <div>
-                <strong>{data.descriptionDocument.fileName}</strong>
-                <small>{data.descriptionDocument.message}</small>
-              </div>
-              <button
-                type="button"
-                onClick={() => removeDescription.mutate(data.descriptionDocument!.id)}
-                disabled={removeDescription.isPending}
-              >
-                Remove
-              </button>
-            </div>
-          </div>
-        )}
-
-        <label className="drop-zone">
-          <span>⇧</span>
-          <strong>{data.descriptionDocument ? 'Click to replace the document' : 'Click to upload'}</strong>
-          <p>PDF, DOCX or TXT — read as text</p>
-          <small>Max {data.policy.maxUploadMb} MB</small>
-          <input
-            type="file"
-            accept=".pdf,.docx,.doc,.txt"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) uploadDescription.mutate(file);
-              event.target.value = '';
-            }}
-          />
-        </label>
-
-        <div className="extract-note">
-          <span>✦</span>
-          <div>
-            <strong>What happens next</strong>
-            <p>
-              When you ask the AI for a governance-model recommendation on the next screen, it reads this document
-              together with your verified inputs, proposes values for empty fields above (marked AI suggested,
-              unverified) and returns a recommended governance model with a confidence score and alternatives.
-              Nothing here is applied without your confirmation.
-            </p>
-          </div>
-        </div>
-      </article>
-
-      <article className="panel reference-panel">
-        <div className="panel-head">
-          <div>
-            <h2>Optional reference sources</h2>
-            <p>Upload a small, classified source only to prefill or verify structured data</p>
-          </div>
-          <span className="policy-chip">
-            Max {data.policy.maxFilesPerGroup} files/group · {data.policy.maxUploadMb} MB/file
-          </span>
-        </div>
-        <div className="reference-groups">
-          {data.referenceGroups.map((group) => (
-            <div className="reference-group" key={group.group}>
-              <span className={`domain-glyph ${group.tone}`}>{group.glyph}</span>
-              <div>
-                <strong>{group.title}</strong>
-                <small>{group.hint}</small>
-                {group.files.length === 0 ? (
-                  <div className="empty-file">No file — direct input will be used</div>
-                ) : (
-                  group.files.map((file) => (
-                    <div
-                      key={file.id}
-                      className={`file-result ${file.status === 'VERIFIED' ? 'ok-file' : 'warning-file'}`}
-                    >
-                      {file.status === 'VERIFIED' ? '✓' : '!'} {file.fileName} <em>{file.message}</em>
-                    </div>
-                  ))
-                )}
-              </div>
-              <label>
-                {group.files.length ? 'Replace' : 'Add'}
+        <div className="dashboard-options">
+          {optionalFields.map((field) => {
+            const answered = isAnswered(field);
+            return (
+              <label key={field.definitionId} className={answered ? 'locked' : undefined}>
                 <input
-                  type="file"
-                  accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx"
-                  ref={(element) => {
-                    fileInputs.current[group.group] = element;
-                  }}
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    if (file) uploadReference.mutate({ group: group.group, file });
-                    event.target.value = '';
-                  }}
-                />
+                  type="checkbox"
+                  checked={answered || Boolean(revealed[field.definitionId])}
+                  disabled={answered}
+                  onChange={(event) => reveal(field.definitionId, event.target.checked)}
+                />{' '}
+                {field.label}
+                {answered && <em> · answered</em>}
               </label>
-            </div>
-          ))}
+            );
+          })}
+          {optionalFields.length === 0 && <p className="program-empty">Every field on this form is required.</p>}
         </div>
-        <div className="reference-note">
-          <span>✦</span>
-          <p>
-            <strong>Verification sequence:</strong> classify file → extract candidate values → compare with PM input →
-            flag missing/conflict → PM confirms. Files never become approved facts automatically.
-          </p>
-        </div>
-      </article>
+        <button
+          type="button"
+          className="secondary full"
+          onClick={() => {
+            const all = Object.fromEntries(optionalFields.map((field) => [field.definitionId, true]));
+            setRevealed(all);
+            try {
+              window.localStorage.setItem(revealKey, JSON.stringify(all));
+            } catch {
+              // See `reveal` — the preference is a convenience, never a requirement.
+            }
+          }}
+        >
+          Show every field
+        </button>
+        <button className="primary full" onClick={() => setFieldDrawerOpen(false)}>
+          Done
+        </button>
+      </div>
     </section>
   );
 }

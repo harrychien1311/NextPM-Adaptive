@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { InputSource, ManagementDomain, ReferenceGroup, ReferenceStatus } from '@prisma/client';
+import { InputSource, ManagementDomain, Prisma, ReferenceGroup, ReferenceStatus } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 import { badRequest, notFound } from '../../lib/http-error';
 import { env } from '../../config/env';
@@ -8,6 +8,7 @@ import { extractTextFromFile } from '../../lib/extract-text';
 import { matchOptionsInText } from '../../lib/option-match';
 import { computeInputReadiness } from '../../lib/readiness';
 import { extractInputValues, type AiProvider } from '../ai/provider';
+import { isRecognised, matchCustomer } from '../../lib/customer-match';
 import { logEvent } from '../audit/audit.service';
 
 const DESCRIPTION_GROUP: ReferenceGroup = 'DESCRIPTION';
@@ -60,6 +61,10 @@ export async function inputProfile(projectId: string) {
 
   return {
     projectType: project.type,
+    /** What the customer library matches on. Free text, set only by the PM. */
+    customer: project.customer,
+    /** A name read from the documents, waiting for the PM to accept or dismiss it. */
+    customerSuggestion: readCustomerSuggestion(project.customerSuggestion),
     fields,
     readiness: readiness.readiness,
     counters: {
@@ -155,6 +160,128 @@ export async function saveValues(params: {
  *    this run just suggested are deliberately left unverified, so the next press of the button
  *    is what promotes the ones the PM has reviewed and kept.
  */
+/**
+ * A customer name Skill 0 read out of the documents, waiting for the PM to accept or dismiss it.
+ *
+ * It is stored on the project rather than applied, for the same reason every other extraction in
+ * this system is a candidate: a wrong customer means the project is scored against the wrong
+ * customer's checklist and another company's template gets filled with it.
+ */
+export interface CustomerSuggestion {
+  /** The name exactly as the document writes it. */
+  name: string;
+  /** A verbatim quote from the document, so the PM can judge it without opening the file. */
+  evidence: string;
+  /** Which uploaded file it came from. */
+  sourceLabel: string | null;
+  /** The reference-library customer this name resolves to, when it resolves to one. */
+  matchedKey: string | null;
+  matchedName: string | null;
+  /**
+   * What the Customer field said when this was proposed, when it said anything. Accepting would
+   * replace it, so the PM has to be shown what they are replacing — a proposal that quietly
+   * overwrites a value someone typed is not a proposal.
+   */
+  replaces: string | null;
+  suggestedAt: string;
+}
+
+/** Attaches the library match and the source file to what the model returned. */
+async function buildCustomerSuggestion(
+  proposed: { name: string; evidence: string },
+  documents: { label: string; text: string }[],
+  replaces: string | null,
+): Promise<CustomerSuggestion> {
+  const customers = await prisma.customer.findMany({ where: { active: true } });
+  // Only a *recognised* customer is worth reporting here. The house default claims every
+  // unrecognised name, and telling the PM "this matches FPT" would make the banner look like it
+  // had identified their customer when all it did was fall back.
+  const candidate = matchCustomer(proposed.name, customers);
+  const match = isRecognised(candidate) ? candidate : null;
+
+  // Name the file the quote came from, so the PM knows where to look. Falls back to null rather
+  // than to a guess when the quote cannot be located.
+  const source = documents.find((document) => document.text.includes(proposed.evidence)) ?? null;
+
+  return {
+    name: proposed.name,
+    evidence: proposed.evidence,
+    sourceLabel: source?.label ?? null,
+    matchedKey: match?.customer.key ?? null,
+    matchedName: match?.customer.name ?? null,
+    replaces: replaces?.trim() || null,
+    suggestedAt: new Date().toISOString(),
+  };
+}
+
+/** Normalises the JSON column back into a suggestion, or null. */
+export function readCustomerSuggestion(value: unknown): CustomerSuggestion | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Partial<CustomerSuggestion>;
+  if (!record.name || !record.evidence) return null;
+  return {
+    name: record.name,
+    evidence: record.evidence,
+    sourceLabel: record.sourceLabel ?? null,
+    matchedKey: record.matchedKey ?? null,
+    matchedName: record.matchedName ?? null,
+    replaces: record.replaces ?? null,
+    suggestedAt: record.suggestedAt ?? new Date().toISOString(),
+  };
+}
+
+/**
+ * The PM's decision on a proposed customer. Accepting writes `Project.customer` — which is what
+ * unlocks the customer's checklist and templates — and clears the suggestion either way.
+ */
+export async function resolveCustomerSuggestion(params: {
+  projectId: string;
+  action: 'accept' | 'dismiss';
+  /** The PM may correct the name before accepting it. */
+  value?: string | null;
+  actorId: string;
+}) {
+  const project = await prisma.project.findUnique({ where: { id: params.projectId } });
+  if (!project) throw notFound('Project not found');
+
+  const suggestion = readCustomerSuggestion(project.customerSuggestion);
+
+  if (params.action === 'dismiss') {
+    await prisma.project.update({ where: { id: params.projectId }, data: { customerSuggestion: Prisma.JsonNull } });
+    await logEvent({
+      projectId: params.projectId,
+      actorId: params.actorId,
+      actorType: 'PM',
+      type: 'CUSTOMER_SUGGESTION_DISMISSED',
+      title: `PM dismissed the proposed customer${suggestion ? ` "${suggestion.name}"` : ''}`,
+      detail: suggestion?.evidence ?? null,
+    });
+    return { customer: project.customer, suggestion: null };
+  }
+
+  const customer = (params.value ?? suggestion?.name ?? '').trim();
+  if (!customer) throw badRequest('There is no customer name to confirm.');
+
+  const updated = await prisma.project.update({
+    where: { id: params.projectId },
+    data: { customer, customerSuggestion: Prisma.JsonNull },
+  });
+
+  await logEvent({
+    projectId: params.projectId,
+    actorId: params.actorId,
+    actorType: 'PM',
+    type: 'CUSTOMER_CONFIRMED',
+    title: `PM confirmed the customer as "${customer}"`,
+    detail: suggestion
+      ? `Proposed from ${suggestion.sourceLabel ?? 'an uploaded document'}: "${suggestion.evidence}"`
+      : 'Entered by the PM.',
+    payload: { customer, proposed: suggestion?.name ?? null },
+  });
+
+  return { customer: updated.customer, suggestion: null };
+}
+
 export async function verifyInputs(projectId: string, actorId: string) {
   const project = await prisma.project.findUnique({ where: { id: projectId } });
   if (!project) throw notFound('Project not found');
@@ -179,8 +306,12 @@ export async function verifyInputs(projectId: string, actorId: string) {
 
   const suggestions = new Map<string, string>();
   let provider: AiProvider = 'mock';
+  let customerSuggestion: CustomerSuggestion | null = null;
 
-  if (documents.length && emptyDefinitions.length) {
+  // The customer is identified from the same read of the same documents — no extra call. It runs
+  // whenever there are documents, even if every field is already filled, because a project can
+  // have a complete form and still no customer set.
+  if (documents.length) {
     const corpus = documents.map((document) => document.text).join('\n\n');
 
     // Stage 1 — deterministic, free, no tokens spent.
@@ -191,9 +322,29 @@ export async function verifyInputs(projectId: string, actorId: string) {
     for (const match of matched) suggestions.set(match.fieldKey, match.value);
 
     // Stage 2 — the model, for everything stage 1 could not resolve (including any document
-    // that is not in English, where literal option matching can never work).
+    // that is not in English, where literal option matching can never work), and the customer.
     const unresolved = emptyDefinitions.filter((definition) => !suggestions.has(definition.key));
-    if (unresolved.length) {
+
+    /**
+     * Propose a customer when the project has none, and *also* when the one it has resolves to
+     * nothing in the reference library.
+     *
+     * The second case is the one that actually matters in practice: a project whose customer reads
+     * "Korea — Enterprise" (what the demo seed writes) or a business-unit name looks filled in but
+     * unlocks no checklist and no template, and the PM has no way to know that is why nothing
+     * applied. Proposing a name the documents support — with its quote, for them to accept or
+     * reject — is exactly the help they need there. It still never overwrites anything: a project
+     * whose customer already resolves to a library entry is left alone.
+     */
+    // `isRecognised`, not a null check: the library has a house-default customer that claims
+    // anything unrecognised, so a plain match now always succeeds. Treating that as "we know who
+    // the customer is" would silence this proposal on exactly the projects that need it.
+    const currentCustomerResolves = project.customer
+      ? isRecognised(matchCustomer(project.customer, await prisma.customer.findMany({ where: { active: true } })))
+      : false;
+    const needsCustomer = !currentCustomerResolves;
+
+    if (unresolved.length || needsCustomer) {
       const extracted = await extractInputValues({
         projectName: project.name,
         projectType: project.type,
@@ -215,6 +366,18 @@ export async function verifyInputs(projectId: string, actorId: string) {
         // writing a value the form cannot render.
         if (definition.options.length && !definition.options.includes(value.value)) continue;
         suggestions.set(definition.key, value.value);
+      }
+
+      // Proposing only. Nothing is written to `project.customer` here — see
+      // resolveCustomerSuggestion, which is the PM's click. A proposal identical to what the
+      // project already says is dropped: there would be nothing for the PM to decide.
+      if (needsCustomer && extracted.customer) {
+        const isSameAsCurrent =
+          project.customer &&
+          project.customer.trim().toLowerCase() === extracted.customer.name.trim().toLowerCase();
+        if (!isSameAsCurrent) {
+          customerSuggestion = await buildCustomerSuggestion(extracted.customer, documents, project.customer);
+        }
       }
     }
 
@@ -240,6 +403,14 @@ export async function verifyInputs(projectId: string, actorId: string) {
     data: { verified: true, verifiedById: actorId, verifiedAt: new Date() },
   });
 
+  // Stored, not applied. The PM confirms it through resolveCustomerSuggestion.
+  if (customerSuggestion) {
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { customerSuggestion: customerSuggestion as unknown as Prisma.InputJsonValue },
+    });
+  }
+
   await recomputeDomainReadiness(projectId);
   await prisma.planningTask.updateMany({
     where: { projectId, title: 'Complete minimum project profile' },
@@ -252,7 +423,10 @@ export async function verifyInputs(projectId: string, actorId: string) {
     type: 'INPUTS_VERIFIED',
     title: `${verifiable.length} data points verified · ${suggestions.size} prefilled from documents`,
     detail: documents.length
-      ? `Read ${documents.length} uploaded document(s); extraction produced by ${provider}.`
+      ? `Read ${documents.length} uploaded document(s); extraction produced by ${provider}.` +
+        (customerSuggestion
+          ? ` Proposed "${customerSuggestion.name}" as the customer, awaiting PM confirmation.`
+          : '')
       : 'No uploaded documents to read — verified the PM-entered profile only.',
   });
 
@@ -262,6 +436,8 @@ export async function verifyInputs(projectId: string, actorId: string) {
     documentsRead: documents.length,
     stillEmpty: definitions.length - (existingValues.filter((value) => value.value).length + suggestions.size),
     provider,
+    /** A proposal for the PM to accept or dismiss — never applied by this call. */
+    customerSuggestion,
   };
 }
 
@@ -346,9 +522,29 @@ export async function registerReference(params: {
   actorId: string;
 }) {
   const { actorId, ...fileData } = params;
-  const existing = await prisma.referenceFile.count({ where: { projectId: params.projectId, group: params.group } });
-  if (existing >= env.maxFilesPerGroup) {
-    throw badRequest(`Maximum ${env.maxFilesPerGroup} files per reference group`);
+
+  /**
+   * A file whose text could not be read is a failed upload, not a reference source: it can never
+   * prefill or verify anything, and leaving it in place means its "cannot be read" message stays on
+   * screen after the PM has already replaced it — which is what the button labelled *Replace*
+   * promised to do. It also occupies one of the group's two slots for nothing. So the moment a new
+   * file arrives for this group, the group's unreadable ones are cleared.
+   *
+   * Only the unreadable ones. A group is allowed two real sources, and silently deleting a readable
+   * file the PM uploaded on purpose would lose their work.
+   */
+  const inGroup = await prisma.referenceFile.findMany({
+    where: { projectId: params.projectId, group: params.group },
+  });
+  const unreadable = inGroup.filter((file) => !(file.extraction as { textAvailable?: boolean } | null)?.textAvailable);
+  if (unreadable.length) {
+    await prisma.referenceFile.deleteMany({ where: { id: { in: unreadable.map((file) => file.id) } } });
+  }
+
+  if (inGroup.length - unreadable.length >= env.maxFilesPerGroup) {
+    throw badRequest(
+      `Maximum ${env.maxFilesPerGroup} files per reference group — remove one before adding another`,
+    );
   }
 
   const { text, unsupportedFormat } = await extractTextFromFile({

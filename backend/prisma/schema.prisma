@@ -55,6 +55,12 @@ enum ManagementDomain {
   STAKEHOLDERS
   RESOURCES
   RISK
+  /// The full project plan workbook, filled from the house template. Its own tab because it is a
+  /// single large deliverable that spans every other domain rather than sitting inside one.
+  PROJECT_PLAN
+  /// The kickoff deck is the one output produced by filling the customer's own file rather than
+  /// by drafting prose, so it gets its own tab instead of hiding among the stakeholder documents.
+  KICKOFF
 }
 
 enum FieldType {
@@ -191,7 +197,16 @@ model Project {
   name        String
   type        ProjectType
   status      ProjectStatus @default(DRAFT)
+  /// Free text, and the ONLY thing the customer library matches a project on. Set by the PM —
+  /// never by extraction, which may only propose (see `customerSuggestion`).
   customer    String?
+  /// A customer name Skill 0 read out of the uploaded documents, waiting for the PM to accept or
+  /// dismiss it: `{ name, evidence, sourceLabel, matchedKey, matchedName, suggestedAt }`.
+  /// Held separately from `customer` on purpose — the same rule as every other extraction in this
+  /// system: a file produces a candidate, never an approved fact. Picking the wrong customer means
+  /// scoring the project against the wrong checklist and filling another company's template, so
+  /// this one is confirmed by a person.
+  customerSuggestion Json?
   summary     String?
   phaseLabel  String?
   targetStart DateTime?
@@ -217,6 +232,8 @@ model Project {
   agentSessions    AgentSession[]
   dashboardLayouts DashboardLayout[]
   exports          ExportJob[]
+  /// How this project stands against its customer's checklist — see ProjectChecklistAssessment.
+  checklistAssessments ProjectChecklistAssessment[]
 
   @@index([status])
   @@index([programId])
@@ -517,8 +534,10 @@ model DomainReadiness {
 }
 
 model AuditEvent {
+  /// Null for a platform-level event that belongs to no single project — a customer reference
+  /// library change, say. Project activity feeds filter on projectId, so they are unaffected.
   id        String    @id @default(uuid())
-  projectId String
+  projectId String?
   actorType ActorType @default(PM)
   actorId   String?
   type      String // INPUT_VERIFIED, APPROACH_CONFIRMED, DOCUMENT_GENERATED...
@@ -527,8 +546,8 @@ model AuditEvent {
   payload   Json?
   createdAt DateTime  @default(now())
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  actor   User?   @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  actor   User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
 
   @@index([projectId, createdAt])
   @@map("audit_events")
@@ -596,4 +615,190 @@ model ExportJob {
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@map("export_jobs")
+}
+
+// ---------------------------------------------------------------- customer reference library
+//
+// A customer's own checklists and document templates, uploaded once and reused by every project
+// for that customer — the alternative to re-uploading the same LGCNS/SKAX checklist into each new
+// workspace. Nothing here is retrieved by similarity: a project resolves to exactly one Customer
+// by name, and a template is looked up by (customer, documentType). That is a key lookup, so
+// there is no vector store, and adding more templates only adds rows.
+//
+// Managed by PROGRAM_OWNER and ADMIN. Project owners read it but never write it.
+
+/// One customer organisation. `key` is the stable slug the code refers to; `aliases` are the
+/// spellings a PM may actually type into the project's free-text Customer field ("SK AX",
+/// "SK C and C", "AGS"), which is how a project is matched to this library — see
+/// lib/customer-match.ts. The Customer field stays free text on purpose: new customers arrive
+/// without anyone having to add a dropdown option first.
+model Customer {
+  id             String   @id @default(uuid())
+  key            String   @unique // SKAX | LGCNS | ...
+  name           String
+  aliases        String[] // other spellings that resolve to this customer
+  logoStorageKey String?
+  logoFileName   String?
+  logoMimeType   String?
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  checklists CustomerChecklist[]
+  templates  CustomerTemplate[]
+
+  @@map("customers")
+}
+
+/// One uploaded checklist file (LGCNS's .xlsx intake checklist, SKAX's .docx operational
+/// readiness checklist) plus the rows parsed out of it. Versioned rather than overwritten:
+/// a project assessed against v1 must stay explainable after v2 lands.
+model CustomerChecklist {
+  id         String   @id @default(uuid())
+  customerId String
+  name       String
+  sourceFile String // the file name as the uploader saw it, in its own language
+  storageKey String
+  mimeType   String
+  version    Int      @default(1)
+  active     Boolean  @default(true) // the version projects are assessed against
+  parseNote  String? // what the parser did, and what it could not read
+  uploadedAt DateTime @default(now())
+
+  customer    Customer                     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  items       ChecklistItem[]
+  assessments ProjectChecklistAssessment[]
+
+  @@index([customerId, active])
+  @@map("customer_checklists")
+}
+
+/// One question from a checklist. Kept close to the source: the parser does not interpret or
+/// translate, so a Korean checklist stays Korean and the PM can see it is the same document.
+model ChecklistItem {
+  id          String  @id @default(uuid())
+  checklistId String
+  order       Int
+  section     String? // the source's grouping column (구분 / area heading)
+  code        String? // item number, when the source had one
+  text        String // the check itself (체크사항)
+  guidance    String? // the source's note column (비고)
+  expected    String? // a model answer, where the source shipped one (답변)
+
+  /// English renderings, written once when the checklist is uploaded. The application's interface
+  /// is English, so the screen reads these; the original columns above are kept and shown beneath
+  /// them, because the customer's audit quotes the Korean and a translation cannot be searched for
+  /// in their file. Null when the source is already English, or when no model was available to
+  /// translate — the UI then shows the original alone rather than an empty line.
+  textEn      String?
+  sectionEn   String?
+  guidanceEn  String?
+
+  checklist   CustomerChecklist         @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+  assessments ChecklistAssessmentItem[]
+
+  @@index([checklistId, order])
+  @@map("checklist_items")
+}
+
+/// How one project stands against one checklist item.
+enum ChecklistStatus {
+  MET
+  PARTIAL
+  NOT_MET
+  /// The customer's own document puts this out of scope (AGS's 범위 외), or the PM ruled it out.
+  /// Excluded from the denominator — scoring a project down for a question that does not apply
+  /// to it would make the number meaningless.
+  NOT_APPLICABLE
+  /// Nothing has assessed this yet. Deliberately distinct from NOT_MET: "we have not looked" and
+  /// "we looked and it is missing" must never read the same to a PM.
+  UNKNOWN
+}
+
+/// Who decided a status. A PM decision outranks both machines and is never overwritten by a re-run.
+enum AssessmentSource {
+  DETERMINISTIC
+  AI
+  PM
+}
+
+/// One project measured against one customer checklist.
+///
+/// This is what makes readiness mean something customer-specific: instead of "how much of our own
+/// form is filled in", it is "how much of what *this customer* requires can we evidence". The
+/// assessment is re-run as documents are approved, and it only ever re-examines items that are
+/// not already MET — an approved document can add evidence, never remove it, so the work (and the
+/// token cost) shrinks as the project matures.
+model ProjectChecklistAssessment {
+  id          String   @id @default(uuid())
+  projectId   String
+  checklistId String
+  /// 0-100 over the applicable items. Denormalised so program roll-ups do not re-derive it.
+  score       Int      @default(0)
+  /// An input or an approved document changed after this ran, so the score may be understated.
+  stale       Boolean  @default(false)
+  /// IDLE | RUNNING | ERROR — a re-assessment runs outside the request that triggered it, so the
+  /// UI needs to see that one is in flight and whether the last one failed.
+  runState    String   @default("IDLE")
+  lastError   String?
+  /// `anthropic` or `none`. Without a provider the AI pass does not run and items stay UNKNOWN —
+  /// there is no mock fallback here on purpose, the same reasoning as Skill 0: a guessed "MET"
+  /// in front of a PM is worse than an honest blank.
+  aiProvider  String   @default("none")
+  assessedAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project   Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  checklist CustomerChecklist         @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+  items     ChecklistAssessmentItem[]
+
+  @@unique([projectId, checklistId])
+  @@index([projectId])
+  @@map("project_checklist_assessments")
+}
+
+model ChecklistAssessmentItem {
+  id              String           @id @default(uuid())
+  assessmentId    String
+  checklistItemId String
+  status          ChecklistStatus  @default(UNKNOWN)
+  source          AssessmentSource @default(DETERMINISTIC)
+  /// What the status rests on — a verified input, a document section, a PM's own words. Shown
+  /// next to the status, because a score nobody can audit is not evidence of readiness.
+  evidence        String?
+  note            String?
+  updatedAt       DateTime         @updatedAt
+
+  assessment ProjectChecklistAssessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  item       ChecklistItem              @relation(fields: [checklistItemId], references: [id], onDelete: Cascade)
+
+  @@unique([assessmentId, checklistItemId])
+  @@index([assessmentId, status])
+  @@map("checklist_assessment_items")
+}
+
+/// A customer's own file for one document type — e.g. SKAX's kickoff .pptx. Kept as the original
+/// binary so generation can fill it in place (unzip, replace the placeholder runs, rezip) and
+/// preserve the customer's layout, fonts and masters rather than re-drawing them.
+model CustomerTemplate {
+  id           String   @id @default(uuid())
+  customerId   String
+  documentType String // "Kickoff Deck" — matched against the document catalog later
+  fileType     String // PPTX | DOCX | XLSX
+  sourceFile   String
+  storageKey   String
+  mimeType     String
+  version      Int      @default(1)
+  active       Boolean  @default(true)
+  /// What the parser found to fill: [{ token, occurrences, locations, splitAcrossRuns }].
+  placeholders Json
+  parseNote    String?
+  uploadedAt   DateTime @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([customerId, documentType, version])
+  @@index([customerId, active])
+  @@map("customer_templates")
 }

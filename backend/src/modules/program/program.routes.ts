@@ -104,7 +104,13 @@ projectRouter.use('/:projectId', requireProjectMember);
 projectRouter.get(
   '/:projectId',
   asyncHandler(async (req, res) => {
-    res.json(await projectWorkspace(req.params.projectId));
+    /**
+     * `projectRole` rides along so the workspace can show a reader a read-only screen instead of
+     * controls that 403 when pressed. It is reported, never trusted: every write route still runs
+     * `requireProjectRole` — this only saves a VIEWER from being invited to do something the
+     * server will refuse.
+     */
+    res.json({ ...(await projectWorkspace(req.params.projectId)), projectRole: req.projectRole ?? null });
   }),
 );
 

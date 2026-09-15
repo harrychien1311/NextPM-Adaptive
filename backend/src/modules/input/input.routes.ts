@@ -18,6 +18,7 @@ import {
   removeCustomField,
   removeReference,
   resolveAction,
+  resolveCustomerSuggestion,
   saveValues,
   verifyInputs,
 } from './input.service';
@@ -76,6 +77,34 @@ inputRouter.post(
   requireProjectRole(...PROJECT_WRITE_ROLES),
   asyncHandler(async (req, res) => {
     res.json(await verifyInputs(req.params.projectId, req.user!.id));
+  }),
+);
+
+/**
+ * The PM's decision on the customer Skill 0 proposed. Deliberately a distinct, explicit step —
+ * extraction may only ever propose a customer, because the wrong one means the project is scored
+ * against the wrong checklist and another company's template gets filled with it.
+ */
+inputRouter.post(
+  '/:projectId/input/customer-suggestion',
+  requireProjectRole(...PROJECT_WRITE_ROLES),
+  asyncHandler(async (req, res) => {
+    const body = parse(
+      z.object({
+        action: z.enum(['accept', 'dismiss']),
+        /** The PM may correct the proposed name before accepting it. */
+        value: z.string().min(1).max(200).optional(),
+      }),
+      req.body,
+    );
+    res.json(
+      await resolveCustomerSuggestion({
+        projectId: req.params.projectId,
+        action: body.action,
+        value: body.value ?? null,
+        actorId: req.user!.id,
+      }),
+    );
   }),
 );
 

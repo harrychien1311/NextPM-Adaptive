@@ -6,6 +6,27 @@ export interface CatalogEntry {
   conditionKey?: string;
 }
 
+/**
+ * The one catalog document that is produced by **filling the customer's own file** rather than by
+ * drafting prose. When the project's customer has a template of this `documentType` in the
+ * reference library, generating it fills that deck in place — their layout, masters, fonts and
+ * images survive — and the blanks it cannot answer become ordinary `{{gap:N}}` questions for the
+ * PM. A customer without a template gets the same content as a branded Word document instead.
+ *
+ * The string is shared with `CustomerTemplate.documentType`, which is what ties the two together.
+ */
+export const KICKOFF_DECK = 'Kickoff Deck';
+
+/**
+ * The full project plan workbook, filled from `Template_Project Plan_v4.2.xlsx`.
+ *
+ * Unlike the kickoff deck this is the *house* template: every project uses it whatever the
+ * customer, which is expressed by uploading it against the house-default customer (the one holding
+ * the `*` alias) and letting `customerTemplatesForProject` fall back to that. A customer who later
+ * supplies their own Project Plan template overrides it automatically, with no code change.
+ */
+export const PROJECT_PLAN = 'Project Plan';
+
 /** Domain document catalog per project type — mirrors `projectRules[type].domains`. */
 export const DOCUMENT_CATALOG: Record<ProjectType, Record<ManagementDomain, CatalogEntry[]>> = {
   SI: {
@@ -33,21 +54,22 @@ export const DOCUMENT_CATALOG: Record<ProjectType, Record<ManagementDomain, Cata
     STAKEHOLDERS: [
       { name: 'Stakeholder Register', requirement: 'REQUIRED' },
       { name: 'Stakeholder Engagement Plan', requirement: 'REQUIRED' },
-      { name: 'Communication Management Plan', requirement: 'REQUIRED' },
+      // "Communication Management Plan" used to sit here next to "Communication Plan" — two
+      // documents for one subject, which only ever produced two overlapping drafts to review.
       { name: 'Communication Plan', requirement: 'REQUIRED' },
     ],
+    PROJECT_PLAN: [{ name: PROJECT_PLAN, requirement: 'REQUIRED' }],
+    KICKOFF: [{ name: KICKOFF_DECK, requirement: 'REQUIRED' }],
     RESOURCES: [
       { name: 'Resource Management Plan', requirement: 'REQUIRED' },
       { name: 'RACI Matrix', requirement: 'REQUIRED' },
       { name: 'Handoff & Capability Plan', requirement: 'REQUIRED' },
       { name: 'Organization Chart', requirement: 'REQUIRED' },
     ],
-    RISK: [
-      { name: 'Risk Management Plan', requirement: 'REQUIRED' },
-      { name: 'Risk & Dependency Register', requirement: 'REQUIRED' },
-      { name: 'Integration Contingency Plan', requirement: 'CONDITIONAL', conditionKey: 'integrationComplexity=High — 3 external systems' },
-      { name: 'Risk Plan', requirement: 'REQUIRED' },
-    ],
+    // One risk document, not four. The register, the contingency plan and the separate governance
+    // "Risk Plan" all restated the same material; the mandated artifact now carries it, which is
+    // why it is named "Risk Management Plan" in GOVERNANCE_ARTIFACT_NAMES.
+    RISK: [{ name: 'Risk Management Plan', requirement: 'REQUIRED' }],
   },
   SM: {
     GOVERNANCE: [
@@ -78,6 +100,8 @@ export const DOCUMENT_CATALOG: Record<ProjectType, Record<ManagementDomain, Cata
       { name: 'Service Reporting Plan', requirement: 'REQUIRED' },
       { name: 'Communication Plan', requirement: 'REQUIRED' },
     ],
+    PROJECT_PLAN: [{ name: PROJECT_PLAN, requirement: 'REQUIRED' }],
+    KICKOFF: [{ name: KICKOFF_DECK, requirement: 'REQUIRED' }],
     RESOURCES: [
       { name: 'Support Organization & RACI', requirement: 'REQUIRED' },
       { name: 'Skills & Capacity Plan', requirement: 'REQUIRED' },
@@ -85,12 +109,7 @@ export const DOCUMENT_CATALOG: Record<ProjectType, Record<ManagementDomain, Cata
       { name: 'RACI Matrix', requirement: 'REQUIRED' },
       { name: 'Organization Chart', requirement: 'REQUIRED' },
     ],
-    RISK: [
-      { name: 'Operational Risk Plan', requirement: 'REQUIRED' },
-      { name: 'Business Continuity & DR Plan', requirement: 'CONDITIONAL', conditionKey: 'continuityRequirement=DR required' },
-      { name: 'Vendor Dependency Plan', requirement: 'CONDITIONAL' },
-      { name: 'Risk Plan', requirement: 'REQUIRED' },
-    ],
+    RISK: [{ name: 'Risk Management Plan', requirement: 'REQUIRED' }],
   },
   PRODUCT: {
     GOVERNANCE: [
@@ -120,6 +139,8 @@ export const DOCUMENT_CATALOG: Record<ProjectType, Record<ManagementDomain, Cata
       { name: 'Discovery & Feedback Plan', requirement: 'REQUIRED' },
       { name: 'Communication Plan', requirement: 'REQUIRED' },
     ],
+    PROJECT_PLAN: [{ name: PROJECT_PLAN, requirement: 'REQUIRED' }],
+    KICKOFF: [{ name: KICKOFF_DECK, requirement: 'REQUIRED' }],
     RESOURCES: [
       { name: 'Product Team Charter', requirement: 'REQUIRED' },
       { name: 'Roles & Decision Rights', requirement: 'REQUIRED' },
@@ -127,12 +148,7 @@ export const DOCUMENT_CATALOG: Record<ProjectType, Record<ManagementDomain, Cata
       { name: 'RACI Matrix', requirement: 'REQUIRED' },
       { name: 'Organization Chart', requirement: 'REQUIRED' },
     ],
-    RISK: [
-      { name: 'Risk & Assumption Plan', requirement: 'REQUIRED' },
-      { name: 'Experiment Register', requirement: 'REQUIRED' },
-      { name: 'Release Risk Plan', requirement: 'CONDITIONAL' },
-      { name: 'Risk Plan', requirement: 'REQUIRED' },
-    ],
+    RISK: [{ name: 'Risk Management Plan', requirement: 'REQUIRED' }],
   },
 };
 

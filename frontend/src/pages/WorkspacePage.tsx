@@ -125,7 +125,7 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
           <div className="agent-card">
             <div className="agent-orb">✦</div>
             <strong>Planning Agent</strong>
-            <span>Copilot Studio</span>
+            <span>Advisory</span>
             <small>AI verifies, recommends and drafts. PM confirms every decision and baseline.</small>
             <button onClick={() => setAgentOpen(true)}>Open agent</button>
           </div>
@@ -184,6 +184,21 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
               </button>
             </div>
           </header>
+
+          {/*
+            Said once, plainly, instead of leaving a reader to discover it one greyed-out button at
+            a time. The controls are disabled either way; this explains why.
+          */}
+          {project.projectRole !== null && project.projectRole !== 'OWNER' && (
+            <div className="read-only-banner">
+              <span>👁</span>
+              <p>
+                <strong>View-only access.</strong> You can read everything in this project and download its
+                documents, but saving inputs, generating documents and approving them are reserved for the project
+                owner.
+              </p>
+            </div>
+          )}
 
           {view === 'dashboard' && <DashboardView projectId={projectId} onNavigate={setView} />}
           {view === 'input' && <InputView projectId={projectId} onNavigate={setView} />}

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { rulesApi } from '../../api/endpoints';
 import { useToast } from '../../components/Toast';
 import { Backdrop, ModalShell } from '../../components/Modal';
+import { useReadOnlyGuard } from '../../hooks/useProjectWrite';
 import type { Approach } from '../../api/types';
 import type { WorkspaceView } from '../WorkspacePage';
 
@@ -35,6 +36,13 @@ export function ApproachView({
   const [selected, setSelected] = useState<Approach | null>(null);
   const [modal, setModal] = useState<null | 'confirm' | 'override'>(null);
   const [rationale, setRationale] = useState('');
+
+  /**
+   * A reader reads this screen and nothing more — the selection included. Picking a different model
+   * is the first half of deciding one, so offering it and then refusing the confirm would be the
+   * worse half of both.
+   */
+  const { canWrite, guard, lockClass, lockedProps } = useReadOnlyGuard(projectId);
 
   useEffect(() => {
     if (data && !selected) {
@@ -103,7 +111,12 @@ export function ApproachView({
             <button className="secondary" onClick={() => onNavigate('input')}>
               Go to project input
             </button>
-            <button className="primary" onClick={() => evaluate.mutate()} disabled={evaluate.isPending}>
+            <button
+              className={`primary${lockClass}`}
+              {...lockedProps}
+              onClick={guard(() => evaluate.mutate())}
+              disabled={canWrite && evaluate.isPending}
+            >
               {evaluate.isPending ? 'Asking the AI…' : 'Get AI recommendation'}
             </button>
           </div>
@@ -114,6 +127,23 @@ export function ApproachView({
 
   const chosen = data.options.find((option) => option.approach === selected) ?? data.options[0];
   const pack = data.decision?.documentPack ?? chosen.pack;
+
+  /**
+   * Clicking a card only changes what this screen is *showing*. Nothing reaches the server until
+   * the PM confirms, and the card's own "✓ Selected" badge read exactly like a saved decision —
+   * which is how a re-pick could be made, the screen left, and the old model still be in force
+   * everywhere. These two flags drive every label that has to tell the difference.
+   */
+  const isCurrent = (approach: string) => data.decision?.approach === approach;
+  const unsavedChange = Boolean(data.decision) && chosen.approach !== data.decision?.approach;
+
+  /** A recommendation newer than the decision is a decision waiting to be made, so say so. */
+  const newerRecommendation =
+    data.decision &&
+    data.evaluation.createdAt > data.decision.decidedAt &&
+    data.evaluation.recommendedApproach !== data.decision.approach
+      ? data.evaluation.recommendedApproach
+      : null;
 
   return (
     <section className="view active">
@@ -141,6 +171,25 @@ export function ApproachView({
             The model could not be reached, so a keyword heuristic scored it instead. It reads English wording only and
             ignores the meaning of the document. Check <code>AI_PROVIDER</code>, <code>ANTHROPIC_API_KEY</code> and{' '}
             <code>ANTHROPIC_MODEL</code> on the server, then run the recommendation again.
+          </span>
+        </div>
+      )}
+
+      {/*
+        A re-run recommendation is not a decision. Without this the screen opens on the old decided
+        model with no sign that the AI has since said something different, which reads as "the
+        re-run did nothing".
+      */}
+      {newerRecommendation && (
+        <div className="mock-warning newer-recommendation">
+          <strong>
+            A newer AI recommendation ({titleCase(newerRecommendation)}) has not been decided.
+          </strong>
+          <span>
+            This project still runs on <b>{titleCase(data.decision!.approach)}</b>, confirmed{' '}
+            {new Date(data.decision!.decidedAt).toLocaleDateString()}. Pick a model below and confirm it to
+            change that — until you do, the document pack and the dashboard keep showing{' '}
+            {titleCase(data.decision!.approach)}.
           </span>
         </div>
       )}
@@ -183,8 +232,9 @@ export function ApproachView({
         {data.options.map((option) => (
           <article
             key={option.approach}
-            className={`approach-option${selected === option.approach ? ' selected' : ''}`}
-            onClick={() => setSelected(option.approach)}
+            className={`approach-option${selected === option.approach ? ' selected' : ''}${lockClass}`}
+            {...lockedProps}
+            onClick={guard(() => setSelected(option.approach))}
           >
             {option.recommended && <div className="recommended-ribbon">RECOMMENDED</div>}
             <div className="approach-top">
@@ -196,7 +246,20 @@ export function ApproachView({
               <strong>{option.score}%</strong>
             </div>
             <p>{option.summary}</p>
-            <button>{selected === option.approach ? '✓ Selected' : 'Select instead'}</button>
+            {/*
+              Three distinct states, because two of them used to share the word "Selected":
+              the project's actual governance model, a pick that has not been confirmed, and the
+              rest.
+            */}
+            <button className={selected === option.approach && !isCurrent(option.approach) ? 'pending-pick' : undefined}>
+              {isCurrent(option.approach)
+                ? selected === option.approach
+                  ? '✓ Current model'
+                  : 'Current model'
+                : selected === option.approach
+                  ? '● Picked — not saved yet'
+                  : 'Select instead'}
+            </button>
           </article>
         ))}
       </div>
@@ -220,9 +283,19 @@ export function ApproachView({
           {data.evaluation.evidence.length > 0 && (
             <>
               <h3>Supporting evidence</h3>
-              <ul>
-                {data.evaluation.evidence.map((item) => (
-                  <li key={item}>{item}</li>
+              {/*
+                English first, because that is the language of this application; the source's own
+                sentence underneath, because that is the one a PM can find in the uploaded file —
+                a translation cannot be searched for in a Korean document. The file name is
+                deliberately loud: evidence whose provenance is unstated is not evidence.
+              */}
+              <ul className="evidence-list">
+                {data.evaluation.evidence.map((item, index) => (
+                  <li key={`${item.english}-${index}`}>
+                    <span className="evidence-english">{item.english}</span>
+                    {item.original && <q className="evidence-original">{item.original}</q>}
+                    {item.source && <cite className="evidence-source">{item.source}</cite>}
+                  </li>
                 ))}
               </ul>
             </>
@@ -237,7 +310,12 @@ export function ApproachView({
               </ul>
             </>
           )}
-          <button className="secondary full" onClick={() => evaluate.mutate()} disabled={evaluate.isPending}>
+          <button
+            className={`secondary full${lockClass}`}
+            {...lockedProps}
+            onClick={guard(() => evaluate.mutate())}
+            disabled={canWrite && evaluate.isPending}
+          >
             {evaluate.isPending ? 'Re-asking the AI…' : 'Re-run AI recommendation'}
           </button>
         </article>
@@ -285,11 +363,26 @@ export function ApproachView({
         </div>
       </article>
 
-      <div className="sticky-action">
+      <div className={`sticky-action${unsavedChange ? ' unsaved' : ''}`}>
         <div>
           <span>✦</span>
           <p>
-            {data.decision ? (
+            {unsavedChange ? (
+              <>
+                {/*
+                  The case that made this a bug report: a different card was picked, the screen was
+                  left, and the project was still running on the old model — because picking is not
+                  deciding and nothing on screen said so.
+                */}
+                <strong>
+                  You picked {chosen.title}, but this project still runs on{' '}
+                  {titleCase(data.decision!.approach)}.
+                </strong>
+                <br />
+                Nothing changes until you confirm — leaving this screen now keeps{' '}
+                {titleCase(data.decision!.approach)}.
+              </>
+            ) : data.decision ? (
               <>
                 <strong>
                   {titleCase(data.decision.approach)} was {data.decision.outcome.toLowerCase()} by{' '}
@@ -307,11 +400,13 @@ export function ApproachView({
             )}
           </p>
         </div>
-        <button className="secondary" onClick={() => setModal('override')}>
+        {/* Locked rather than `disabled`: a disabled button cannot tell the reader why. */}
+        <button className={`secondary${lockClass}`} {...lockedProps} onClick={guard(() => setModal('override'))}>
           Override with reason
         </button>
-        <button className="primary" onClick={() => setModal('confirm')}>
-          Confirm governance model &amp; generate
+        {/* Naming the model on the button itself means the click can never mean something else. */}
+        <button className={`primary${lockClass}`} {...lockedProps} onClick={guard(() => setModal('confirm'))}>
+          Confirm {chosen.title} &amp; generate
         </button>
       </div>
 

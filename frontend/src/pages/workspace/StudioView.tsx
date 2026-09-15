@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { dashboardExportApi, documentsApi, projectApi } from '../../api/endpoints';
 import { useToast } from '../../components/Toast';
 import { Backdrop, ModalShell } from '../../components/Modal';
-import { DocumentPreview } from './DocumentPreview';
+import { DocumentPreview, OrgChartFigure, SheetGrid } from './DocumentPreview';
+import { useReadOnlyGuard } from '../../hooks/useProjectWrite';
 import { ApiError } from '../../api/client';
 import type { CatalogEntry, DocumentGap, ManagementDomain } from '../../api/types';
 
@@ -15,6 +16,13 @@ const DOMAIN_TABS: { domain: ManagementDomain; label: string; glyph: string; ton
   { domain: 'STAKEHOLDERS', label: 'Stakeholders', glyph: 'H', tone: 'orange' },
   { domain: 'RESOURCES', label: 'Resources', glyph: 'R', tone: 'rose' },
   { domain: 'RISK', label: 'Risk', glyph: '!', tone: 'red-bg' },
+  // The full plan workbook, filled from the house template. Its own tab for the same reason as the
+  // kickoff deck below: it is one document that a PM goes looking for by name, and it is not a
+  // sub-part of any single management domain — it spans all of them.
+  { domain: 'PROJECT_PLAN', label: 'Project Plan', glyph: '▦', tone: 'violet' },
+  // Its own tab: the kickoff deck is the one output built from the customer's own file, and it is
+  // what a PM looks for by name — it should not be hunted for among the stakeholder documents.
+  { domain: 'KICKOFF', label: 'Kickoff', glyph: '▶', tone: 'cyan' },
 ];
 
 /** Capturing + global so `split` keeps the tokens as their own array entries. */
@@ -60,6 +68,12 @@ export function StudioView({ projectId }: { projectId: string }) {
     queryKey: ['workspace', projectId],
     queryFn: () => projectApi.workspace(projectId),
   });
+
+  /**
+   * The studio is frozen for a reader: every control here leads to changing the document pack, so
+   * each one explains itself instead of quietly doing nothing.
+   */
+  const { canWrite, guard, lockClass, lockedProps } = useReadOnlyGuard(projectId);
 
   const domainDocs = useMemo(
     () => (data?.catalog ?? []).filter((entry) => entry.domain === domain),
@@ -218,11 +232,6 @@ export function StudioView({ projectId }: { projectId: string }) {
           <strong>
             {fit.data?.controls.projectType ?? ''} · {fit.data?.controls.approach ?? 'Governance model pending'} Planning Pack
           </strong>
-          <p>
-            The six governance artifacts (Project Charter, Organization Chart, RACI Matrix, Communication Plan,
-            Change / Escalation Flow, Risk Plan) are required for every project; their structure follows the
-            confirmed governance model.
-          </p>
         </div>
         <span className="rule-version">{fit.data?.controls.rigor ?? '—'}</span>
       </div>
@@ -231,11 +240,12 @@ export function StudioView({ projectId }: { projectId: string }) {
         {DOMAIN_TABS.map((tab) => (
           <button
             key={tab.domain}
-            className={domain === tab.domain ? 'active' : ''}
-            onClick={() => {
+            className={`${domain === tab.domain ? 'active' : ''}${lockClass}`}
+            {...lockedProps}
+            onClick={guard(() => {
               setDomain(tab.domain);
               setDefinitionId(null);
-            }}
+            })}
           >
             <span className={`domain-glyph ${tab.tone}`}>{tab.glyph}</span>
             {tab.label} <b>{data.domains.find((row) => row.domain === tab.domain)?.count ?? 0}</b>
@@ -255,8 +265,9 @@ export function StudioView({ projectId }: { projectId: string }) {
             {domainDocs.map((entry) => (
               <button
                 key={entry.definitionId}
-                className={`catalog-item${selected?.definitionId === entry.definitionId ? ' active' : ''}`}
-                onClick={() => setDefinitionId(entry.definitionId)}
+                className={`catalog-item${selected?.definitionId === entry.definitionId ? ' active' : ''}${lockClass}`}
+                {...lockedProps}
+                onClick={guard(() => setDefinitionId(entry.definitionId))}
               >
                 <span>
                   <b>{entry.name}</b>
@@ -282,17 +293,72 @@ export function StudioView({ projectId }: { projectId: string }) {
                 {domain} · {selected?.requirement}
               </span>
               <h2>{selected?.name}</h2>
-              <p>
-                {draft && draft.status !== 'NOT_GENERATED'
-                  ? `Version ${draft.version} · ${draft.sections.length} sections written by the AI.`
-                  : 'Not generated yet. The AI will decide the structure from this project’s verified inputs.'}
-              </p>
+              {/*
+                A document with a customer template is produced by filling that customer's own
+                file, not by drafting prose — so say so plainly, and count blanks rather than
+                sections, because that is what the PM will be working through.
+              */}
+              {selected?.customerTemplate?.usableForFill ? (
+                <p>
+                  {draft && draft.status !== 'NOT_GENERATED'
+                    ? `Version ${draft.version} · ${draft.sections.length} of the template’s blanks filled from this project’s data.`
+                    : selected.customerTemplate.house
+                      ? `Not generated yet. Generating fills the standard ${selected.customerTemplate.fileType} template in place — the one every project uses, whoever the customer — and anything the project data cannot answer becomes a question for you below.`
+                      : `Not generated yet. Generating fills ${selected.customerTemplate.customerName}’s own ${selected.customerTemplate.fileType} template in place — their layout and branding are kept, and anything the project data cannot answer becomes a question for you below.`}
+                </p>
+              ) : (
+                <p>
+                  {draft && draft.status !== 'NOT_GENERATED'
+                    ? `Version ${draft.version} · ${draft.sections.length} sections written by the AI.`
+                    : 'Not generated yet. The AI will decide the structure from this project’s verified inputs.'}
+                </p>
+              )}
+              {/*
+                When a deck falls back to the neutral layout, say which customer name failed to
+                match. "Why is this not our template?" is otherwise unanswerable from this screen,
+                and the answer is almost always the Customer field.
+              */}
+              {selected?.exportFormat === 'PPTX' && !selected.customerTemplate && (
+                <p className="template-source warn">
+                  {workspace.data?.customer ? (
+                    <>
+                      No customer template matched <b>{workspace.data.customer}</b>, so this builds a neutral deck
+                      carrying that customer’s logo. Add the spelling as an alias, or upload their kickoff template,
+                      in the Customer library.
+                    </>
+                  ) : (
+                    <>
+                      This project has no Customer set, so no customer template can be matched and this builds a
+                      neutral deck. Set it on Project Input.
+                    </>
+                  )}
+                </p>
+              )}
+              {selected?.customerTemplate && (
+                <p className={`template-source${selected.customerTemplate.usableForFill ? '' : ' warn'}`}>
+                  {selected.customerTemplate.house
+                    ? 'Standard template (all customers)'
+                    : `${selected.customerTemplate.customerName} template`}
+                  : <b>{selected.customerTemplate.sourceFile}</b> · {selected.customerTemplate.placeholders.length}{' '}
+                  blank{selected.customerTemplate.placeholders.length === 1 ? '' : 's'}
+                  {/*
+                    An outline template is not a defect in the app, it is a fact about the file —
+                    so say what will happen instead of silently doing something else.
+                  */}
+                  {!selected.customerTemplate.usableForFill && <> — {selected.customerTemplate.fillNote}</>}
+                </p>
+              )}
             </div>
             <button
-              className="primary"
-              onClick={() => generate.mutate()}
-              disabled={generate.isPending || !selected || isApproved}
-              title={isApproved ? 'Approved documents are versioned — they cannot be regenerated' : undefined}
+              className={`primary${lockClass}`}
+              {...lockedProps}
+              onClick={guard(() => generate.mutate())}
+              disabled={canWrite && (generate.isPending || !selected || isApproved)}
+              title={
+                canWrite && isApproved
+                  ? 'Approved documents are versioned — they cannot be regenerated'
+                  : lockedProps.title
+              }
             >
               {generate.isPending
                 ? '✦ Generating…'
@@ -325,22 +391,40 @@ export function StudioView({ projectId }: { projectId: string }) {
                     </>
                   ) : (
                     <>
+                      {/*
+                        Preview and Download stay live for everyone. They are the two controls here
+                        that only read — locking them would stop a view-only account from doing the
+                        one thing its access is for.
+                      */}
                       <button className="secondary" onClick={() => setPreviewing(true)}>
                         Preview
                       </button>
-                      <button className="secondary" onClick={startEditing} disabled={isApproved}>
+                      <button
+                        className={`secondary${lockClass}`}
+                        {...lockedProps}
+                        onClick={guard(startEditing)}
+                        disabled={canWrite && isApproved}
+                      >
                         Edit content
                       </button>
                       <button
                         className="secondary"
-                        onClick={() => documentsApi.downloadDocx(projectId, draft.id, selected?.name ?? 'document')}
+                        onClick={() =>
+                          documentsApi.download(
+                            projectId,
+                            draft.id,
+                            selected?.name ?? 'document',
+                            selected?.exportFormat,
+                          )
+                        }
                       >
-                        Download .docx
+                        Download .{(selected?.exportFormat ?? 'DOCX').toLowerCase()}
                       </button>
                       <button
-                        className="primary"
-                        disabled={isApproved || approve.isPending}
-                        onClick={() => approve.mutate(draft.id)}
+                        className={`primary${lockClass}`}
+                        {...lockedProps}
+                        disabled={canWrite && (isApproved || approve.isPending)}
+                        onClick={guard(() => approve.mutate(draft.id))}
                       >
                         {isApproved ? '✓ Confirmed by PM' : '✓ PM confirm'}
                       </button>
@@ -398,14 +482,37 @@ export function StudioView({ projectId }: { projectId: string }) {
                 </div>
               ) : (
                 <div className="editor-body">
-                  {draft.sections
-                    .filter((section) => section.included && section.content)
-                    .map((section) => (
-                      <div key={section.id}>
-                        <h3>{section.title}</h3>
-                        <SectionText content={section.content ?? ''} />
+                  {/*
+                    A chart or a register has no prose by design, so the working panel shows the
+                    thing itself rather than an empty body. Same components the preview uses.
+                  */}
+                  {/organi[sz]ation chart|org chart/i.test(selected?.name ?? '') ? (
+                    <OrgChartFigure chart={draft.structuredData?.orgChart ?? null} />
+                  ) : selected?.tableColumns?.length ? (
+                    <>
+                      <div className="studio-grid-wrap">
+                        <SheetGrid
+                          columns={draft.structuredData?.table?.columns ?? selected.tableColumns}
+                          rows={draft.structuredData?.table?.rows ?? []}
+                        />
                       </div>
-                    ))}
+                      {!draft.structuredData?.table?.rows.length && (
+                        <p className="org-chart-empty">
+                          <b>No rows yet.</b> Press <b>Generate document</b> — a version produced before this
+                          document became a table holds prose instead, and needs generating again.
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    draft.sections
+                      .filter((section) => section.included && section.content)
+                      .map((section) => (
+                        <div key={section.id}>
+                          <h3>{section.title}</h3>
+                          <SectionText content={section.content ?? ''} />
+                        </div>
+                      ))
+                  )}
                 </div>
               )}
             </section>
@@ -436,17 +543,25 @@ export function StudioView({ projectId }: { projectId: string }) {
                   <div className={`gap-item${gap.answer?.trim() ? ' answered' : ''}`} key={gap.token}>
                     <p>{gap.question}</p>
                     {gap.answer?.trim() ? <small>{gap.answer}</small> : null}
-                    <button className="secondary" onClick={() => setAnswering(gap)} disabled={isApproved}>
+                    <button
+                      className={`secondary${lockClass}`}
+                      {...lockedProps}
+                      onClick={guard(() => setAnswering(gap))}
+                      disabled={canWrite && isApproved}
+                    >
                       {gap.answer?.trim() ? 'Edit answer' : 'Answer'}
                     </button>
                   </div>
                 ))}
               </div>
               <button
-                className="primary fill-button"
-                onClick={() => fillGaps.mutate()}
-                disabled={fillGaps.isPending || answeredCount === 0 || isApproved}
-                title={answeredCount === 0 ? 'Answer at least one question first' : undefined}
+                className={`primary fill-button${lockClass}`}
+                {...lockedProps}
+                onClick={guard(() => fillGaps.mutate())}
+                disabled={canWrite && (fillGaps.isPending || answeredCount === 0 || isApproved)}
+                title={
+                  canWrite && answeredCount === 0 ? 'Answer at least one question first' : lockedProps.title
+                }
               >
                 {fillGaps.isPending ? 'Filling…' : `Fill out the document (${answeredCount})`}
               </button>
@@ -467,7 +582,12 @@ export function StudioView({ projectId }: { projectId: string }) {
           <button className="secondary" onClick={() => dashboardExportApi.downloadHtml(projectId)}>
             Download dashboard (.html)
           </button>
-          <button className="primary" onClick={() => exportPack.mutate()} disabled={exportPack.isPending}>
+          <button
+            className={`primary${lockClass}`}
+            {...lockedProps}
+            onClick={guard(() => exportPack.mutate())}
+            disabled={canWrite && exportPack.isPending}
+          >
             {exportPack.isPending ? 'Preparing…' : 'Export approved baseline'}
           </button>
         </div>
@@ -475,10 +595,22 @@ export function StudioView({ projectId }: { projectId: string }) {
 
       {previewing && (
         <DocumentPreview
-          document={draft ? { ...draft, name: selected?.name ?? 'Document' } : null}
+          document={
+            draft
+              ? {
+                  ...draft,
+                  name: selected?.name ?? 'Document',
+                  exportFormat: selected?.exportFormat,
+                  tableColumns: selected?.tableColumns ?? null,
+                }
+              : null
+          }
+          projectId={projectId}
           projectName={workspace.data?.name ?? ''}
           onClose={() => setPreviewing(false)}
-          onDownload={() => documentsApi.downloadDocx(projectId, draft!.id, selected?.name ?? 'document')}
+          onDownload={() =>
+            documentsApi.download(projectId, draft!.id, selected?.name ?? 'document', selected?.exportFormat)
+          }
         />
       )}
 
