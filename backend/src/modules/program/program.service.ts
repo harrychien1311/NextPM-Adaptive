@@ -394,6 +394,8 @@ export async function projectWorkspace(projectId: string) {
      * fills, so a workspace payload that hides it makes "why did nothing apply?" unanswerable.
      */
     customer: project.customer,
+    /** Null means the PM has not decided — which is what puts the analysis into recommend mode. */
+    preferredApproach: project.preferredApproach,
     phaseLabel: project.phaseLabel ?? `${project.type} · INITIATING`,
     program: project.program ? { id: project.program.id, name: project.program.name, key: project.program.key } : null,
     members: project.members.map((member) => member.user),

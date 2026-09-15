@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { projectApi } from '../api/endpoints';
 import { useAuth } from '../store/auth';
 import { DashboardView } from './workspace/DashboardView';
 import { InputView } from './workspace/InputView';
-import { ApproachView } from './workspace/ApproachView';
+// The view keeps the `approach` route key so existing links and state survive the rename.
+import { PlanningReviewView } from './workspace/PlanningReviewView';
 import { StudioView } from './workspace/StudioView';
 import { AgentDrawer } from './workspace/AgentDrawer';
 import { FloatingAgentButton } from './workspace/FloatingAgentButton';
@@ -14,10 +15,22 @@ import { SignOutIcon } from '../components/icons';
 
 export type WorkspaceView = 'dashboard' | 'input' | 'approach' | 'studio';
 
+/** The values `?view=` accepts, so a hand-edited URL cannot put the workspace in a state that isn't one. */
+const WORKSPACE_VIEWS: WorkspaceView[] = ['dashboard', 'input', 'approach', 'studio'];
+
 export function WorkspacePage({ projectId }: { projectId: string }) {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
-  const [view, setView] = useState<WorkspaceView>('dashboard');
+  /**
+   * A brand-new project opens on Project Input, not on the dashboard: there is nothing to report
+   * yet, and the first thing its owner has to do is upload the document the analysis reads. The
+   * create dialog says so with `?view=input`; every other way in still lands on the dashboard.
+   */
+  const [searchParams] = useSearchParams();
+  const requested = searchParams.get('view');
+  const [view, setView] = useState<WorkspaceView>(
+    requested && WORKSPACE_VIEWS.includes(requested as WorkspaceView) ? (requested as WorkspaceView) : 'dashboard',
+  );
   const [agentOpen, setAgentOpen] = useState(false);
   const [teamOpen, setTeamOpen] = useState(false);
 
@@ -108,7 +121,7 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
               </button>
               <button className={`nav-item${view === 'approach' ? ' active' : ''}`} onClick={() => setView('approach')}>
                 <span className="step-node">2</span>
-                <span>Governance Model</span>
+                <span>Planning Review</span>
                 {project.approach ? <b>✓</b> : <i>!</i>}
               </button>
               <button className={`nav-item${view === 'studio' ? ' active' : ''}`} onClick={() => setView('studio')}>
@@ -202,7 +215,7 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
 
           {view === 'dashboard' && <DashboardView projectId={projectId} onNavigate={setView} />}
           {view === 'input' && <InputView projectId={projectId} onNavigate={setView} />}
-          {view === 'approach' && <ApproachView projectId={projectId} onNavigate={setView} />}
+          {view === 'approach' && <PlanningReviewView projectId={projectId} onNavigate={setView} />}
           {view === 'studio' && <StudioView projectId={projectId} />}
         </main>
       </div>

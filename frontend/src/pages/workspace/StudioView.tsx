@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { dashboardExportApi, documentsApi, projectApi } from '../../api/endpoints';
 import { useToast } from '../../components/Toast';
 import { Backdrop, ModalShell } from '../../components/Modal';
-import { DocumentPreview, OrgChartFigure, SheetGrid } from './DocumentPreview';
+import { DocumentPreview, OrgChartFigure, SheetGrid, isChartDocument } from './DocumentPreview';
 import { useReadOnlyGuard } from '../../hooks/useProjectWrite';
 import { ApiError } from '../../api/client';
 import type { CatalogEntry, DocumentGap, ManagementDomain } from '../../api/types';
@@ -16,10 +16,8 @@ const DOMAIN_TABS: { domain: ManagementDomain; label: string; glyph: string; ton
   { domain: 'STAKEHOLDERS', label: 'Stakeholders', glyph: 'H', tone: 'orange' },
   { domain: 'RESOURCES', label: 'Resources', glyph: 'R', tone: 'rose' },
   { domain: 'RISK', label: 'Risk', glyph: '!', tone: 'red-bg' },
-  // The full plan workbook, filled from the house template. Its own tab for the same reason as the
-  // kickoff deck below: it is one document that a PM goes looking for by name, and it is not a
-  // sub-part of any single management domain — it spans all of them.
-  { domain: 'PROJECT_PLAN', label: 'Project Plan', glyph: '▦', tone: 'violet' },
+  // No PROJECT_PLAN tab: generating that workbook was retired (see `PROJECT_PLAN` in
+  // data/document-catalog.ts). The enum value stays in the schema so old rows still read.
   // Its own tab: the kickoff deck is the one output built from the customer's own file, and it is
   // what a PM looks for by name — it should not be hunted for among the stakeholder documents.
   { domain: 'KICKOFF', label: 'Kickoff', glyph: '▶', tone: 'cyan' },
@@ -75,9 +73,50 @@ export function StudioView({ projectId }: { projectId: string }) {
    */
   const { canWrite, guard, lockClass, lockedProps } = useReadOnlyGuard(projectId);
 
+  /**
+   * After an analysis, the Studio shows what that analysis said is missing — not all twenty-odd
+   * catalog documents. The point of the gap list is that *these* are the ones this project needs,
+   * and burying them among the rest throws that away.
+   *
+   * `inPlanningGap === null` on every entry means no analysis has tied a gap to a document, and the
+   * whole catalog is shown: hiding everything because the model named nothing would leave the PM
+   * unable to generate anything at all. The toggle is always there, because "show me the rest" is
+   * a reasonable thing to want and a filter with no escape is a trap.
+   */
+  const [gapsOnly, setGapsOnly] = useState(true);
+  const hasGapFilter = (data?.catalog ?? []).some((entry) => entry.inPlanningGap !== null);
+
+  /**
+   * Every count on this screen is taken from the documents actually on it.
+   *
+   * They used to come from the full catalog and from the server's `domains` summary, so a Studio
+   * showing five documents still announced "0/22 generated" and a Governance tab read 4 when one
+   * document sat under it. A number describing a list the PM cannot see is worse than no number:
+   * it makes the work look untouched however much of it is done.
+   */
+  const shown = useMemo(
+    () => (data?.catalog ?? []).filter((entry) => !gapsOnly || !hasGapFilter || entry.inPlanningGap === true),
+    [data, gapsOnly, hasGapFilter],
+  );
+
+  const countByDomain = useMemo(
+    () =>
+      shown.reduce<Record<string, number>>((counts, entry) => {
+        counts[entry.domain] = (counts[entry.domain] ?? 0) + 1;
+        return counts;
+      }, {}),
+    [shown],
+  );
+
+  // A domain with nothing in it is not a tab worth showing — it is a dead end with a zero on it.
+  const visibleTabs = DOMAIN_TABS.filter((tab) => (countByDomain[tab.domain] ?? 0) > 0);
+  // Hiding the tab the PM is standing on would leave them on an empty panel with nothing
+  // highlighted, so the selection follows the list rather than the other way round.
+  const activeDomain = visibleTabs.some((tab) => tab.domain === domain) ? domain : visibleTabs[0]?.domain ?? domain;
+
   const domainDocs = useMemo(
-    () => (data?.catalog ?? []).filter((entry) => entry.domain === domain),
-    [data, domain],
+    () => shown.filter((entry) => entry.domain === activeDomain),
+    [shown, activeDomain],
   );
   const selected: CatalogEntry | undefined =
     domainDocs.find((entry) => entry.definitionId === definitionId) ?? domainDocs[0];
@@ -188,8 +227,8 @@ export function StudioView({ projectId }: { projectId: string }) {
     );
   }
 
-  const generated = data.catalog.filter((entry) => entry.document && entry.document.status !== 'NOT_GENERATED').length;
-  const approved = data.catalog.filter((entry) => entry.document?.status === 'APPROVED').length;
+  const generated = shown.filter((entry) => entry.document && entry.document.status !== 'NOT_GENERATED').length;
+  const approved = shown.filter((entry) => entry.document?.status === 'APPROVED').length;
   const gaps = draft?.gaps ?? [];
   const answeredCount = gaps.filter((gap) => gap.answer?.trim()).length;
   const isApproved = draft?.status === 'APPROVED';
@@ -213,13 +252,13 @@ export function StudioView({ projectId }: { projectId: string }) {
         <div className="evidence-stats">
           <div>
             <strong>
-              {generated}/{data.catalog.length}
+              {generated}/{shown.length}
             </strong>
             <span>generated</span>
           </div>
           <div>
             <strong>
-              {approved}/{data.catalog.length}
+              {approved}/{shown.length}
             </strong>
             <span>PM approved</span>
           </div>
@@ -233,14 +272,26 @@ export function StudioView({ projectId }: { projectId: string }) {
             {fit.data?.controls.projectType ?? ''} · {fit.data?.controls.approach ?? 'Governance model pending'} Planning Pack
           </strong>
         </div>
-        <span className="rule-version">{fit.data?.controls.rigor ?? '—'}</span>
       </div>
 
+      {hasGapFilter && (
+        <div className="gap-filter-bar">
+          <span>
+            {gapsOnly
+              ? 'Showing only the documents the planning analysis says are missing, plus the kickoff deck.'
+              : 'Showing every document in the catalog.'}
+          </span>
+          <button className="text-button" onClick={() => setGapsOnly((only) => !only)}>
+            {gapsOnly ? 'Show all documents' : 'Show only what is missing'}
+          </button>
+        </div>
+      )}
+
       <div className="domain-tabs">
-        {DOMAIN_TABS.map((tab) => (
+        {visibleTabs.map((tab) => (
           <button
             key={tab.domain}
-            className={`${domain === tab.domain ? 'active' : ''}${lockClass}`}
+            className={`${activeDomain === tab.domain ? 'active' : ''}${lockClass}`}
             {...lockedProps}
             onClick={guard(() => {
               setDomain(tab.domain);
@@ -248,7 +299,8 @@ export function StudioView({ projectId }: { projectId: string }) {
             })}
           >
             <span className={`domain-glyph ${tab.tone}`}>{tab.glyph}</span>
-            {tab.label} <b>{data.domains.find((row) => row.domain === tab.domain)?.count ?? 0}</b>
+            {/* The count of what this tab will actually show, not of what the catalog holds. */}
+            {tab.label} <b>{countByDomain[tab.domain] ?? 0}</b>
           </button>
         ))}
       </div>
@@ -257,7 +309,7 @@ export function StudioView({ projectId }: { projectId: string }) {
         <aside className="panel document-catalog">
           <div className="catalog-head">
             <div>
-              <h2>{DOMAIN_TABS.find((tab) => tab.domain === domain)?.label} documents</h2>
+              <h2>{DOMAIN_TABS.find((tab) => tab.domain === activeDomain)?.label} documents</h2>
               <p>Recommended for this project</p>
             </div>
           </div>
@@ -392,13 +444,19 @@ export function StudioView({ projectId }: { projectId: string }) {
                   ) : (
                     <>
                       {/*
-                        Preview and Download stay live for everyone. They are the two controls here
-                        that only read — locking them would stop a view-only account from doing the
-                        one thing its access is for.
+                        Preview and Download only read, so they stay live for a view-only account —
+                        locking them would stop it from doing the one thing its access is for.
+
+                        A deck gets no Preview button at all: slides are layout, images and the
+                        customer's branding, and the only honest review of one is the file itself.
+                        The org chart is a `.pptx` too but is drawn rather than listed, so it keeps
+                        its preview.
                       */}
-                      <button className="secondary" onClick={() => setPreviewing(true)}>
-                        Preview
-                      </button>
+                      {!(selected?.exportFormat === 'PPTX' && !isChartDocument(selected?.name ?? '')) && (
+                        <button className="secondary" onClick={() => setPreviewing(true)}>
+                          Preview
+                        </button>
+                      )}
                       <button
                         className={`secondary${lockClass}`}
                         {...lockedProps}

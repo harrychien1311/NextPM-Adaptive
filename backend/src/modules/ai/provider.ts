@@ -169,6 +169,77 @@ export interface EvidenceItem {
   source: string;
 }
 
+/** One block of the Planning Review's top panel — what the project *is*, read from its documents. */
+export interface OverviewSection {
+  /** Stable key so the UI can pick an icon and an order: scope, requirements, resources… */
+  key: string;
+  label: string;
+  /** One or two sentences. The headline a PM reads first. */
+  summary: string;
+  /** The specifics behind it, one short line each — this is what stops the panel being a wall of prose. */
+  points: string[];
+}
+
+/** Something the project still lacks before it can start. */
+export interface PlanningGap {
+  title: string;
+  /** Why it matters for *this* project, not a generic definition of the artefact. */
+  why: string;
+  /**
+   * The catalog document that would close it, named exactly as the catalog names it. This is the
+   * link that lets the Planning Studio show only what is missing — a gap the model cannot tie to a
+   * document is still shown to the PM, it just filters nothing.
+   */
+  documentName: string | null;
+  severity: 'HIGH' | 'MEDIUM' | 'LOW';
+}
+
+/** A contradiction or anomaly found across the uploaded documents. */
+export interface AnalysisFinding {
+  title: string;
+  detail: string;
+  /** Where it was seen, so the PM can go and look rather than take it on trust. */
+  evidence: EvidenceItem[];
+}
+
+/** One governance model scored against the nine criteria. */
+export interface ScoredApproach {
+  approach: string;
+  score: number;
+  reasons: string[];
+  /**
+   * Empty when the PM had already chosen the approach: there we are explaining a decision the PM
+   * made, not making a case for one, so quoting the documents back at them is noise.
+   */
+  evidence: EvidenceItem[];
+  /** Per-criterion breakdown, so a score is auditable rather than a number to take on faith. */
+  criteria: { name: string; score: number; weight: number; note: string }[];
+}
+
+export interface PlanningAnalysisOutput {
+  /**
+   * RECOMMENDED — the PM had no approach in mind, so the model proposes one and ranks up to four.
+   * PM_CHOSEN  — the PM named one on Project Input, so the model only scores that one.
+   */
+  mode: 'RECOMMENDED' | 'PM_CHOSEN';
+  overview: OverviewSection[];
+  approaches: ScoredApproach[];
+  planningGaps: PlanningGap[];
+  findings: AnalysisFinding[];
+  summary: string;
+  confidenceLevel: 'HIGH' | 'MEDIUM' | 'LOW';
+  /**
+   * The organisation this project is delivered FOR, read from the same documents.
+   *
+   * Folded into this call rather than left as its own: it used to ride along with "Verify input",
+   * and removing that button would otherwise have silently killed the customer proposal — which
+   * gates the customer checklist and whose kickoff template gets filled. Still a *candidate*, never
+   * applied: the PM accepts it on the banner exactly as before.
+   */
+  customer: { name: string; evidence: string } | null;
+  provider: AiProvider;
+}
+
 export interface GovernanceRecommendationOutput {
   candidates: { fieldKey: string; value: string }[];
   recommendedApproach: string;
@@ -1281,6 +1352,224 @@ limitations of the recommendation), "alternatives": [{ "approach": string, "scor
 was read), "candidates": [{ "fieldKey": string, "value": string }] (only for fields you can
 confidently answer from the document text; for SELECT fields use one of the given options
 verbatim) }`;
+
+// ---------------------------------------------------------------------------
+// Skill 1b — "Analyze planning needs"
+//
+// The single call behind the Planning Review screen, and the only model call on the path from
+// Project Input to a document pack. It replaces the old two-button flow (Verify input, then
+// Suggest governance model): the PM presses once, and everything the uploaded documents and the
+// typed inputs can say is read in one pass.
+//
+// It answers four questions at once, because they are all read from the same material and splitting
+// them would mean paying to read it four times:
+//   1. what is this project (overview)
+//   2. which governance model fits — or how well does the PM's own choice fit (approaches)
+//   3. what is missing before it can start (planningGaps)
+//   4. what contradicts itself in the documents (findings)
+// ---------------------------------------------------------------------------
+
+export interface PlanningAnalysisContext {
+  projectName: string;
+  projectType: string;
+  /** What the PM typed on Project Input. Few fields now — most of the signal is in the documents. */
+  inputs: { label: string; value: string }[];
+  /** Every uploaded file that text could be read from, labelled by file name. */
+  documents: { label: string; text: string }[];
+  /**
+   * The governance model the PM had already decided on, or null. This one value decides the whole
+   * shape of the answer, which is why it is passed explicitly rather than hidden among the inputs.
+   */
+  preferredApproach: string | null;
+  /** Catalog documents this project type can produce, so a gap can name one exactly. */
+  catalogDocuments: string[];
+}
+
+const NINE_CRITERIA = `Score against these nine weighted criteria, and return the breakdown:
+scope stability 20%, requirement volatility 15%, delivery predictability 15%, customer involvement
+10%, contract/commercial model 10%, compliance/governance need 10%, technical uncertainty 10%,
+team/delivery setup 5%, risk/dependency profile 5%. A criterion you have no evidence for is left
+out of the weighted total rather than guessed at 50% — say so in its note.`;
+
+const OVERVIEW_RULES = `"overview" is what the project IS, read from the material you were given. Use these keys, in this
+order, and omit any the material genuinely cannot support: "scope", "requirements", "schedule",
+"resources", "stakeholders", "commercial", "constraints". Each entry has a one-or-two sentence
+"summary" and 2-5 short "points" — a specific fact each, not a restatement of the summary. This is
+read as a briefing, so a point is "Go-live committed for 31 March 2027", never "The schedule is
+discussed in the document".`;
+
+const GAP_RULES = `"planningGaps" is what this project still lacks before it can start — an escalation path nobody
+has defined, no organisation chart, no decision log, no acceptance criteria. Judge it against what
+the documents actually contain, never against a generic checklist of good practice: a gap you
+cannot point at a hole for is not a gap. Set "documentName" to the catalog document that would
+close it, copied EXACTLY from the list you are given, or null when none fits.
+
+"findings" is different and must not be padded with gaps: it is where two documents contradict each
+other, where a date or a number disagrees with another, where something is stated that cannot be
+true. Each carries evidence quoting both sides. An empty "findings" is a perfectly good answer.
+
+Also identify the CUSTOMER — the organisation this project is delivered FOR:
+- It is the client, not the supplier. The company writing the proposal, staffing the team or
+  signing as the vendor is NOT the customer. If a document is an FPT proposal to LG CNS, the
+  customer is LG CNS.
+- Not a partner, a subcontractor, a system vendor, or a company merely mentioned in passing.
+- Return the name as the document writes it, with a short verbatim quote as evidence.
+- Set "customer" to null unless the documents make it unambiguous. A wrong customer means the
+  project is scored against the wrong checklist and another company's template gets filled with it,
+  so silence is strongly preferred to a plausible name.`;
+
+const PLANNING_ANALYSIS_RECOMMEND_PROMPT = `You are the NextPM planning agent. A PM has given you a project's documents and a few typed
+inputs. They have NOT decided how to govern the project and are asking you to read everything and
+advise them.
+
+${NINE_CRITERIA}
+
+Return the FOUR best-scoring models, highest first, from ${DEFAULT_GOVERNANCE_MODELS.join(', ')} —
+you may include one outside that list only when the evidence clearly calls for it. Each carries its
+reasons and its supporting evidence, because you are making a case the PM has to be able to check.
+
+${OVERVIEW_RULES}
+
+${GAP_RULES}
+
+Language — the interface is English whatever the documents are in:
+- Write every summary, point, reason, gap and finding in English.
+- Evidence carries both: "english" is your rendering, "original" is the sentence copied VERBATIM
+  from the source in its own language (omit when the source is already English), and "source" names
+  the document exactly as its file name is given to you.
+- Governance model codes are fixed identifiers — return them exactly as written.
+
+Never invent. Every point, reason and gap must be traceable to the supplied material; where it is
+silent, say less rather than filling the space.
+
+Return strict JSON and nothing else:
+{ "mode": "RECOMMENDED",
+  "summary": string (one sentence on what you read),
+  "confidenceLevel": "HIGH" | "MEDIUM" | "LOW",
+  "overview": [{ "key": string, "label": string, "summary": string, "points": string[] }],
+  "approaches": [{ "approach": string, "score": number, "reasons": string[],
+                   "evidence": [{ "english": string, "original": string, "source": string }],
+                   "criteria": [{ "name": string, "score": number, "weight": number, "note": string }] }],
+  "planningGaps": [{ "title": string, "why": string, "documentName": string|null,
+                     "severity": "HIGH"|"MEDIUM"|"LOW" }],
+  "findings": [{ "title": string, "detail": string,
+                 "evidence": [{ "english": string, "original": string, "source": string }] }],
+  "customer": { "name": string, "evidence": string } | null }`;
+
+const PLANNING_ANALYSIS_ASSESS_PROMPT = `You are the NextPM planning agent. A PM has given you a project's documents, a few typed inputs,
+and the governance model they have ALREADY decided to use. You are not choosing a model — that
+decision is made. You are telling them how well their choice fits what you read.
+
+${NINE_CRITERIA}
+
+Return exactly ONE entry in "approaches": the model the PM named, with its weighted score, its
+per-criterion breakdown, and the key reasons behind that score — the honest ones, including where
+the fit is poor. Leave "evidence" as an empty array: the PM is not being sold this model, so
+quoting their own documents back at them adds nothing. Do not propose alternatives, and do not
+score any other model.
+
+${OVERVIEW_RULES}
+
+${GAP_RULES}
+
+Language — the interface is English whatever the documents are in: write every summary, point,
+reason, gap and finding in English. Findings still carry evidence, with "original" holding the
+source sentence verbatim and "source" naming the document.
+
+Never invent. Every point, reason and gap must be traceable to the supplied material.
+
+Return strict JSON and nothing else:
+{ "mode": "PM_CHOSEN",
+  "summary": string,
+  "confidenceLevel": "HIGH" | "MEDIUM" | "LOW",
+  "overview": [{ "key": string, "label": string, "summary": string, "points": string[] }],
+  "approaches": [{ "approach": string (the model the PM chose, exactly as given), "score": number,
+                   "reasons": string[], "evidence": [],
+                   "criteria": [{ "name": string, "score": number, "weight": number, "note": string }] }],
+  "planningGaps": [{ "title": string, "why": string, "documentName": string|null,
+                     "severity": "HIGH"|"MEDIUM"|"LOW" }],
+  "findings": [{ "title": string, "detail": string,
+                 "evidence": [{ "english": string, "original": string, "source": string }] }],
+  "customer": { "name": string, "evidence": string } | null }`;
+
+function buildPlanningAnalysisPrompt(context: PlanningAnalysisContext): string {
+  const inputs = context.inputs.map((input) => `- ${input.label}: ${input.value}`).join('\n');
+  const documents = context.documents
+    .map((document) => `--- ${document.label} ---\n${document.text}`)
+    .join('\n\n');
+
+  return [
+    `Project: ${context.projectName} · type ${context.projectType}`,
+    context.preferredApproach
+      ? `Governance model the PM has already decided on: ${context.preferredApproach}`
+      : 'The PM has not decided on a governance model.',
+    '',
+    'What the PM typed:',
+    inputs || '- nothing beyond the project name',
+    '',
+    'Catalog documents this project can produce (use these names verbatim in planningGaps):',
+    context.catalogDocuments.map((name) => `- ${name}`).join('\n') || '- none',
+    '',
+    `Uploaded documents (${context.documents.length}, verbatim, may be truncated):`,
+    documents || '- none uploaded',
+  ].join('\n');
+}
+
+/**
+ * Deliberately has **no mock fallback**. Every screen downstream — the overview, the advisory, the
+ * gap list, and the document pack the Studio then filters — is built from this one answer, and a
+ * keyword heuristic dressed up as an analysis would put invented gaps and an invented model in
+ * front of the PM. A failure here is reported as a failure.
+ */
+export async function analyzePlanningNeeds(context: PlanningAnalysisContext): Promise<PlanningAnalysisOutput> {
+  if (env.ai.provider !== 'anthropic' || !env.ai.anthropicKey) {
+    throw new Error(
+      'Planning analysis needs a model: set AI_PROVIDER=anthropic and ANTHROPIC_API_KEY. It has no offline fallback, because an invented analysis is worse than none.',
+    );
+  }
+
+  const chosen = Boolean(context.preferredApproach);
+  const result = await callAnthropicJson<Omit<PlanningAnalysisOutput, 'provider'>>({
+    system: chosen ? PLANNING_ANALYSIS_ASSESS_PROMPT : PLANNING_ANALYSIS_RECOMMEND_PROMPT,
+    prompt: buildPlanningAnalysisPrompt(context),
+    label: `skill1b:planning-analysis:${chosen ? 'pm-chosen' : 'recommend'}`,
+  });
+
+  const approaches = (result.approaches ?? []).map((entry) => ({
+    approach: String(entry.approach ?? '').trim(),
+    score: Number(entry.score ?? 0),
+    reasons: (entry.reasons ?? []).map(String),
+    // The PM-chosen mode is defined by having no evidence; enforce it rather than trusting the model.
+    evidence: chosen ? [] : normalizeEvidence(entry.evidence),
+    criteria: (entry.criteria ?? []).map((criterion) => ({
+      name: String(criterion.name ?? ''),
+      score: Number(criterion.score ?? 0),
+      weight: Number(criterion.weight ?? 0),
+      note: String(criterion.note ?? ''),
+    })),
+  }));
+
+  return {
+    mode: chosen ? 'PM_CHOSEN' : 'RECOMMENDED',
+    overview: result.overview ?? [],
+    // One entry when the PM chose; at most four when we are advising.
+    approaches: chosen ? approaches.slice(0, 1) : approaches.slice(0, 4),
+    planningGaps: result.planningGaps ?? [],
+    findings: (result.findings ?? []).map((finding) => ({
+      title: String(finding.title ?? ''),
+      detail: String(finding.detail ?? ''),
+      evidence: normalizeEvidence(finding.evidence),
+    })),
+    summary: result.summary ?? '',
+    confidenceLevel: result.confidenceLevel ?? 'MEDIUM',
+    // A customer without a verbatim quote is a guess wearing a citation's clothes — drop it.
+    customer:
+      result.customer?.name?.trim() && result.customer.evidence?.trim()
+        ? { name: result.customer.name.trim(), evidence: result.customer.evidence.trim() }
+        : null,
+    provider: 'anthropic',
+  };
+}
 
 function buildGovernanceRecommendationPrompt(context: GovernanceRecommendationContext): string {
   const inputs = context.verifiedInputs.map((input) => `- ${input.label}: ${input.value}`).join('\n');

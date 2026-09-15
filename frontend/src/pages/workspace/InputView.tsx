@@ -1,16 +1,56 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { inputApi, rulesApi } from '../../api/endpoints';
+import { inputApi, projectApi, rulesApi } from '../../api/endpoints';
 import { ApiError } from '../../api/client';
 import { useToast } from '../../components/Toast';
 import { useDebouncedCallback } from '../../hooks/useDebouncedCallback';
 import { useProjectWrite } from '../../hooks/useProjectWrite';
 import { CustomerConfirmBanner } from './CustomerConfirmBanner';
-import type { InputField } from '../../api/types';
+import type { InputField, ProjectType } from '../../api/types';
 import type { WorkspaceView } from '../WorkspacePage';
 
 /** One wording for every disabled control, so a reader is told why rather than left guessing. */
 const READ_ONLY_HINT = 'You have view-only access to this project';
+
+/** Seeded from the Create Project dialog; changing it here changes which document catalog applies. */
+const PROJECT_TYPES: { value: ProjectType; label: string }[] = [
+  { value: 'SI', label: 'SI — System Integration' },
+  { value: 'SM', label: 'SM — Service Management' },
+  { value: 'PRODUCT', label: 'Product' },
+];
+
+/**
+ * The models the PM can declare up front. Mirrors `DEFAULT_GOVERNANCE_MODELS` on the server — the
+ * analysis accepts any string, but a dropdown is the point here: a PM who has already decided
+ * should pick, not type.
+ */
+const GOVERNANCE_MODELS: { value: string; label: string }[] = [
+  { value: 'WATERFALL', label: 'Waterfall' },
+  { value: 'SCRUM', label: 'Scrum' },
+  { value: 'KANBAN', label: 'Kanban' },
+  { value: 'HYBRID', label: 'Hybrid' },
+  { value: 'ITERATIVE', label: 'Iterative' },
+  { value: 'STAGE_GATE', label: 'Predictive / Stage-Gate' },
+];
+
+/** Every format `lib/extract-text.ts` is asked to read, in one place so both upload boxes agree. */
+const UPLOAD_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt';
+
+/** What this screen genuinely requires before *Analyze planning needs* can do anything. */
+interface RequiredState {
+  name: boolean;
+  type: boolean;
+  description: boolean;
+}
+
+const REQUIRED_INPUTS: { key: keyof RequiredState; label: string; done: (state: RequiredState) => boolean }[] = [
+  { key: 'name', label: 'Project name', done: (state) => state.name },
+  // Always satisfied in practice — a project cannot exist without a type — but it is one of the
+  // three things asked for, and a checklist that hides a satisfied item is a checklist you stop
+  // trusting when it hides an unsatisfied one.
+  { key: 'type', label: 'Project type', done: (state) => state.type },
+  { key: 'description', label: 'Description document', done: (state) => state.description },
+];
 
 export function InputView({
   projectId,
@@ -25,6 +65,12 @@ export function InputView({
   /** A reader sees the same screen, with nothing on it that pretends to accept a change. */
   const canWrite = useProjectWrite(projectId);
 
+  // The project type and the PM's chosen approach live on the project, not on the input form.
+  const workspace = useQuery({
+    queryKey: ['workspace', projectId],
+    queryFn: () => projectApi.workspace(projectId),
+  });
+
   const { data, isLoading } = useQuery({
     queryKey: ['input', projectId],
     queryFn: () => inputApi.profile(projectId),
@@ -32,46 +78,12 @@ export function InputView({
 
   const [draft, setDraft] = useState<Record<string, string | null>>({});
   const [savedAt, setSavedAt] = useState<Date | null>(null);
-  const [fieldDrawerOpen, setFieldDrawerOpen] = useState(false);
 
-  /**
-   * Optional fields the PM has asked to see even though nothing has answered them yet.
-   *
-   * Only two fields per project type are required, so showing all thirty at once is what made this
-   * form read as a wall of empty boxes. The rest appear on their own once something fills them —
-   * *Verify input* is the usual way — and this is the escape hatch for a PM who wants one in front
-   * of them from the start.
-   *
-   * Kept in the browser rather than on the server: it is a per-viewer display preference, not
-   * project data, and nothing downstream reads it.
-   */
-  const [revealed, setRevealed] = useState<Record<string, boolean>>({});
-
-  const revealKey = `nextpm:input-revealed:${projectId}`;
-
+  // The form is three fixed items now, so there is no per-field visibility to remember.
   useEffect(() => {
     setDraft({});
-    setFieldDrawerOpen(false);
-    try {
-      const stored = window.localStorage.getItem(`nextpm:input-revealed:${projectId}`);
-      setRevealed(stored ? (JSON.parse(stored) as Record<string, boolean>) : {});
-    } catch {
-      // A blocked or corrupted store is not worth a broken screen — start from the default.
-      setRevealed({});
-    }
   }, [projectId]);
 
-  const reveal = (definitionId: string, show: boolean) => {
-    setRevealed((current) => {
-      const next = { ...current, [definitionId]: show };
-      try {
-        window.localStorage.setItem(revealKey, JSON.stringify(next));
-      } catch {
-        // Preference lost on reload; the form still works, which is what matters.
-      }
-      return next;
-    });
-  };
 
   const save = useMutation({
     mutationFn: (values: { definitionId: string; value: string | null }[]) => inputApi.save(projectId, values),
@@ -87,61 +99,30 @@ export function InputView({
   }, 900);
 
   /**
-   * Reads the uploaded documents into the form, then verifies the PM's own answers. It stays on
-   * this screen on purpose: prefilled values arrive unverified, and the PM is meant to look at
-   * them before asking for a governance model.
+   * "Analyze planning needs" — the one model call on the path from here to a document pack.
+   *
+   * It replaces the old pair of buttons. *Verify input* existed to read documents into the form so
+   * the PM could promote each value one at a time; the analysis now reads them itself and answers
+   * about the project instead — what it is, how to govern it, what is missing, what contradicts
+   * itself — so there is nothing left for a second button to do.
+   *
+   * The server has no offline fallback for it on purpose, so a missing API key surfaces here as a
+   * plain failure rather than as a plausible-looking analysis nobody actually produced.
    */
-  const verify = useMutation({
-    mutationFn: () => inputApi.verify(projectId),
-    onSuccess: async (result) => {
-      await queryClient.invalidateQueries({ queryKey: ['input', projectId] });
-      await queryClient.invalidateQueries({ queryKey: ['workspace', projectId] });
-
-      // A proposed customer is the one result worth interrupting for — it gates the customer
-      // checklist and the kickoff template, and it is waiting on a decision only the PM can make.
-      if (result.customerSuggestion) {
-        notify({
-          title: `Is this project for ${result.customerSuggestion.name}?`,
-          detail: 'Confirm it above the form — nothing has been changed yet.',
-        });
-      }
-
-      const read = result.documentsRead
-        ? `Read ${result.documentsRead} document${result.documentsRead === 1 ? '' : 's'}. `
-        : 'No uploaded documents to read. ';
-      const filled = result.prefilled
-        ? `Prefilled ${result.prefilled} field${result.prefilled === 1 ? '' : 's'} — review them, then verify again to confirm. `
-        : result.documentsRead
-          ? 'Nothing new could be answered from them — fill the rest in yourself. '
-          : '';
-      notify({
-        title: `${result.verified} data point${result.verified === 1 ? '' : 's'} verified`,
-        detail: `${read}${filled}`.trim(),
-      });
-      if (result.documentsRead && result.provider === 'mock') {
-        notify({
-          title: 'Document reading is unavailable',
-          detail:
-            'The AI provider could not be reached, so only exact keyword matches were applied. Check AI_PROVIDER and ANTHROPIC_API_KEY.',
-        });
-      }
-    },
-    onError: (error) =>
-      notify({ title: 'Verification failed', detail: error instanceof ApiError ? error.message : 'Unexpected error' }),
-  });
-
-  /** The explicit "ask the AI" step — runs Skill 1, then opens the Governance Model screen. */
-  const suggestModel = useMutation({
-    mutationFn: () => rulesApi.evaluate(projectId),
+  const analyze = useMutation({
+    mutationFn: () => rulesApi.analyze(projectId),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['approach', projectId] });
-      await queryClient.invalidateQueries({ queryKey: ['workspace', projectId] });
-      notify({ title: 'Recommendation ready', detail: 'Opening the governance model options.' });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['approach', projectId] }),
+        queryClient.invalidateQueries({ queryKey: ['workspace', projectId] }),
+        queryClient.invalidateQueries({ queryKey: ['studio', projectId] }),
+      ]);
+      notify({ title: 'Analysis ready', detail: 'Opening Planning Review.' });
       setTimeout(() => onNavigate('approach'), 350);
     },
     onError: (error) =>
       notify({
-        title: 'Could not get a recommendation',
+        title: 'Analysis failed',
         detail: error instanceof ApiError ? error.message : 'Unexpected error',
       }),
   });
@@ -154,16 +135,6 @@ export function InputView({
   const removeField = useMutation({
     mutationFn: (id: string) => inputApi.removeCustomField(projectId, id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['input', projectId] }),
-  });
-
-  const resolve = useMutation({
-    mutationFn: ({ actionId, value }: { actionId: string; value: string }) =>
-      inputApi.resolveAction(projectId, actionId, value),
-    onSuccess: (_result, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['input', projectId] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard', projectId] });
-      notify({ title: 'Suggested value selected', detail: `${variables.value} is now a PM-confirmed input.` });
-    },
   });
 
   const uploadReference = useMutation({
@@ -188,6 +159,29 @@ export function InputView({
       });
     },
     onError: (error) => notify({ title: 'Upload rejected', detail: (error as Error).message }),
+  });
+
+  /**
+   * Saves a project-level answer. Changing the type re-reads the whole input schema and the
+   * document catalog, so the input profile is invalidated alongside the workspace.
+   */
+  const setProjectField = useMutation({
+    mutationFn: (patch: { type?: ProjectType; preferredApproach?: string | null }) =>
+      projectApi.update(projectId, patch),
+    onSuccess: async (_result, patch) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['workspace', projectId] }),
+        queryClient.invalidateQueries({ queryKey: ['input', projectId] }),
+        queryClient.invalidateQueries({ queryKey: ['studio', projectId] }),
+      ]);
+      if (patch.type) {
+        notify({
+          title: 'Project type changed',
+          detail: 'The input form and the document catalog for this project changed with it.',
+        });
+      }
+    },
+    onError: (error) => notify({ title: 'Could not save', detail: (error as Error).message }),
   });
 
   const removeDescription = useMutation({
@@ -224,16 +218,59 @@ export function InputView({
     Object.entries(draft).map(([definitionId, value]) => ({ definitionId, value: value || null }));
 
   /**
-   * A field earns its place on screen by being required, by having an answer, or by the PM asking
-   * for it. "Having an answer" is what makes *Verify input* reveal exactly the fields the uploaded
-   * documents could fill: they arrive with a value, so they stop being hidden.
+   * The minimum profile is exactly three answers, and that is the whole of it.
+   *
+   * It is not seventeen fields with fourteen hidden behind a toggle — that arrangement kept asking
+   * the PM to wonder what they were not being shown. The analysis reads the uploaded documents, so
+   * the form only has to carry what a document cannot say: the project's own name, its type, and
+   * whether the PM has already decided how to govern it. Anything else a particular project needs
+   * is added explicitly with *Add custom field*.
+   *
+   * The other definitions still exist in the database and still hold any value they were given —
+   * they are simply not part of this screen any more.
    */
-  const isAnswered = (field: InputField) => Boolean(valueOf(field));
-  const isVisible = (field: InputField) => field.required || isAnswered(field) || revealed[field.definitionId];
+  const nameField = data.fields.find((field) => /^(project|service|product)Name$/.test(field.key));
 
-  const visibleFields = data.fields.filter(isVisible);
-  const hiddenFields = data.fields.filter((field) => !isVisible(field));
-  const optionalFields = data.fields.filter((field) => !field.required);
+  const requiredState: RequiredState = {
+    name: Boolean(nameField && valueOf(nameField).trim()),
+    type: Boolean(workspace.data?.type),
+    // The upload only counts once its text could actually be read: a scanned PDF is on the screen
+    // but says nothing to the analysis, and calling that "provided" would be a lie the PM only
+    // discovers when the analysis comes back thin.
+    description: Boolean(data.descriptionDocument?.textAvailable),
+  };
+  const requiredDone = REQUIRED_INPUTS.filter((item) => item.done(requiredState)).length;
+  const missingRequired = REQUIRED_INPUTS.filter((item) => !item.done(requiredState));
+
+  /**
+   * Refuses in the PM's own terms instead of leaving them to work out why nothing happened.
+   *
+   * The check is deliberately the same `REQUIRED_INPUTS` list the meter above counts, so the two
+   * can never disagree about what is missing — a button that refuses for a reason the checklist
+   * does not show is worse than no checklist.
+   */
+  const startAnalysis = () => {
+    if (missingRequired.length) {
+      const names = missingRequired.map((item) => item.label);
+      /*
+        An uploaded file whose text could not be read is a different problem from no file at all —
+        the PM can see it sitting on the screen, so "Description document is missing" would read as
+        a bug in the app rather than as something they have to act on.
+      */
+      const unreadable = data.descriptionDocument && !data.descriptionDocument.textAvailable;
+      notify({
+        title: `Cannot analyse yet — ${names.length} required input${names.length === 1 ? '' : 's'} missing`,
+        detail: unreadable
+          ? `No text could be read from ${data.descriptionDocument!.fileName}, so the analysis has nothing to work from. Re-upload it as a PDF with a text layer, Word, Excel, PowerPoint or TXT.`
+          : `Still needed: ${names.join(', ')}.` +
+            (requiredState.description
+              ? ''
+              : ' The analysis reads the uploaded documents, so it has nothing to work from without one.'),
+      });
+      return;
+    }
+    analyze.mutate();
+  };
 
   return (
     <section className="view active">
@@ -248,12 +285,30 @@ export function InputView({
                 : 'Provide the minimum delivery context.'}
           </h1>
         </div>
-        <div className="completion">
-          <span>Input readiness</span>
-          <strong>{data.readiness}%</strong>
+        {/*
+          Counts the three things this screen actually asks for, not a percentage over the
+          seventeen field definitions still in the database. The form stopped showing those, so a
+          meter scored against them would have read 6% with everything on screen filled in — a
+          number that is arithmetically correct and tells the PM nothing true.
+
+          `computeInputReadiness` is deliberately left alone: domain readiness, project readiness
+          and the program roll-up all share it, and none of them is this screen's progress bar.
+        */}
+        <div className="completion required-inputs">
+          <span>Required inputs</span>
+          <strong>
+            {requiredDone}/{REQUIRED_INPUTS.length}
+          </strong>
           <div>
-            <i style={{ width: `${data.readiness}%` }} />
+            <i style={{ width: `${(requiredDone / REQUIRED_INPUTS.length) * 100}%` }} />
           </div>
+          <ul>
+            {REQUIRED_INPUTS.map((item) => (
+              <li key={item.key} className={item.done(requiredState) ? 'done' : ''}>
+                {item.done(requiredState) ? '✓' : '○'} {item.label}
+              </li>
+            ))}
+          </ul>
         </div>
       </div>
 
@@ -278,7 +333,8 @@ export function InputView({
               <p>A short brief, proposal or overview — read for AI analysis, not just structured extraction</p>
             </div>
           </div>
-          <span className="required-chip">Optional</span>
+          {/* The analysis reads documents and refuses to run without one, so this is not optional. */}
+          <span className="required-chip mandatory-chip">Mandatory *</span>
         </div>
 
         {data.descriptionDocument && (
@@ -310,11 +366,11 @@ export function InputView({
                 ? 'Click to replace the document'
                 : 'Click to upload'}
           </strong>
-          <p>PDF, DOCX or TXT — read as text</p>
-          <small>Max {data.policy.maxUploadMb} MB</small>
+          <p>PDF, Word, Excel, PowerPoint or TXT</p>
+          <small>Max {data.policy.maxUploadMb} MB · required before analysis</small>
           <input
             type="file"
-            accept=".pdf,.docx,.doc,.txt"
+            accept={UPLOAD_ACCEPT}
             disabled={!canWrite}
             onChange={(event) => {
               const file = event.target.files?.[0];
@@ -383,7 +439,7 @@ export function InputView({
                   {group.files.length === 0 ? 'Add' : full ? 'Full' : 'Add another'}
                   <input
                     type="file"
-                    accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx"
+                    accept={UPLOAD_ACCEPT}
                     disabled={full || !canWrite}
                     ref={(element) => {
                       fileInputs.current[group.group] = element;
@@ -401,98 +457,71 @@ export function InputView({
         </div>
       </article>
 
-      <div className="content-split input-split">
+      {/* Full width now: the "Missing information" aside that used to sit beside this form is gone. */}
+      <div className="input-single">
         <form className="panel form-panel" onSubmit={(event) => event.preventDefault()}>
           <div className="section-title">
             <div>
-              <span>01</span>
               <div>
                 <h2>Minimum project profile</h2>
-                <p>Required signals for approach and document selection</p>
               </div>
             </div>
-            <div className="section-title-actions">
-              <b>
-                {visibleFields.length} of {data.fields.length} shown
-              </b>
-              <button
-                type="button"
-                className="primary icon-only"
-                onClick={() => setFieldDrawerOpen(true)}
-                title="Choose which fields to show"
-                aria-label="Choose which fields to show"
-              >
-                ⚙
-              </button>
-            </div>
-          </div>
-
-          <div className="form-grid">
-            {visibleFields.map((field) => (
-              <label key={field.definitionId}>
-                {field.label}
-                {field.required ? ' *' : ''}
-                {field.source === 'AI_SUGGESTED' && !field.verified && (
-                  <span className="required-chip ai-suggested-chip">AI suggested — review</span>
-                )}
-                {field.fieldType === 'SELECT' ? (
-                  <select
-                    value={valueOf(field)}
-                    disabled={!canWrite}
-                    onChange={(event) => change(field, event.target.value)}
-                  >
-                    <option value="">— select —</option>
-                    {field.options.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
-                ) : field.fieldType === 'DATE_RANGE' ? (
-                  <div className="dual">
-                    <input
-                      type="date"
-                      value={valueOf(field).split('..')[0] ?? ''}
-                      disabled={!canWrite}
-                      onChange={(event) =>
-                        change(field, `${event.target.value}..${valueOf(field).split('..')[1] ?? ''}`)
-                      }
-                    />
-                    <input
-                      type="date"
-                      value={valueOf(field).split('..')[1] ?? ''}
-                      disabled={!canWrite}
-                      onChange={(event) =>
-                        change(field, `${valueOf(field).split('..')[0] ?? ''}..${event.target.value}`)
-                      }
-                    />
-                  </div>
-                ) : (
-                  <input
-                    type={field.fieldType === 'DATE' ? 'date' : field.fieldType === 'NUMBER' ? 'number' : 'text'}
-                    value={valueOf(field)}
-                    disabled={!canWrite}
-                    onChange={(event) => change(field, event.target.value)}
-                  />
-                )}
-              </label>
-            ))}
           </div>
 
           {/*
-            Says plainly that the form is not the whole form. Hiding fields without saying so would
-            leave a PM wondering where the schedule questions went.
+            Three fields, fixed, on one row — and only the first is an input-form field. Type and
+            approach live on `Project`, not on `ProjectInputValue`: type decides which document
+            catalog applies, approach decides whether the analysis recommends a governance model or
+            assesses the one the PM already chose. Both save on change; there is no draft worth
+            keeping for a dropdown.
           */}
-          {hiddenFields.length > 0 && (
-            <p className="hidden-fields-note">
-              <b>{hiddenFields.length}</b> optional field{hiddenFields.length === 1 ? ' is' : 's are'} hidden. Press{' '}
-              <b>Verify input</b> and any the uploaded documents can answer will appear filled in, or{' '}
-              <button type="button" className="text-button" onClick={() => setFieldDrawerOpen(true)}>
-                choose them yourself
-              </button>
-              .
-            </p>
-          )}
+          <div className="form-grid profile-row">
+            <label>
+              {nameField?.label ?? 'Project name'} *
+              {nameField && (
+                <input
+                  type="text"
+                  value={valueOf(nameField)}
+                  disabled={!canWrite}
+                  onChange={(event) => change(nameField, event.target.value)}
+                />
+              )}
+            </label>
+            <label>
+              Project type *
+              <select
+                value={workspace.data?.type ?? ''}
+                disabled={!canWrite}
+                onChange={(event) => setProjectField.mutate({ type: event.target.value as ProjectType })}
+              >
+                {PROJECT_TYPES.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Management approach
+              <select
+                value={workspace.data?.preferredApproach ?? ''}
+                disabled={!canWrite}
+                onChange={(event) => setProjectField.mutate({ preferredApproach: event.target.value || null })}
+              >
+                {/*
+                  "Not decided yet" is a real answer, not a blank. Choosing it is what asks the
+                  analysis to recommend a model; naming one asks it to assess that model instead.
+                */}
+                <option value="">Not decided yet — recommend one for me</option>
+                {GOVERNANCE_MODELS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
 
           <div className="section-title second custom-head">
             <div>
@@ -548,25 +577,6 @@ export function InputView({
             ))}
           </div>
 
-          {/*
-            Sits directly above the three buttons it describes. It explains what pressing them does,
-            so it belongs where the PM is about to press one — not at the top of the upload panel,
-            several screens away from the action.
-          */}
-          <div className="extract-note form-note">
-            <span>✦</span>
-            <div>
-              <strong>What happens next</strong>
-              <p>
-                <b>Verify input</b> reads every uploaded document into this form: fields it can answer appear filled
-                in and marked AI suggested, and the rest stay hidden until something answers them. It then marks your
-                own answers verified. <b>✦ Suggest governance model</b> reads the description document alongside your
-                verified inputs and proposes a model with a confidence score and alternatives. Nothing here is applied
-                without your confirmation.
-              </p>
-            </div>
-          </div>
-
           <div className="form-actions">
             <span>
               <i>✓</i>{' '}
@@ -581,126 +591,35 @@ export function InputView({
             >
               Save draft
             </button>
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => verify.mutate()}
-              disabled={!canWrite || verify.isPending || suggestModel.isPending}
-              title={canWrite ? 'Read the uploaded documents into the form, then confirm your answers' : READ_ONLY_HINT}
-            >
-              {verify.isPending ? 'Reading documents…' : 'Verify input'}
-            </button>
+            {/*
+              One action, not two. "Verify input" used to read the documents into the form so the
+              PM could confirm each value; the analysis now reads them directly and answers about
+              the project instead, so there is nothing left to promote — a typed value is the PM's
+              own and is verified on save.
+            */}
+            {/*
+              Stays enabled when something is missing, and says what. A disabled button fires no
+              click event, so it can never explain itself — the PM was left with a grey control and
+              a tooltip they had to go looking for. Pressing it now names the gap.
+            */}
             <button
               type="button"
               className="primary"
-              onClick={() => suggestModel.mutate()}
-              disabled={!canWrite || suggestModel.isPending || verify.isPending}
-              title={canWrite ? 'Ask the AI to recommend a governance model from the verified inputs' : READ_ONLY_HINT}
+              onClick={startAnalysis}
+              disabled={!canWrite || analyze.isPending}
+              title={
+                canWrite
+                  ? 'Read every uploaded document and return the project overview, the approach advisory and the planning gaps'
+                  : READ_ONLY_HINT
+              }
             >
-              {suggestModel.isPending ? 'Asking AI…' : '✦ Suggest governance model'}
+              {analyze.isPending ? '✦ Analyzing…' : '✦ Analyze planning needs'}
             </button>
           </div>
         </form>
 
-        <aside className="context-aside">
-          {/*
-            The "Rule verification" card used to sit here restating the Input readiness meter in the
-            page header with a second set of numbers. One reading of the same thing is enough.
-          */}
-          <article className="panel">
-            <h3>Missing information</h3>
-            {data.missingInformation.length === 0 && (
-              <div className="program-empty">Nothing outstanding right now.</div>
-            )}
-            {data.missingInformation.map((item) => (
-              <div className="missing" key={item.id}>
-                <span>!</span>
-                <div>
-                  <strong>{item.title}</strong>
-                  <p>{item.description}</p>
-                  {item.suggestions.length > 0 ? (
-                    <div className="suggested-values">
-                      {item.suggestions.map((suggestion) => (
-                        <button
-                          key={suggestion}
-                          disabled={!canWrite}
-                          title={canWrite ? undefined : READ_ONLY_HINT}
-                          onClick={() => resolve.mutate({ actionId: item.id, value: suggestion })}
-                        >
-                          {suggestion}
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <button
-                      className="text-button add-answer"
-                      disabled={!canWrite}
-                      title={canWrite ? undefined : READ_ONLY_HINT}
-                      onClick={() => {
-                        const value = window.prompt(item.title, '');
-                        if (value) resolve.mutate({ actionId: item.id, value });
-                      }}
-                    >
-                      + Provide value
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </article>
-        </aside>
       </div>
 
-      {/*
-        The same drawer pattern as the dashboard's ⚙, for the same reason: a screen that decides
-        what to show you needs one obvious place to override it. A field that already has an answer
-        is locked on — hiding a filled-in field would hide the PM's own data from them.
-      */}
-      <div className={`dashboard-drawer input-field-drawer${fieldDrawerOpen ? ' open' : ''}`}>
-        <div className="drawer-head">
-          <div>
-            <strong>Custom input</strong>
-            <span>Choose which optional fields stay on the form</span>
-          </div>
-          <button onClick={() => setFieldDrawerOpen(false)}>×</button>
-        </div>
-        <div className="dashboard-options">
-          {optionalFields.map((field) => {
-            const answered = isAnswered(field);
-            return (
-              <label key={field.definitionId} className={answered ? 'locked' : undefined}>
-                <input
-                  type="checkbox"
-                  checked={answered || Boolean(revealed[field.definitionId])}
-                  disabled={answered}
-                  onChange={(event) => reveal(field.definitionId, event.target.checked)}
-                />{' '}
-                {field.label}
-                {answered && <em> · answered</em>}
-              </label>
-            );
-          })}
-          {optionalFields.length === 0 && <p className="program-empty">Every field on this form is required.</p>}
-        </div>
-        <button
-          type="button"
-          className="secondary full"
-          onClick={() => {
-            const all = Object.fromEntries(optionalFields.map((field) => [field.definitionId, true]));
-            setRevealed(all);
-            try {
-              window.localStorage.setItem(revealKey, JSON.stringify(all));
-            } catch {
-              // See `reveal` — the preference is a convenience, never a requirement.
-            }
-          }}
-        >
-          Show every field
-        </button>
-        <button className="primary full" onClick={() => setFieldDrawerOpen(false)}>
-          Done
-        </button>
-      </div>
     </section>
   );
 }

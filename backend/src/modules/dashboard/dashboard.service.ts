@@ -3,6 +3,7 @@ import { prisma } from '../../lib/prisma';
 import { notFound } from '../../lib/http-error';
 import { listEvents } from '../audit/audit.service';
 import { projectWorkspace } from '../program/program.service';
+import { gapDocumentNames } from '../documents/documents.service';
 
 const DEFAULT_WIDGETS = {
   readiness: true,
@@ -32,10 +33,22 @@ export async function dashboard(projectId: string, userId: string) {
     prisma.dashboardLayout.findUnique({ where: { projectId_userId: { projectId, userId } } }),
   ]);
 
-  const approved = documents.filter((doc) => doc.status === DocumentStatus.APPROVED).length;
-  const inReview = documents.filter((doc) => doc.status === DocumentStatus.PM_REVIEW).length;
-  const notGenerated = documents.filter((doc) => doc.status === DocumentStatus.NOT_GENERATED).length;
-  const requiredPending = documents.filter(
+  /**
+   * Document progress counts the documents this project is actually expected to produce — the ones
+   * the planning analysis named as missing, plus the kickoff deck — not every row
+   * `syncDocumentsWithPack` provisioned.
+   *
+   * Without this the dashboard reported "3/22 generated" for a project whose whole pack is five
+   * documents, which reads as barely started when it is nearly done. Null means no analysis has
+   * tied a gap to a document yet, and then the full pack is the honest denominator.
+   */
+  const gapNames = await gapDocumentNames(projectId);
+  const inScope = gapNames ? documents.filter((doc) => gapNames.includes(doc.name)) : documents;
+
+  const approved = inScope.filter((doc) => doc.status === DocumentStatus.APPROVED).length;
+  const inReview = inScope.filter((doc) => doc.status === DocumentStatus.PM_REVIEW).length;
+  const notGenerated = inScope.filter((doc) => doc.status === DocumentStatus.NOT_GENERATED).length;
+  const requiredPending = inScope.filter(
     (doc) => doc.requirement === 'REQUIRED' && doc.status !== DocumentStatus.APPROVED,
   ).length;
 
@@ -57,12 +70,12 @@ export async function dashboard(projectId: string, userId: string) {
         : 'All required planning outputs are approved',
     },
     outputs: {
-      total: documents.length,
-      generated: documents.length - notGenerated,
+      total: inScope.length,
+      generated: inScope.length - notGenerated,
       approved,
       inReview,
       notGenerated,
-      percent: documents.length ? Math.round(((documents.length - notGenerated) / documents.length) * 100) : 0,
+      percent: inScope.length ? Math.round(((inScope.length - notGenerated) / inScope.length) * 100) : 0,
     },
     tasks: {
       items: tasks,

@@ -1,10 +1,11 @@
 import { DecisionOutcome, Prisma, ProjectType } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 import { badRequest, notFound } from '../../lib/http-error';
-import { normalizeEvidence, recommendGovernanceModel } from '../ai/provider';
+import { analyzePlanningNeeds, normalizeEvidence, recommendGovernanceModel } from '../ai/provider';
 import { DEFAULT_GOVERNANCE_MODELS, governanceModelMeta } from '../../data/governance-models';
 import { logEvent } from '../audit/audit.service';
 import { syncDocumentsWithPack } from '../documents/documents.service';
+import { buildCustomerSuggestion } from '../input/input.service';
 
 /**
  * This module keeps its original "rules" folder name for a minimal diff, but it no
@@ -113,6 +114,128 @@ export async function runEvaluation(projectId: string, actorId: string) {
   return evaluation;
 }
 
+/**
+ * "Analyze planning needs" — the one model call between Project Input and a document pack.
+ *
+ * Reads every uploaded document plus what the PM typed, and answers in one pass: what the project
+ * is, how it should be governed (or how well the PM's own choice fits), what is still missing, and
+ * what contradicts itself. The result is stored as an immutable `AiApproachSuggestion` snapshot,
+ * the same as the recommendation it replaces, so history stays explainable.
+ *
+ * `Project.preferredApproach` decides the mode and nothing else does: null asks for advice, a value
+ * asks for an assessment of that value.
+ */
+export async function runPlanningAnalysis(projectId: string, actorId: string) {
+  const project = await prisma.project.findUnique({ where: { id: projectId } });
+  if (!project) throw notFound('Project not found');
+
+  const [values, references, definitions] = await Promise.all([
+    prisma.projectInputValue.findMany({ where: { projectId }, include: { definition: true } }),
+    prisma.referenceFile.findMany({ where: { projectId }, orderBy: { uploadedAt: 'asc' } }),
+    prisma.documentDefinition.findMany({ where: { projectType: project.type }, orderBy: { name: 'asc' } }),
+  ]);
+
+  // Every upload, not only the description document: a contradiction between two files is exactly
+  // the kind of finding this call exists to surface, and it cannot see one if it reads only one.
+  const documents = references
+    .map((file) => {
+      const extraction = file.extraction as { rawText?: string; textAvailable?: boolean } | null;
+      return extraction?.textAvailable && extraction.rawText
+        ? { label: file.fileName, text: extraction.rawText.slice(0, DOCUMENT_CHARS) }
+        : null;
+    })
+    .filter((entry): entry is { label: string; text: string } => entry !== null);
+
+  if (!documents.length) {
+    throw badRequest(
+      'Upload a project description document first — the analysis reads the documents, and there is nothing to read.',
+    );
+  }
+
+  const analysis = await analyzePlanningNeeds({
+    projectName: project.name,
+    projectType: project.type,
+    inputs: values
+      .filter((value) => value.value)
+      .map((value) => ({ label: value.definition.label, value: value.value! })),
+    documents,
+    preferredApproach: project.preferredApproach,
+    catalogDocuments: [...new Set(definitions.map((definition) => definition.name))],
+  });
+
+  /**
+   * The customer proposal used to ride along with "Verify input". That button is gone, so it rides
+   * along here instead — otherwise removing the button would have silently switched off the
+   * customer detection that decides which checklist scores the project and whose kickoff template
+   * gets filled. Still only a proposal: it is stored for the PM to accept on the banner, never
+   * applied.
+   */
+  if (analysis.customer && !project.customer?.trim()) {
+    await prisma.project.update({
+      where: { id: projectId },
+      data: {
+        customerSuggestion: (await buildCustomerSuggestion(
+          analysis.customer,
+          documents,
+          project.customer,
+        )) as unknown as Prisma.InputJsonValue,
+      },
+    });
+  }
+
+  const primary = analysis.approaches[0];
+  const evaluation = await prisma.aiApproachSuggestion.create({
+    data: {
+      projectId,
+      recommendedApproach: primary?.approach ?? project.preferredApproach ?? 'HYBRID',
+      confidence: Math.round(primary?.score ?? 0),
+      confidenceLevel: analysis.confidenceLevel,
+      rationale: analysis.summary,
+      reasons: (primary?.reasons ?? []) as unknown as Prisma.InputJsonValue,
+      evidence: (primary?.evidence ?? []) as unknown as Prisma.InputJsonValue,
+      // Risks of the *approach* stay empty here; document contradictions live in `findings`.
+      risks: [] as unknown as Prisma.InputJsonValue,
+      // Everything after the first entry is what the PM can switch to — empty in PM_CHOSEN mode.
+      alternatives: analysis.approaches.slice(1).map((entry) => ({
+        approach: entry.approach,
+        score: entry.score,
+        rationale: entry.reasons[0] ?? '',
+        reasons: entry.reasons,
+        evidence: entry.evidence,
+        criteria: entry.criteria,
+      })) as unknown as Prisma.InputJsonValue,
+      summary: analysis.summary,
+      candidateValues: [] as unknown as Prisma.InputJsonValue,
+      aiProvider: analysis.provider,
+      overview: analysis.overview as unknown as Prisma.InputJsonValue,
+      planningGaps: analysis.planningGaps as unknown as Prisma.InputJsonValue,
+      findings: analysis.findings as unknown as Prisma.InputJsonValue,
+      approachMode: analysis.mode,
+      // The primary's own criteria ride along on the snapshot via `reasons`/`criteria` in the
+      // alternatives shape; the primary keeps its breakdown here so the card can show it.
+      ...(primary ? { candidateValues: primary.criteria as unknown as Prisma.InputJsonValue } : {}),
+    },
+  });
+
+  await logEvent({
+    projectId,
+    actorId,
+    actorType: 'AGENT',
+    type: 'GOVERNANCE_MODEL_RECOMMENDED',
+    title:
+      analysis.mode === 'PM_CHOSEN'
+        ? `${primary?.approach} assessed · ${primary?.score}% fit`
+        : `${primary?.approach} recommended · ${primary?.score}% fit`,
+    detail: `${documents.length} document(s) read · ${analysis.planningGaps.length} planning gap(s) · ${analysis.findings.length} finding(s)`,
+    payload: { evaluationId: evaluation.id, mode: analysis.mode },
+  });
+
+  return evaluation;
+}
+
+/** How much of each uploaded document the analysis reads. Enough to quote, small enough to batch. */
+const DOCUMENT_CHARS = 18_000;
+
 export async function latestEvaluation(projectId: string) {
   const evaluation = await prisma.aiApproachSuggestion.findFirst({
     where: { projectId },
@@ -123,6 +246,7 @@ export async function latestEvaluation(projectId: string) {
   // immutable by design, so they are normalised on the way out rather than rewritten in place.
   return { ...evaluation, evidence: normalizeEvidence(evaluation.evidence) };
 }
+
 
 /** Required/conditional document names for this project's type — same for every governance model. */
 async function documentPackForProject(projectType: ProjectType) {

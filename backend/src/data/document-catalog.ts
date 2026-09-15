@@ -18,12 +18,18 @@ export interface CatalogEntry {
 export const KICKOFF_DECK = 'Kickoff Deck';
 
 /**
- * The full project plan workbook, filled from `Template_Project Plan_v4.2.xlsx`.
+ * The Project Plan workbook is **no longer generated**, and this name is kept only so nothing that
+ * still refers to it breaks.
  *
- * Unlike the kickoff deck this is the *house* template: every project uses it whatever the
- * customer, which is expressed by uploading it against the house-default customer (the one holding
- * the `*` alias) and letting `customerTemplatesForProject` fall back to that. A customer who later
- * supplies their own Project Plan template overrides it automatically, with no code change.
+ * It was produced by filling the house template `Template_Project Plan_v4.2.xlsx` — 281 blanks
+ * across 16 sheets. In practice the model could ground only a handful of them from project data
+ * and correctly left the rest as the template's own worked examples, so a generation cost six
+ * model calls and returned something close to the blank template. The PM filling that workbook by
+ * hand is both cheaper and better, so the catalog no longer offers it.
+ *
+ * The template itself stays in the customer library, downloadable, and
+ * `customerTemplatesForProject` still resolves it — restoring the feature means putting the
+ * `PROJECT_PLAN` entries back in the catalog below and re-seeding. Nothing else was removed.
  */
 export const PROJECT_PLAN = 'Project Plan';
 
@@ -58,7 +64,8 @@ export const DOCUMENT_CATALOG: Record<ProjectType, Record<ManagementDomain, Cata
       // documents for one subject, which only ever produced two overlapping drafts to review.
       { name: 'Communication Plan', requirement: 'REQUIRED' },
     ],
-    PROJECT_PLAN: [{ name: PROJECT_PLAN, requirement: 'REQUIRED' }],
+    // PROJECT_PLAN intentionally holds no documents — see the note on `PROJECT_PLAN` above.
+    PROJECT_PLAN: [],
     KICKOFF: [{ name: KICKOFF_DECK, requirement: 'REQUIRED' }],
     RESOURCES: [
       { name: 'Resource Management Plan', requirement: 'REQUIRED' },
@@ -100,7 +107,8 @@ export const DOCUMENT_CATALOG: Record<ProjectType, Record<ManagementDomain, Cata
       { name: 'Service Reporting Plan', requirement: 'REQUIRED' },
       { name: 'Communication Plan', requirement: 'REQUIRED' },
     ],
-    PROJECT_PLAN: [{ name: PROJECT_PLAN, requirement: 'REQUIRED' }],
+    // PROJECT_PLAN intentionally holds no documents — see the note on `PROJECT_PLAN` above.
+    PROJECT_PLAN: [],
     KICKOFF: [{ name: KICKOFF_DECK, requirement: 'REQUIRED' }],
     RESOURCES: [
       { name: 'Support Organization & RACI', requirement: 'REQUIRED' },
@@ -139,7 +147,8 @@ export const DOCUMENT_CATALOG: Record<ProjectType, Record<ManagementDomain, Cata
       { name: 'Discovery & Feedback Plan', requirement: 'REQUIRED' },
       { name: 'Communication Plan', requirement: 'REQUIRED' },
     ],
-    PROJECT_PLAN: [{ name: PROJECT_PLAN, requirement: 'REQUIRED' }],
+    // PROJECT_PLAN intentionally holds no documents — see the note on `PROJECT_PLAN` above.
+    PROJECT_PLAN: [],
     KICKOFF: [{ name: KICKOFF_DECK, requirement: 'REQUIRED' }],
     RESOURCES: [
       { name: 'Product Team Charter', requirement: 'REQUIRED' },

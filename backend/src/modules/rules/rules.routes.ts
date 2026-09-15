@@ -4,7 +4,14 @@ import { DecisionOutcome } from '@prisma/client';
 import { asyncHandler } from '../../lib/async-handler';
 import { parse } from '../../lib/validate';
 import { PROJECT_WRITE_ROLES, requireProjectMember, requireProjectRole } from '../../middleware/auth';
-import { activeDecision, approachOptions, decideApproach, latestEvaluation, runEvaluation } from './rules.service';
+import {
+  activeDecision,
+  approachOptions,
+  decideApproach,
+  latestEvaluation,
+  runEvaluation,
+  runPlanningAnalysis,
+} from './rules.service';
 
 export const rulesRouter = Router();
 rulesRouter.use('/:projectId', requireProjectMember);
@@ -28,6 +35,19 @@ rulesRouter.post(
   requireProjectRole(...PROJECT_WRITE_ROLES),
   asyncHandler(async (req, res) => {
     res.json(await runEvaluation(req.params.projectId, req.user!.id));
+  }),
+);
+
+/**
+ * "Analyze planning needs" — the single call behind the Planning Review screen. Reads every
+ * uploaded document and what the PM typed, and returns the overview, the approach advisory, the
+ * planning gaps and the document findings in one snapshot.
+ */
+rulesRouter.post(
+  '/:projectId/planning/analyze',
+  requireProjectRole(...PROJECT_WRITE_ROLES),
+  asyncHandler(async (req, res) => {
+    res.status(201).json(await runPlanningAnalysis(req.params.projectId, req.user!.id));
   }),
 );
 

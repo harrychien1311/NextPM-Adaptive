@@ -37,6 +37,36 @@ import { fillXlsxTemplate } from '../../lib/xlsx-fill';
 import { buildDeck, fitWithin } from '../../lib/pptx-build';
 import { readDeckText } from '../../lib/pptx-read';
 import { readWorkbook } from '../../lib/xlsx-read';
+
+/**
+ * The catalog documents the last analysis said this project is missing.
+ *
+ * Lives here rather than in `rules.service` on purpose. `rules.service` imports this module for
+ * `syncDocumentsWithPack`, and importing back would make the one module cycle this codebase
+ * deliberately does not have. Nothing is lost by it: this only reads the stored snapshot, and the
+ * consumer is the catalog right below.
+ *
+ * Returns null when no analysis has run, or when it tied no gap to a catalog name — the Studio
+ * reads that as "no filter", which is the right fallback. Hiding everything because the model named
+ * nothing would leave the PM unable to generate anything at all.
+ *
+ * The kickoff deck is always in the list: it is the meeting that starts the project, not a document
+ * that might happen to be missing.
+ */
+export async function gapDocumentNames(projectId: string): Promise<string[] | null> {
+  const evaluation = await prisma.aiApproachSuggestion.findFirst({
+    where: { projectId },
+    orderBy: { createdAt: 'desc' },
+    select: { planningGaps: true },
+  });
+  if (!evaluation) return null;
+
+  const gaps = (evaluation.planningGaps as unknown as { documentName?: string | null }[]) ?? [];
+  const named = gaps.map((gap) => gap.documentName?.trim()).filter((name): name is string => Boolean(name));
+  if (!named.length) return null;
+
+  return [...new Set([...named, KICKOFF_DECK])];
+}
 import {
   MIN_PLACEHOLDERS_TO_FILL,
   fillabilityNote,
@@ -44,7 +74,7 @@ import {
 } from '../../lib/pptx-template';
 import { env } from '../../config/env';
 import { logEvent } from '../audit/audit.service';
-import { DELIVERY_TEMPLATE } from '../../data/document-catalog';
+import { DELIVERY_TEMPLATE, KICKOFF_DECK } from '../../data/document-catalog';
 import { artifactGuidance, governanceModelMeta, isGovernanceArtifact } from '../../data/governance-models';
 import {
   DOC_COLORS,
@@ -276,6 +306,14 @@ export async function catalogForProject(projectId: string, domain?: ManagementDo
   // own file type, whatever the name-based rule would otherwise say.
   const templates = await customerTemplatesForProject(projectId);
 
+  /**
+   * The documents the last analysis said this project is missing. Null when no analysis has run or
+   * it tied no gap to a catalog name — the Studio then shows the whole catalog, which is the right
+   * fallback: hiding everything because the model named nothing would leave the PM with no way to
+   * generate anything at all.
+   */
+  const gapNames = await gapDocumentNames(projectId);
+
   return definitions.map((definition) => ({
     definitionId: definition.id,
     name: definition.name,
@@ -288,6 +326,11 @@ export async function catalogForProject(projectId: string, domain?: ManagementDo
     customerTemplate: templates.get(definition.name) ?? null,
     /** A register's own columns, so the grid shows the right header even before generation. */
     tableColumns: tableSchema(definition.name)?.columns ?? null,
+    /**
+     * True when the analysis named this document as a planning gap. `null` for every entry when no
+     * analysis has tied a gap to a document, which the Studio reads as "no filter to apply".
+     */
+    inPlanningGap: gapNames ? gapNames.includes(definition.name) : null,
     document: byDefinition.get(definition.id)
       ? {
           id: byDefinition.get(definition.id)!.id,

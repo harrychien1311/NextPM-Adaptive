@@ -1638,6 +1638,245 @@
   color: var(--navy);
 }
 
+/* ---------------------------------------------------------------------------
+   Planning Review — the overview across the top, gaps and advisory beneath it.
+   --------------------------------------------------------------------------- */
+.overview-panel {
+  margin-bottom: 16px;
+}
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+.overview-card {
+  border: 1px solid #e3e9f0;
+  border-radius: 10px;
+  padding: 14px;
+  background: #fcfdfe;
+}
+.overview-card header {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.overview-card h3 {
+  margin: 0;
+  font-size: 0.82rem;
+}
+.overview-card p {
+  margin: 0 0 8px;
+  font-size: 0.75rem;
+  color: #4d5c70;
+  line-height: 1.5;
+}
+.overview-card ul {
+  margin: 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 5px;
+}
+.overview-card li {
+  font-size: 0.72rem;
+  color: #66758a;
+  line-height: 1.45;
+}
+
+/* Gaps on the left, advisory on the right — the wider half goes to the list you act on. */
+.review-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  gap: 16px;
+  margin-bottom: 16px;
+}
+@media (max-width: 1100px) {
+  .review-split {
+    grid-template-columns: 1fr;
+  }
+}
+
+.gap-list,
+.finding-list {
+  list-style: none;
+  margin: 0 0 18px;
+  padding: 0;
+  display: grid;
+  gap: 9px;
+}
+.gap-row {
+  display: grid;
+  grid-template-columns: 62px 1fr;
+  gap: 10px;
+  align-items: start;
+  border: 1px solid #e3e9f0;
+  border-left-width: 3px;
+  border-radius: 9px;
+  padding: 11px 12px;
+}
+.gap-row.severity-high {
+  border-left-color: var(--red);
+}
+.gap-row.severity-medium {
+  border-left-color: var(--amber);
+}
+.gap-row.severity-low {
+  border-left-color: #a9b6c6;
+}
+.gap-severity {
+  font-size: 0.56rem;
+  letter-spacing: 0.08em;
+  font-weight: 800;
+  color: #7b899a;
+  padding-top: 2px;
+}
+.gap-row strong {
+  font-size: 0.78rem;
+}
+.gap-row p {
+  margin: 3px 0 0;
+  font-size: 0.72rem;
+  color: #6b7c93;
+  line-height: 1.45;
+}
+.gap-doc {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 0.68rem;
+  color: #1f5fa9;
+  font-weight: 600;
+}
+.findings-head {
+  border-top: 1px solid #eaeff4;
+  padding-top: 15px;
+}
+.finding-list li {
+  border: 1px solid #f0dcda;
+  background: #fffaf9;
+  border-radius: 9px;
+  padding: 11px 12px;
+}
+.finding-list strong {
+  font-size: 0.78rem;
+}
+.finding-list p {
+  margin: 3px 0 6px;
+  font-size: 0.72rem;
+  color: #6b7c93;
+  line-height: 1.45;
+}
+.finding-evidence {
+  border-top: 1px dashed #e7d5d3;
+  padding-top: 6px;
+  margin-top: 6px;
+  font-size: 0.71rem;
+  color: #5d6c80;
+}
+
+/* The recommended (or chosen) model, in the square card the PM already knows. */
+.advisory-card {
+  display: grid;
+  grid-template-columns: 44px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid #cfe0dd;
+  background: #f4fbfa;
+  border-radius: 11px;
+  padding: 14px;
+  margin-bottom: 14px;
+}
+.advisory-letter {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--navy);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+.advisory-card small {
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  color: #2a8483;
+  font-weight: 800;
+}
+.advisory-card h3 {
+  margin: 3px 0 0;
+  font-size: 1rem;
+}
+.advisory-card > strong {
+  font-size: 1.5rem;
+  color: var(--navy);
+}
+.advisory-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 14px;
+  font-size: 0.7rem;
+  color: #7b899a;
+}
+.advisory-switch button {
+  border: 1px solid #d4dee8;
+  background: #fff;
+  border-radius: 99px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 0.7rem;
+  color: #3e526a;
+  cursor: pointer;
+}
+.advisory-switch button.active {
+  border-color: var(--navy);
+  background: var(--navy);
+  color: #fff;
+}
+.criteria-bars {
+  display: grid;
+  gap: 7px;
+}
+.criteria-bars > div {
+  display: grid;
+  grid-template-columns: 150px 1fr 30px;
+  gap: 10px;
+  align-items: center;
+  font-size: 0.7rem;
+  color: #5f6f82;
+}
+.criteria-bars > div > div {
+  height: 6px;
+  border-radius: 99px;
+  background: #edf1f5;
+}
+.criteria-bars i {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: #35a487;
+}
+.criteria-bars b {
+  text-align: right;
+  font-size: 0.68rem;
+}
+
+/* The Studio's "only what is missing" filter, and its way out of it. */
+.gap-filter-bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border: 1px solid #d9e4f0;
+  border-radius: 9px;
+  background: #f2f7fd;
+  font-size: 0.73rem;
+  color: #55637a;
+}
+
 /* Read-only access, said once at the top of the workspace rather than per greyed-out button. */
 .read-only-banner {
   display: flex;
@@ -1732,14 +1971,50 @@ article.approach-option.is-locked:hover {
   font-weight: 600;
   white-space: nowrap;
 }
-.hidden-fields-note {
-  margin: 0;
-  padding: 12px 22px 0;
-  font-size: 0.74rem;
-  color: #6b7c93;
+/*
+  The minimum profile is three fields side by side. `.form-grid` is a two-column grid, which would
+  wrap the third onto its own line; these three belong on one row because they are read as one
+  question — what is this project, and how are we running it.
+*/
+.profile-row {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
-.hidden-fields-note b {
-  color: #10243d;
+@media (max-width: 900px) {
+  .profile-row {
+    grid-template-columns: 1fr;
+  }
+}
+/* The form stands alone now that the "Missing information" aside is gone. */
+.input-single {
+  display: block;
+}
+/*
+  "Required inputs 2/3" in the page head, with the three named beneath it. The count alone would
+  leave the PM hunting for which one is missing, which is the whole question the meter raises.
+*/
+.required-inputs {
+  width: 210px;
+}
+.required-inputs ul {
+  list-style: none;
+  margin: 9px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+}
+.required-inputs li {
+  font-size: 0.67rem;
+  color: #97a3b4;
+}
+.required-inputs li.done {
+  color: #2a8067;
+}
+
+/* An upload the analysis refuses to run without is not "Optional". */
+.mandatory-chip {
+  background: #fdecea;
+  color: #b3413b;
+  font-weight: 700;
 }
 /* A file line now carries its text and a remove button, so it needs a row rather than a block. */
 .file-result {

@@ -126,6 +126,15 @@ projectRouter.patch(
         customer: z.string().optional(),
         targetLabel: z.string().optional(),
         programId: z.string().uuid().nullish(),
+        /** Project Input writes both of these: the type drives the catalog, the approach the analysis mode. */
+        type: z.nativeEnum(ProjectType).optional(),
+        // Empty string means "I have not decided" and must reach the database as null, since null
+        // is what puts the analysis into recommend mode.
+        preferredApproach: z
+          .string()
+          .max(60)
+          .nullish()
+          .transform((value) => (value?.trim() ? value.trim() : null)),
       }),
       req.body,
     );

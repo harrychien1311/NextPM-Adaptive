@@ -1,0 +1,91 @@
+# Render Blueprint for NextPM Adaptive.
+#
+# Push THIS directory (nextpm-source/nextpm) as the repository root — every path below is relative
+# to it. If you push the outer NextPM-Adaptive folder instead, prefix each path with
+# `nextpm-source/nextpm/` and set `rootDir` on both services.
+#
+# Create it on Render with: New → Blueprint → pick the repo. Three things are deliberately NOT in
+# here and must be set by hand after the first apply; each is marked `sync: false` below.
+
+databases:
+  - name: nextpm-db
+    databaseName: nextpm
+    user: nextpm
+    # Free Postgres on Render is deleted after 30 days. Use `starter` or above for anything you
+    # intend to keep — the whole customer library and every generated document live in here.
+    plan: free
+
+services:
+  # ---------------------------------------------------------------------------
+  # API — built from backend/Dockerfile, which runs `prisma migrate deploy` on
+  # every boot and seeds only when the database has no users at all.
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: nextpm-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    # A disk requires a paid instance. Without one this service still runs, but every deploy
+    # wipes the uploaded customer templates, logos and checklists — see the disk note below.
+    plan: starter
+    healthCheckPath: /health
+    disk:
+      # Uploads are files on disk, not rows in Postgres. On Render's ephemeral filesystem they
+      # vanish on every deploy, and each generated document that was filled from a customer
+      # template then fails with "its stored file is missing. Re-upload it."
+      name: nextpm-uploads
+      mountPath: /app/storage/uploads
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4000
+      - key: DATABASE_URL
+        fromDatabase:
+          name: nextpm-db
+          property: connectionString
+      - key: UPLOAD_DIR
+        # Must match the disk mountPath above, or uploads go back to the ephemeral filesystem.
+        value: /app/storage/uploads
+      - key: JWT_SECRET
+        # Generated once by Render and kept. Never reuse the compose file's "change-me".
+        generateValue: true
+      - key: CORS_ORIGIN
+        # Set to the static site's real URL after the first apply — Render does not know it yet.
+        sync: false
+      - key: AI_PROVIDER
+        value: anthropic
+      - key: ANTHROPIC_API_KEY
+        # Secret: paste it in the dashboard, never in this file.
+        sync: false
+      - key: ANTHROPIC_MODEL
+        value: claude-opus-5
+      - key: AI_EFFORT
+        value: medium
+      - key: MAX_UPLOAD_MB
+        value: 20
+      - key: MAX_FILES_PER_GROUP
+        value: 2
+
+  # ---------------------------------------------------------------------------
+  # Web — a plain static site. The app uses HashRouter, so routes live after the
+  # `#` and no SPA rewrite rule is needed.
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: nextpm-web
+    runtime: static
+    # Built from the workspace root so the root package-lock.json is the one that resolves.
+    buildCommand: npm install && npm --workspace frontend run build
+    staticPublishPath: ./frontend/dist
+    envVars:
+      - key: VITE_API_URL
+        # Baked into the bundle at BUILD time, not read at runtime: changing it means a rebuild.
+        # Set to https://<your-api>.onrender.com/api after the first apply.
+        sync: false
+    headers:
+      # index.html is the only file naming the content-hashed bundles; a cached copy pins the
+      # browser to a previous deploy with no network request and no visible error.
+      - path: /index.html
+        name: Cache-Control
+        value: no-store, must-revalidate

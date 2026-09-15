@@ -130,8 +130,18 @@ export async function saveValues(params: {
           definitionId: value.definitionId,
           value: value.value,
           source: InputSource.PM_INPUT,
+          verified: true,
         },
-        update: { value: value.value, source: InputSource.PM_INPUT, verified: false, conflictNote: null },
+        /**
+         * A value the PM typed is verified the moment they type it.
+         *
+         * It used to land unverified and wait for the "Verify input" button. That button is gone —
+         * Project Input now has one action, *Analyze planning needs* — so nothing would ever promote
+         * these, and input readiness would sit at half for a fully-filled form. The rule that
+         * mattered is untouched: a *document* still never becomes an approved fact on its own. This
+         * is the PM's own answer, and there is no second person to confirm it to.
+         */
+        update: { value: value.value, source: InputSource.PM_INPUT, verified: true, conflictNote: null },
       }),
     ),
   );
@@ -187,7 +197,7 @@ export interface CustomerSuggestion {
 }
 
 /** Attaches the library match and the source file to what the model returned. */
-async function buildCustomerSuggestion(
+export async function buildCustomerSuggestion(
   proposed: { name: string; evidence: string },
   documents: { label: string; text: string }[],
   replaces: string | null,

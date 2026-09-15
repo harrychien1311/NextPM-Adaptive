@@ -200,6 +200,13 @@ model Project {
   /// Free text, and the ONLY thing the customer library matches a project on. Set by the PM —
   /// never by extraction, which may only propose (see `customerSuggestion`).
   customer    String?
+  /// The governance model the PM had already decided on before any analysis, chosen on Project
+  /// Input. Null means "I don't know yet, recommend one" — and that null is what decides which of
+  /// the two Planning Review modes runs, so it is a real answer rather than a missing one.
+  ///
+  /// Distinct from `ApproachDecision.approach`, which is the confirmed gate: this is only an
+  /// intention, and the PM still confirms it on the Planning Review screen.
+  preferredApproach String?
   /// A customer name Skill 0 read out of the uploaded documents, waiting for the PM to accept or
   /// dismiss it: `{ name, evidence, sourceLabel, matchedKey, matchedName, suggestedAt }`.
   /// Held separately from `customer` on purpose — the same rule as every other extraction in this
@@ -353,6 +360,21 @@ model AiApproachSuggestion {
   alternatives        Json     @default("[]") // [{ approach, score, rationale }]
   summary             String?
   candidateValues     Json     @default("[]")
+
+  /// What the project *is*, read out of the uploaded documents — scope, requirements, resources,
+  /// milestones, stakeholders and so on. The Planning Review screen's top panel. Stored on the
+  /// snapshot rather than on the project because it is the model's reading at one point in time,
+  /// not a fact the PM has confirmed.
+  overview            Json     @default("[]") // [{ key, label, summary, points[] }]
+  /// What the project still lacks before it can start, each tied where possible to the catalog
+  /// document that would close it — this is what the Planning Studio filters its list down to.
+  planningGaps        Json     @default("[]") // [{ title, why, documentName, severity }]
+  /// Contradictions and anomalies found *between* the uploaded documents, plus limits on the
+  /// analysis itself. Kept apart from `risks`, which are risks of the recommended approach.
+  findings            Json     @default("[]") // [{ title, detail, evidence }]
+  /// RECOMMENDED when the model chose the approach, PM_CHOSEN when it merely scored the PM's own.
+  /// The Approach Advisory panel is read-only in the second case — there is nothing to switch to.
+  approachMode        String   @default("RECOMMENDED")
   /// Which writer produced this snapshot: "anthropic" or "mock". The AI call falls back to the
   /// deterministic mock on any error, so without this a heuristic result is indistinguishable
   /// from a real one — both to the PM and to anyone auditing the decision later.

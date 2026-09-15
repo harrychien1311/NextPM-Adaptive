@@ -123,6 +123,12 @@ export interface Workspace {
   status: ProjectStatus;
   /** What the customer reference library matches on — free text, set only by the PM. */
   customer: string | null;
+  /**
+   * The governance model the PM declared on Project Input before any analysis ran. `null` means
+   * "not decided yet", and that null is what asks the analysis to recommend one instead of scoring
+   * a choice already made. Distinct from `approach`, which is the confirmed decision.
+   */
+  preferredApproach: string | null;
   phaseLabel: string;
   program: { id: string; name: string; key: string } | null;
   members: { id: string; name: string; initials: string }[];
@@ -332,6 +338,40 @@ export interface EvidenceItem {
   source: string;
 }
 
+/** One block of the Planning Review's top panel — what the project *is*, read from its documents. */
+export interface OverviewSection {
+  key: string;
+  label: string;
+  summary: string;
+  points: string[];
+}
+
+/** Something the project still lacks before it can start. */
+export interface PlanningGap {
+  title: string;
+  why: string;
+  /** The catalog document that would close it, or null. This is what the Studio filters on. */
+  documentName: string | null;
+  severity: 'HIGH' | 'MEDIUM' | 'LOW';
+}
+
+/** A contradiction or anomaly found across the uploaded documents. */
+export interface AnalysisFinding {
+  title: string;
+  detail: string;
+  evidence: EvidenceItem[];
+}
+
+/** One governance model scored against the nine criteria. */
+export interface ScoredApproach {
+  approach: Approach;
+  score: number;
+  reasons: string[];
+  /** Always empty in PM_CHOSEN mode: the PM is not being sold a model they already picked. */
+  evidence: EvidenceItem[];
+  criteria: { name: string; score: number; weight: number; note: string }[];
+}
+
 export interface ApproachResponse {
   /** The latest AI governance-model recommendation (Skill 1) — the single source the
    *  approach options, and the PM decision gate, are built from. */
@@ -350,6 +390,20 @@ export interface ApproachResponse {
     /** 'mock' means the API call failed and a keyword heuristic produced this — warn the PM. */
     aiProvider: 'anthropic' | 'mock';
     createdAt: string;
+
+    /**
+     * Written by "Analyze planning needs". Snapshots from before it exists have the defaults, so
+     * the Planning Review screen shows an empty overview rather than breaking on an old project.
+     */
+    overview: OverviewSection[];
+    planningGaps: PlanningGap[];
+    findings: AnalysisFinding[];
+    /**
+     * RECOMMENDED — the PM had not decided, so alternatives are offered and can be switched to.
+     * PM_CHOSEN  — the PM named a model on Project Input; the panel scores only that one and
+     * offers nothing to switch to, because there is no choice left to make here.
+     */
+    approachMode: 'RECOMMENDED' | 'PM_CHOSEN';
   } | null;
   options: {
     approach: Approach;
@@ -477,6 +531,12 @@ export interface CatalogEntry {
      */
     house: boolean;
   } | null;
+  /**
+   * True when the last analysis named this document as a planning gap; `null` on every entry when
+   * no analysis tied a gap to a document, which the Studio reads as "no filter to apply" and shows
+   * the whole catalog.
+   */
+  inPlanningGap: boolean | null;
   /**
    * A register document's own columns, from its schema. Present whether or not it has been
    * generated, so the grid never borrows another document's header to stand in for a missing one.

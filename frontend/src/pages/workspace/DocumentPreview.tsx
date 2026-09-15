@@ -6,7 +6,7 @@ import { documentsApi } from '../../api/endpoints';
  * Mirrors `isChartDocument` in the backend's `document-format.ts`. Kept in step with it: both
  * decide the same thing about the same document, and they must not disagree.
  */
-const isChartDocument = (name: string) => /organi[sz]ation chart|org chart/i.test(name);
+export const isChartDocument = (name: string) => /organi[sz]ation chart|org chart/i.test(name);
 import type {
   DocumentExportFormat,
   DocumentGap,
@@ -125,7 +125,7 @@ export function DocumentPreview({
         {isChartDocument(document.name) ? (
           <OrgChartPreview document={document} projectName={projectName} />
         ) : format === 'PPTX' ? (
-          <DeckPreview document={document} projectId={projectId} projectName={projectName} />
+          <DeckNotice document={document} onDownload={onDownload} />
         ) : format === 'XLSX' && document.structuredData?.templateFill ? (
           // Filled from a real workbook: the sheets are in that file and nowhere else, exactly as
           // the deck preview above reads a filled deck.
@@ -233,92 +233,43 @@ function PagePreview({ document, projectName }: { document: PreviewDocument; pro
 }
 
 /**
- * The PowerPoint shape: one card per slide, read out of the **real rendered file**.
+ * A deck has no on-screen preview, on purpose.
  *
- * Not drawn from the document's sections. For a deck filled from a customer's template those
- * sections are placeholder→value pairs, and the slides themselves live only inside their file —
- * so anything built from the sections would show a handful of blanks and none of the deck. The
- * server renders the export and reads its text back, which also means the preview cannot disagree
- * with the download about what is in it.
+ * There used to be one: it rendered the export and listed each slide's text. It was accurate and
+ * still not useful — a kickoff deck is layout, images and a customer's branding, and a column of
+ * bullet points conveys none of that while looking like it does. Reading the real file is the only
+ * honest way to review one, so this points at the download rather than showing a poor imitation.
  *
- * Text only: images, charts and exact layout are not extracted, and each card says so where it
- * matters rather than pretending to be a renderer.
+ * The Planning Studio hides its Preview button for these documents for the same reason; this panel
+ * exists for the Dashboard's document list, which opens every row the same way.
  */
-function DeckPreview({
-  document,
-  projectId,
-  projectName,
-}: {
-  document: PreviewDocument;
-  projectId: string;
-  projectName: string;
-}) {
-  const deck = useQuery({
-    queryKey: ['slides', projectId, document.id],
-    queryFn: () => documentsApi.slides(projectId, document.id),
-  });
-
-  if (deck.isLoading) {
-    return (
-      <div className="state-block">
-        <span className="inline-spinner" /> Rendering the deck…
-      </div>
-    );
-  }
-
-  if (deck.isError || !deck.data) {
-    return <div className="state-block">Could not read the deck. Try downloading it instead.</div>;
-  }
-
-  const { slides, template, fileName } = deck.data;
+function DeckNotice({ document, onDownload }: { document: PreviewDocument; onDownload?: () => void }) {
+  const fill = document.structuredData?.templateFill;
 
   return (
-    <div className="deck-slides">
-      <p className="deck-caption">
-        <b>{fileName}</b> · {slides.length} slide{slides.length === 1 ? '' : 's'} ·{' '}
-        {template ? (
+    <article className="doc-page">
+      <h1>{document.name}</h1>
+      <p className="doc-meta">
+        <b>
+          Version {document.version} · {document.status === 'APPROVED' ? 'PM approved' : 'AI draft'}
+        </b>
+      </p>
+      <p className="doc-note">
+        {fill ? (
           <>
-            filled into {template.customerKey}’s own template <b>{template.sourceFile}</b> — their layout, fonts and
-            images are kept
+            This deck is <b>{fill.customerKey}</b>’s own file <b>{fill.sourceFile}</b>, filled in place — their
+            layout, fonts and images are kept. None of that survives a text preview, so open the file itself.
           </>
         ) : (
-          <>built for {projectName}</>
+          <>A deck is slides, not a page of text. Open the file to review it as it will be presented.</>
         )}
-        . Text only — images and exact layout are in the file.
       </p>
-
-      {slides.map((slide) => {
-        // A bare number is the slide-number shape, not content — a real corporate template puts one
-        // on most slides, and taking it as the title made slide 1 read as "1".
-        const content = slide.lines.filter((line) => !/^\d{1,3}[.)]?$/.test(line));
-        const [title, ...rest] = content;
-        return (
-          <article className="deck-slide" key={slide.number}>
-            <div className="deck-slide-rule" />
-            <div className="deck-slide-body">
-              {title && <h2>{title}</h2>}
-              <ul>
-                {rest.map((line, index) => (
-                  <li key={index}>
-                    <Prose text={line} />
-                  </li>
-                ))}
-              </ul>
-              {!content.length && <p className="doc-note">This slide carries no text — see the file.</p>}
-            </div>
-            <span className="deck-slide-number">{slide.number}</span>
-            {(slide.pictures > 0 || slide.hasTable) && (
-              <span className="deck-slide-contains">
-                {slide.pictures > 0 && `${slide.pictures} image${slide.pictures === 1 ? '' : 's'}`}
-                {slide.pictures > 0 && slide.hasTable && ' · '}
-                {slide.hasTable && 'table'}
-              </span>
-            )}
-          </article>
-        );
-      })}
-
-    </div>
+      {onDownload && (
+        <button className="primary" onClick={onDownload}>
+          Download .pptx
+        </button>
+      )}
+    </article>
   );
 }
 

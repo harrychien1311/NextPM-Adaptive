@@ -80,7 +80,9 @@ export function ProgramOverviewPage() {
         detail: `${workspace.type} input profile and planning templates are ready — you own this project.`,
       });
       setOpenModal(null);
-      navigate(`/projects/${workspace.id}`);
+      // Straight to Project Input: a project one second old has nothing to show on a dashboard,
+      // and the first thing its owner must do is upload the document the analysis reads.
+      navigate(`/projects/${workspace.id}?view=input`);
     },
     onError: (error) =>
       notify({ title: 'Could not create project', detail: error instanceof ApiError ? error.message : 'Unexpected error' }),
@@ -804,7 +806,7 @@ function CreateProjectModal({
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          onSubmit({ name: name.trim(), type, programId: programId || null, customer, targetStart });
+          onSubmit({ name: name.trim(), type, programId: programId || null, customer: customer.trim(), targetStart });
         }}
       >
         <label>
@@ -841,8 +843,18 @@ function CreateProjectModal({
             </select>
           </label>
           <label>
-            Customer / market
-            <input value={customer} onChange={(event) => setCustomer(event.target.value)} />
+            {/*
+              Required, because this one field decides which customer checklist scores the project
+              and whose kickoff template gets filled. Left blank it falls through to the house
+              default silently, and the PM finds out much later — on the wrong deck.
+            */}
+            Customer *
+            <input
+              value={customer}
+              onChange={(event) => setCustomer(event.target.value)}
+              placeholder="e.g. SK AX, LG CNS"
+              required
+            />
           </label>
           <label>
             Target start

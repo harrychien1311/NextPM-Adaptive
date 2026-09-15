@@ -87,6 +87,7 @@ export const programApi = {
   overview: () => api.get<ProgramOverview>('/programs/overview'),
   create: (body: { name: string; description?: string; targetOutcome?: string }) =>
     api.post<{ id: string; name: string; key: string }>('/programs', body),
+  /** Placed on programApi below; see rulesApi for the planning analysis. */
   update: (programId: string, body: { name?: string; description?: string | null; targetOutcome?: string | null }) =>
     api.patch<{ id: string; name: string; key: string }>(`/programs/${programId}`, body),
   /** Does not delete the program's projects — they become standalone. */
@@ -123,6 +124,10 @@ export const projectApi = {
       customer?: string;
       targetLabel?: string;
       programId?: string | null;
+      /** Changing it changes which input schema and which document catalog apply. */
+      type?: ProjectType;
+      /** null = "not decided yet", which is what asks the analysis to recommend a model. */
+      preferredApproach?: string | null;
     },
   ) => api.patch<Workspace>(`/projects/${projectId}`, body),
   /** Irreversible — cascades every input, upload, document and audit row of the project. */
@@ -182,6 +187,13 @@ export const rulesApi = {
   approach: (projectId: string) => api.get<ApproachResponse>(`/projects/${projectId}/approach`),
   /** Skill 1: asks the AI to recommend a governance model from verified inputs + the project description document. */
   evaluate: (projectId: string) => api.post(`/projects/${projectId}/approach/evaluate`),
+  /**
+   * "Analyze planning needs" — the single call behind Planning Review. Reads every uploaded
+   * document plus what the PM typed and returns the overview, the approach advisory, the planning
+   * gaps and the document findings as one snapshot. No offline fallback: it fails rather than
+   * inventing.
+   */
+  analyze: (projectId: string) => api.post(`/projects/${projectId}/planning/analyze`),
   decide: (projectId: string, body: { approach: Approach; outcome?: 'CONFIRMED' | 'OVERRIDDEN'; rationale?: string }) =>
     api.post(`/projects/${projectId}/approach/decide`, body),
 };
