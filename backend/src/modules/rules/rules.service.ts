@@ -5,7 +5,7 @@ import { analyzePlanningNeeds, normalizeEvidence, recommendGovernanceModel } fro
 import { DEFAULT_GOVERNANCE_MODELS, governanceModelMeta } from '../../data/governance-models';
 import { logEvent } from '../audit/audit.service';
 import { syncDocumentsWithPack } from '../documents/documents.service';
-import { buildCustomerSuggestion } from '../input/input.service';
+import { buildCustomerSuggestion, syncPlanningActions } from '../input/input.service';
 
 /**
  * This module keeps its original "rules" folder name for a minimal diff, but it no
@@ -217,6 +217,13 @@ export async function runPlanningAnalysis(projectId: string, actorId: string) {
     },
   });
 
+  /**
+   * The gaps also become the PM action center on the dashboard. That panel is fed by `ActionItem`
+   * rows and nothing used to write any, so it sat empty on every project while the same gaps were
+   * already on screen in Planning Review. One analysis, one set of open actions.
+   */
+  const openActions = await syncPlanningActions(projectId, analysis.planningGaps);
+
   await logEvent({
     projectId,
     actorId,
@@ -226,7 +233,7 @@ export async function runPlanningAnalysis(projectId: string, actorId: string) {
       analysis.mode === 'PM_CHOSEN'
         ? `${primary?.approach} assessed · ${primary?.score}% fit`
         : `${primary?.approach} recommended · ${primary?.score}% fit`,
-    detail: `${documents.length} document(s) read · ${analysis.planningGaps.length} planning gap(s) · ${analysis.findings.length} finding(s)`,
+    detail: `${documents.length} document(s) read · ${analysis.planningGaps.length} planning gap(s) · ${analysis.findings.length} finding(s) · ${openActions} PM action(s) opened`,
     payload: { evaluationId: evaluation.id, mode: analysis.mode },
   });
 

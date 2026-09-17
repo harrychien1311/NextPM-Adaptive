@@ -16,6 +16,7 @@
     "db:seed:customers": "tsx prisma/seed-customers.ts",
     "db:seed:catalog": "tsx prisma/seed-catalog.ts",
     "db:fix:gap-language": "tsx prisma/fix-gap-language.ts",
+    "db:backfill:actions": "tsx prisma/backfill-actions.ts",
     "db:reset": "prisma migrate reset --force",
     "lint": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts"

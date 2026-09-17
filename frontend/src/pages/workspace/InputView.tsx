@@ -79,6 +79,17 @@ export function InputView({
   const [draft, setDraft] = useState<Record<string, string | null>>({});
   const [savedAt, setSavedAt] = useState<Date | null>(null);
 
+  /**
+   * Everything on this screen moves a figure on the dashboard — domain coverage, the Ready-to-Start
+   * ring while its basis is INPUT, the uploaded files in the document list — and none of it used to
+   * say so, which left a PM who filled the form in and went straight back to the dashboard reading
+   * the numbers from before they started.
+   *
+   * Only one workspace view is mounted at a time, so the dashboard query is inactive while this
+   * screen is open: this marks it stale and costs no request until the PM actually opens it.
+   */
+  const refreshDashboard = () => queryClient.invalidateQueries({ queryKey: ['dashboard', projectId] });
+
   // The form is three fixed items now, so there is no per-field visibility to remember.
   useEffect(() => {
     setDraft({});
@@ -90,6 +101,7 @@ export function InputView({
     onSuccess: (profile) => {
       queryClient.setQueryData(['input', projectId], profile);
       queryClient.invalidateQueries({ queryKey: ['workspace', projectId] });
+      refreshDashboard();
       setSavedAt(new Date());
     },
   });
@@ -116,6 +128,9 @@ export function InputView({
         queryClient.invalidateQueries({ queryKey: ['approach', projectId] }),
         queryClient.invalidateQueries({ queryKey: ['workspace', projectId] }),
         queryClient.invalidateQueries({ queryKey: ['studio', projectId] }),
+        // The analysis is what opens the PM action center's entries, so the dashboard changes most
+        // of all here.
+        refreshDashboard(),
       ]);
       notify({ title: 'Analysis ready', detail: 'Opening Planning Review.' });
       setTimeout(() => onNavigate('approach'), 350);
@@ -141,6 +156,7 @@ export function InputView({
     mutationFn: ({ group, file }: { group: string; file: File }) => inputApi.uploadReference(projectId, group, file),
     onSuccess: (_result, variables) => {
       queryClient.invalidateQueries({ queryKey: ['input', projectId] });
+      refreshDashboard();
       notify({
         title: 'Reference queued for verification',
         detail: `${variables.file.name} was checked against the group rules.`,
@@ -153,6 +169,7 @@ export function InputView({
     mutationFn: (file: File) => inputApi.uploadDescription(projectId, file),
     onSuccess: (_result, file: File) => {
       queryClient.invalidateQueries({ queryKey: ['input', projectId] });
+      refreshDashboard();
       notify({
         title: 'Project description saved',
         detail: `${file.name} will be read the next time you ask the AI for a governance-model recommendation.`,
@@ -173,6 +190,8 @@ export function InputView({
         queryClient.invalidateQueries({ queryKey: ['workspace', projectId] }),
         queryClient.invalidateQueries({ queryKey: ['input', projectId] }),
         queryClient.invalidateQueries({ queryKey: ['studio', projectId] }),
+        // Changing the type swaps the whole document catalog, so Document progress changes with it.
+        refreshDashboard(),
       ]);
       if (patch.type) {
         notify({
@@ -186,13 +205,19 @@ export function InputView({
 
   const removeDescription = useMutation({
     mutationFn: (id: string) => inputApi.removeReference(projectId, id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['input', projectId] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['input', projectId] });
+      refreshDashboard();
+    },
   });
 
   /** The same call, from the reference groups — without it a PM cannot clear a file they added. */
   const removeReferenceFile = useMutation({
     mutationFn: (id: string) => inputApi.removeReference(projectId, id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['input', projectId] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['input', projectId] });
+      refreshDashboard();
+    },
     onError: (error) => notify({ title: 'Could not remove the file', detail: (error as Error).message }),
   });
 

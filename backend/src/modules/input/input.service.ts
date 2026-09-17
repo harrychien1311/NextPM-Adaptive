@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { InputSource, ManagementDomain, Prisma, ReferenceGroup, ReferenceStatus } from '@prisma/client';
+import { ActionPriority, InputSource, ManagementDomain, Prisma, ReferenceGroup, ReferenceStatus } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 import { badRequest, notFound } from '../../lib/http-error';
 import { env } from '../../config/env';
@@ -7,7 +7,7 @@ import { REFERENCE_GROUPS } from '../../data/input-schemas';
 import { extractTextFromFile } from '../../lib/extract-text';
 import { matchOptionsInText } from '../../lib/option-match';
 import { computeInputReadiness } from '../../lib/readiness';
-import { extractInputValues, type AiProvider } from '../ai/provider';
+import { extractInputValues, type AiProvider, type PlanningGap } from '../ai/provider';
 import { isRecognised, matchCustomer } from '../../lib/customer-match';
 import { logEvent } from '../audit/audit.service';
 
@@ -467,6 +467,69 @@ export async function removeCustomField(projectId: string, id: string) {
   if (!field) throw notFound('Custom field not found');
   await prisma.projectCustomField.delete({ where: { id } });
   return { removed: true };
+}
+
+/** A gap's severity, in the three priorities the action center already draws and colours. */
+const GAP_PRIORITY: Record<PlanningGap['severity'], ActionPriority> = {
+  HIGH: ActionPriority.REQUIRED,
+  MEDIUM: ActionPriority.CONDITIONAL,
+  LOW: ActionPriority.INFO,
+};
+
+/**
+ * Rebuilds the PM action center from the planning gaps the analysis just found.
+ *
+ * Nothing in the app created an `ActionItem` before this, so the panel was permanently empty on
+ * every project and `resolveAction` below had nothing to resolve. The gaps are the natural source:
+ * they are already "what this project still lacks", judged against the uploaded documents rather
+ * than against a generic checklist of good practice.
+ *
+ * Three rules worth keeping:
+ *
+ * - **Re-running the analysis replaces the OPEN set**, because those entries describe a snapshot
+ *   that has just been superseded. RESOLVED and DISMISSED rows are left alone as history. A gap the
+ *   PM already resolved that the new analysis still reports therefore comes back — the new read
+ *   still says it is missing, and swallowing that silently is the one failure nobody could see.
+ * - **`blocksDocument` stays null, and the delete is scoped to rows where it already is.** A gap
+ *   says a document is missing; setting it here would, at REQUIRED priority, make `generateDraft`
+ *   refuse to generate the very document that closes the gap — it checks exactly that pair. Scoping
+ *   the delete means a hand-created blocker is never swept away by an analysis run either.
+ * - **The domain comes from the catalog entry the gap names, never from the model.** The model is
+ *   not asked for one, and a guessed domain files the entry under the wrong heading.
+ */
+export async function syncPlanningActions(projectId: string, gaps: PlanningGap[]) {
+  const project = await prisma.project.findUnique({ where: { id: projectId }, select: { type: true } });
+  if (!project) throw notFound('Project not found');
+
+  const definitions = await prisma.documentDefinition.findMany({
+    where: { projectType: project.type },
+    select: { name: true, domain: true },
+  });
+  const domainByDocument = new Map(definitions.map((definition) => [definition.name.trim().toLowerCase(), definition.domain]));
+
+  await prisma.actionItem.deleteMany({ where: { projectId, status: 'OPEN', blocksDocument: null } });
+  if (!gaps.length) return 0;
+
+  const { count } = await prisma.actionItem.createMany({
+    data: gaps.map((gap) => {
+      const domain = gap.documentName ? domainByDocument.get(gap.documentName.trim().toLowerCase()) : undefined;
+      return {
+        projectId,
+        priority: GAP_PRIORITY[gap.severity] ?? ActionPriority.CONDITIONAL,
+        domain: domain ?? ManagementDomain.GOVERNANCE,
+        title: gap.title,
+        description: gap.why,
+        /**
+         * The Studio only when the gap names a document the catalog actually holds — its gap filter
+         * keys on that name, so sending the PM there for an unmatched one lands them on a filter
+         * that hides everything. Anything else is a hole in the project profile: Input.
+         */
+        targetView: domain ? 'studio' : 'input',
+        suggestions: gap.documentName ? [gap.documentName] : [],
+      };
+    }),
+  });
+  return count;
 }
 
 /** Resolves a PM action item and writes the chosen value back into the input profile. */

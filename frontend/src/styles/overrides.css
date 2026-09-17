@@ -2477,3 +2477,59 @@ article.approach-option.is-locked:hover {
     flex-direction: column;
   }
 }
+
+
+/* ---------------------------------------------------------------- PM action center
+   The panel finally has rows in it: the planning gaps the analysis found are written as
+   `ActionItem`s, so a PM can answer one here instead of only reading it. `.decision-item` from the
+   prototype is `30px 1fr auto` with a single button in the third column — these two rules let that
+   column hold a pair, and give the answer box somewhere to live inside the middle column. */
+.decision-buttons {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+.action-answer {
+  display: grid;
+  gap: 7px;
+  margin-top: 9px;
+  padding: 10px;
+  border: 1px solid #dde5ec;
+  border-radius: 8px;
+  background: #fafcfd;
+}
+.action-answer input {
+  width: 100%;
+  border: 1px solid #ccd6e1;
+  border-radius: 7px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 0.73rem;
+  color: #25364a;
+  background: #fff;
+}
+/* A one-click answer for the common case, where the gap names the document that closes it. */
+.answer-chip {
+  justify-self: start;
+  border: 1px solid #d4dee8;
+  background: #fff;
+  border-radius: 99px;
+  padding: 5px 9px;
+  font: inherit;
+  font-size: 0.63rem;
+  color: #3e526a;
+  cursor: pointer;
+}
+.answer-chip:hover {
+  background: #eef3f7;
+}
+.answer-actions {
+  display: flex;
+  gap: 7px;
+  justify-content: flex-end;
+}
+.answer-actions .ghost,
+.answer-actions .primary.small {
+  font-size: 0.68rem;
+  padding: 6px 11px;
+}

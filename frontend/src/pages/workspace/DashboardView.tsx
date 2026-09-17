@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { documentsApi, projectApi } from '../../api/endpoints';
+import { documentsApi, inputApi, projectApi } from '../../api/endpoints';
 import { Ring } from '../../components/Ring';
 import { useToast } from '../../components/Toast';
+import { useReadOnlyGuard } from '../../hooks/useProjectWrite';
 import { DocumentPreview } from './DocumentPreview';
 import { UploadPreview } from './UploadPreview';
 import { CustomerReadinessPanel } from './CustomerReadinessPanel';
@@ -95,6 +96,32 @@ export function DashboardView({
 
   /** The Planning documents row the PM clicked; decides which of the two previews opens. */
   const [preview, setPreview] = useState<LibraryEntry | null>(null);
+
+  /**
+   * Resolving a PM action is the one write on an otherwise read-only screen, so it is the only
+   * control here that a viewer is locked out of. Navigation and preview stay open to them: those
+   * only read, and locking them would stop a view-only account doing the one thing it exists for.
+   */
+  const { canWrite, guard, lockClass, lockedProps } = useReadOnlyGuard(projectId);
+  /** The action whose answer box is open, and what the PM has typed into it. */
+  const [resolving, setResolving] = useState<string | null>(null);
+  const [answer, setAnswer] = useState('');
+
+  const resolveAction = useMutation({
+    mutationFn: ({ actionId, value }: { actionId: string; value: string }) =>
+      inputApi.resolveAction(projectId, actionId, value),
+    onSuccess: () => {
+      // The server writes the answer into the input profile and recomputes domain readiness, so
+      // three panels move at once and all three are on screen.
+      queryClient.invalidateQueries({ queryKey: ['dashboard', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['input', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['workspace', projectId] });
+      setResolving(null);
+      setAnswer('');
+      notify({ title: 'Action resolved', detail: 'It is off the list and recorded in the audit trail.' });
+    },
+    onError: (error) => notify({ title: 'Could not resolve the action', detail: (error as Error).message }),
+  });
 
   // Generated documents are fetched on demand — the dashboard payload carries only the listing.
   const previewDoc = useQuery({
@@ -281,7 +308,10 @@ export function DashboardView({
               </button>
             </div>
             {data.actions.length === 0 && (
-              <div className="program-empty">No open PM decisions right now.</div>
+              <div className="program-empty">
+                No open PM decisions right now. The list is built from the planning gaps the last
+                analysis found — run <em>Analyze planning needs</em> on Project Input to fill it.
+              </div>
             )}
             {data.actions.map((action) => (
               <div
@@ -295,8 +325,62 @@ export function DashboardView({
                   </small>
                   <strong>{action.title}</strong>
                   <p>{action.description}</p>
+                  {resolving === action.id && (
+                    <form
+                      className="action-answer"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        if (answer.trim()) resolveAction.mutate({ actionId: action.id, value: answer.trim() });
+                      }}
+                    >
+                      {/*
+                        The PM says how it was closed rather than just ticking it off: the answer is
+                        stored as `resolvedValue`, written into a matching input field where the
+                        title names one, and logged. "Done" with no record is how a planning gap
+                        comes back a month later with nobody able to say what was decided.
+                      */}
+                      <input
+                        autoFocus
+                        value={answer}
+                        onChange={(event) => setAnswer(event.target.value)}
+                        placeholder="How is this covered? e.g. “Escalation path agreed with the customer on 12 Sep”"
+                      />
+                      {action.suggestions.map((suggestion) => (
+                        <button
+                          key={suggestion}
+                          type="button"
+                          className="answer-chip"
+                          onClick={() => setAnswer(`Covered by ${suggestion}`)}
+                        >
+                          Covered by {suggestion}
+                        </button>
+                      ))}
+                      <div className="answer-actions">
+                        <button type="submit" className="primary small" disabled={!answer.trim() || resolveAction.isPending}>
+                          {resolveAction.isPending ? 'Saving…' : 'Save'}
+                        </button>
+                        <button type="button" className="ghost" onClick={() => setResolving(null)}>
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
+                  )}
                 </div>
-                <button onClick={() => onNavigate(action.targetView)}>Resolve</button>
+                <div className="decision-buttons">
+                  {/* Where the work actually happens — Input for a hole in the profile, the Studio
+                      for a missing document. The server picked which from the catalog. */}
+                  <button onClick={() => onNavigate(action.targetView)}>Open</button>
+                  <button
+                    className={lockClass.trim()}
+                    {...lockedProps}
+                    onClick={guard(() => {
+                      setResolving(resolving === action.id ? null : action.id);
+                      setAnswer('');
+                    })}
+                  >
+                    {canWrite && resolving === action.id ? 'Close' : 'Resolve'}
+                  </button>
+                </div>
               </div>
             ))}
           </article>
