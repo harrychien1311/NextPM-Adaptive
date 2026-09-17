@@ -43,7 +43,13 @@ export function LoginPage() {
           </div>
         </div>
         <h1>Sign in to your workspace</h1>
-        <p>Program roll-up, AI governance-model recommendations and PM-approved planning packs.</p>
+        {/*
+          Replaced a feature list ("program roll-up, AI governance-model recommendations…") —
+          internal vocabulary that means nothing to someone who has not used the app yet, which is
+          everyone reading this screen.
+        */}
+        {/* Typographic apostrophe, as the rest of the app's copy uses. */}
+        <p>Let’s plan your project</p>
         {error && <div className="auth-error">{error}</div>}
         <label>
           Work email
