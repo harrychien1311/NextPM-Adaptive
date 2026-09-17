@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { customersApi } from '../api/endpoints';
@@ -34,6 +34,7 @@ export function CustomerLibraryPage() {
   const library = useQuery({ queryKey: ['customers'], queryFn: customersApi.list });
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [editCustomer, setEditCustomer] = useState<CustomerSummary | null>(null);
   const [previewChecklist, setPreviewChecklist] = useState<{ id: string; name: string } | null>(null);
   const [openCustomer, setOpenCustomer] = useState<string | null>(null);
 
@@ -52,6 +53,20 @@ export function CustomerLibraryPage() {
       notify({ title: `${customer.name} added`, detail: 'Now upload their checklist and templates.' });
     },
     onError: fail('Could not add customer'),
+  });
+
+  const updateCustomer = useMutation({
+    mutationFn: ({ customerId, body }: { customerId: string; body: { name?: string; aliases?: string[] } }) =>
+      customersApi.update(customerId, body),
+    onSuccess: (customer) => {
+      refresh();
+      setEditCustomer(null);
+      notify({
+        title: 'Customer updated',
+        detail: `${customer.name} — ${customer.aliases.length} alias${customer.aliases.length === 1 ? '' : 'es'}. Projects re-match on their next load.`,
+      });
+    },
+    onError: (error) => notify({ title: 'Could not update customer', detail: (error as Error).message }),
   });
 
   const removeCustomer = useMutation({
@@ -229,7 +244,7 @@ export function CustomerLibraryPage() {
                   uploadTemplate.mutate({ customerId: customer.id, file, documentType })
                 }
                 onUploadLogo={(file) => uploadLogo.mutate({ customerId: customer.id, file })}
-                onRemove={() => removeCustomer.mutate(customer.id)}
+                onEdit={() => setEditCustomer(customer)}
                 onRemoveChecklist={(id) => removeChecklist.mutate(id)}
                 onRemoveTemplate={(id) => removeTemplate.mutate(id)}
                 onPreviewChecklist={(id, name) => setPreviewChecklist({ id, name })}
@@ -245,6 +260,15 @@ export function CustomerLibraryPage() {
         busy={createCustomer.isPending}
         onClose={() => setCreateOpen(false)}
         onSubmit={(body) => createCustomer.mutate(body)}
+      />
+
+      <Backdrop open={editCustomer !== null} onClose={() => setEditCustomer(null)} />
+      <EditCustomerModal
+        customer={editCustomer}
+        busy={updateCustomer.isPending || removeCustomer.isPending}
+        onClose={() => setEditCustomer(null)}
+        onSubmit={(body) => editCustomer && updateCustomer.mutate({ customerId: editCustomer.id, body })}
+        onDelete={() => editCustomer && removeCustomer.mutate(editCustomer.id)}
       />
 
       {previewChecklist && (
@@ -269,7 +293,7 @@ function CustomerCard({
   onUploadChecklist,
   onUploadTemplate,
   onUploadLogo,
-  onRemove,
+  onEdit,
   onRemoveChecklist,
   onRemoveTemplate,
   onPreviewChecklist,
@@ -282,7 +306,7 @@ function CustomerCard({
   onUploadChecklist: (file: File) => void;
   onUploadTemplate: (file: File, documentType: string) => void;
   onUploadLogo: (file: File) => void;
-  onRemove: () => void;
+  onEdit: () => void;
   onRemoveChecklist: (id: string) => void;
   onRemoveTemplate: (id: string) => void;
   onPreviewChecklist: (id: string, name: string) => void;
@@ -465,8 +489,14 @@ function CustomerCard({
 
           {canWrite && (
             <footer className="customer-danger">
-              <button className="ghost danger" disabled={busy} onClick={onRemove}>
-                Remove {customer.name} and everything in it
+              {/*
+                Name, aliases and deletion all live behind one dialog. Aliases are the field that
+                actually decides which projects belong to this customer, and they were previously
+                fixed only by deleting the customer and adding it again — which threw away its
+                checklists and templates to correct a typo.
+              */}
+              <button className="secondary" disabled={busy} onClick={onEdit}>
+                Edit name &amp; aliases
               </button>
             </footer>
           )}
@@ -602,6 +632,116 @@ function NewCustomerModal({
           </button>
           <button className="primary" disabled={busy || name.trim().length < 2}>
             {busy ? 'Adding…' : 'Add customer'}
+          </button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+}
+
+/**
+ * Editing a customer's name and aliases.
+ *
+ * The aliases are the whole point of this dialog: they are what match a project's free-text
+ * Customer field to this library entry, and getting them wrong is silent — the project simply
+ * falls through to the house default and gets the wrong checklist and the wrong kickoff template,
+ * with no error anywhere. So the rules are restated here rather than only on the create dialog,
+ * where whoever is fixing a bad match is unlikely to look.
+ *
+ * `key` is deliberately not editable: code and stored rows refer to it, and a customer whose key
+ * changed under them would break the reference rather than rename it.
+ */
+function EditCustomerModal({
+  customer,
+  busy,
+  onClose,
+  onSubmit,
+  onDelete,
+}: {
+  customer: CustomerSummary | null;
+  busy: boolean;
+  onClose: () => void;
+  onSubmit: (body: { name: string; aliases: string[] }) => void;
+  onDelete: () => void;
+}) {
+  const [name, setName] = useState('');
+  const [aliases, setAliases] = useState('');
+
+  useEffect(() => {
+    setName(customer?.name ?? '');
+    setAliases((customer?.aliases ?? []).join(', '));
+  }, [customer]);
+
+  return (
+    <ModalShell open={customer !== null} className="create-project-modal structure-modal">
+      <div className="modal-head">
+        <div>
+          <small>EDIT CUSTOMER · {customer?.key}</small>
+          <h2>{customer?.name}</h2>
+        </div>
+        <button onClick={onClose}>×</button>
+      </div>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSubmit({
+            name: name.trim(),
+            aliases: aliases
+              .split(',')
+              .map((alias) => alias.trim())
+              .filter(Boolean),
+          });
+        }}
+      >
+        <label>
+          Customer name *
+          <input value={name} onChange={(event) => setName(event.target.value)} required minLength={2} />
+        </label>
+        <label>
+          Aliases
+          <input
+            value={aliases}
+            onChange={(event) => setAliases(event.target.value)}
+            placeholder="SKAX, SK C&amp;C, SK*"
+          />
+        </label>
+        <div className="create-note">
+          <span>🔎</span>
+          <p>
+            Comma-separated, and this is what decides which projects belong to this customer.
+            <br />
+            <b>SK C&amp;C</b> matches that exact name. <b>SK*</b> matches any customer name <i>starting with</i> SK —
+            one rule for a whole group; the longest matching prefix wins. <b>*</b> makes this customer the house
+            default, used only when nothing else matched.
+          </p>
+        </div>
+        <div className="modal-actions">
+          {/*
+            Deleting sits in the edit dialog rather than on the card: it takes the checklists,
+            their parsed items, the templates and the stored files with it, so it should need one
+            deliberate step more than a click in a list.
+          */}
+          <button
+            type="button"
+            className="secondary danger"
+            disabled={busy}
+            onClick={() => {
+              if (
+                window.confirm(
+                  `Delete ${customer?.name}? Its checklists, their parsed items, its templates and logo are removed with it. Projects keep their Customer field but will stop matching.`,
+                )
+              ) {
+                onDelete();
+              }
+            }}
+          >
+            Delete customer
+          </button>
+          <button type="button" className="secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="primary" disabled={busy || name.trim().length < 2}>
+            {busy ? 'Saving…' : 'Save changes'}
           </button>
         </div>
       </form>
