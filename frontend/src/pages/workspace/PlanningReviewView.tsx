@@ -148,8 +148,14 @@ export function PlanningReviewView({
           <h1>{pmChose ? 'How your chosen approach fits.' : 'What this project needs.'}</h1>
           <span>{evaluation.summary ?? evaluation.rationale}</span>
         </div>
+        {/*
+          "Fit score", not "AI confidence". The number is the weighted total of the nine criteria —
+          how well this model fits this project — not how sure the model is of itself. Labelling a
+          fit as confidence invited the PM to read a low score as "the AI is unsure" when it means
+          "this model suits the project badly", which is the opposite kind of fact.
+        */}
         <div className="decision-status">
-          <span>{pmChose ? 'Fit of your choice' : 'AI confidence'}</span>
+          <span>Fit score</span>
           <strong>{chosen?.score ?? 0}%</strong>
         </div>
       </div>
@@ -170,7 +176,6 @@ export function PlanningReviewView({
             <h2>Project overview</h2>
             <p>Read from the uploaded documents — not from what anyone typed into the form</p>
           </div>
-          <span className="rule-version">{evaluation.confidenceLevel} confidence</span>
         </div>
 
         {evaluation.overview.length === 0 ? (
