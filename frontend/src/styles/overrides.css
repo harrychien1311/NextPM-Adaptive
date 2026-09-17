@@ -1877,6 +1877,34 @@
   color: #55637a;
 }
 
+/*
+  A modal header has to work with or without its leading icon.
+
+  `app.css` lays `.modal-head` out as `grid-template-columns: 34px 1fr auto`, which assumes three
+  children: an `.agent-orb`, the title block, then the close button. Four modals are built that way.
+  Seven are not — Create project, Create program, Edit project, Edit program, Add customer and both
+  admin dialogs pass only a title block and a button — so their title landed in the **34px** column
+  and "Create your first project" wrapped one word per line.
+
+  Flex fixes both shapes with one rule instead of adding a decorative icon to seven dialogs that
+  were designed without one: the title block takes the free space, the icon and the button keep
+  their own size, and the three-child modals render exactly as they did.
+*/
+.modal-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.modal-head > div {
+  flex: 1;
+  /* Without this a long project name in an <h2> can push the close button off the dialog. */
+  min-width: 0;
+}
+.modal-head > .agent-orb,
+.modal-head > button {
+  flex: none;
+}
+
 /* Read-only access, said once at the top of the workspace rather than per greyed-out button. */
 .read-only-banner {
   display: flex;
