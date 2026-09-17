@@ -73,7 +73,7 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
           <div className="brand">
             <div className="brand-mark">N</div>
             <div>
-              <strong>NextPM</strong>
+              <strong>NEXTFIT AI</strong>
               <span>Adaptive</span>
             </div>
           </div>

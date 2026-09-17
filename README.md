@@ -1,25 +1,24 @@
 # NextPM Adaptive
 
 Full-stack implementation of the approved `NextPM_Adaptive_Developer_Handoff.html` prototype.
-The product takes a minimum set of PM inputs plus an optional uploaded project description
-document, asks an LLM to recommend a project governance model (Waterfall, Scrum, Kanban, Hybrid,
-Iterative, Predictive/Stage-Gate, or another it justifies from evidence) with a confidence score
-and alternatives, and — once the PM confirms one — generates a planning document pack the PM
-reviews and approves.
+A PM uploads the documents a project already has, presses one button, and gets back: what the
+project is, which governance model fits it, what is still missing before it can start, and what
+contradicts itself across those documents. Confirming the model opens a document studio that
+drafts exactly the documents the analysis said were missing.
 
-**Core principle preserved from the handoff:** the agent verifies, recommends and drafts —
-the PM confirms every decision and approves every baseline. Uploaded files never become
-approved facts automatically, and the AI never applies a decision on its own.
+**Core principle preserved from the handoff:** the agent verifies, recommends and drafts — the PM
+confirms every decision and approves every baseline. Uploaded files never become approved facts
+automatically, and the AI never applies a decision on its own.
 
 ## Stack
 
 | Layer | Choice | Why |
 | --- | --- | --- |
-| Database | PostgreSQL 16 + Prisma ORM | Relational hierarchy (program → project), JSON columns for recommendation snapshots |
+| Database | PostgreSQL 16 + Prisma ORM | Relational hierarchy (program → project), JSON columns for analysis snapshots |
 | Backend | Node 20, TypeScript, Express, Zod | Modular services, one module per planning flow step |
 | Frontend | React 18, TypeScript, Vite, TanStack Query | The prototype CSS is reused byte-for-byte in `frontend/src/styles/app.css` |
 | Auth | JWT + bcrypt, role-based | Only PM roles can confirm governance models and approve outputs |
-| AI | Anthropic Messages API, with a deterministic mock fallback | Runs with no API key for demos and tests — see "The two AI skills" below |
+| AI | Anthropic Messages API (`claude-opus-5`) | The calls that must not guess have **no** offline fallback; the rest keep a deterministic mock |
 
 ## Quick start (local)
 
@@ -31,8 +30,8 @@ docker compose up -d db
 cd backend
 cp .env.example .env          # adjust DATABASE_URL / JWT_SECRET if needed
 npm install
-npx prisma migrate dev --name init
-npm run db:seed               # 6 accounts, 4 programs, 8 project workspaces
+npx prisma migrate dev
+npm run db:seed               # accounts, programs and project workspaces
 npm run dev                   # http://localhost:4000
 
 # 3. Frontend (new terminal)
@@ -47,8 +46,11 @@ Seeded sign-ins (all `NextPM!2026`):
 | Account | Role | Sees |
 | --- | --- | --- |
 | `lina.vuong@nextpm.local` | Program owner | creates programs and projects; opens every workspace |
-| `nam.hoang@nextpm.local` | Project owner | creates projects; opens only the two projects they are a member of |
+| `nam.hoang@nextpm.local` | Project owner | a `MEMBER` on two projects — the account to test the **read-only** workspace with |
 | `admin@nextpm.local` | Administrator | the account console only — no project workspace |
+
+These are recorded here, not on the sign-in screen: a login form that arrives prefilled with a
+working credential publishes it to whoever opens the page.
 
 ### Everything in Docker
 
@@ -56,21 +58,47 @@ Seeded sign-ins (all `NextPM!2026`):
 docker compose up --build     # web on :8080, api on :4000, db on :5432
 ```
 
-### Enabling real AI generation
-
-Set in `backend/.env`:
+### Enabling real AI
 
 ```
 AI_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
-ANTHROPIC_MODEL=claude-sonnet-4-6
+ANTHROPIC_MODEL=claude-opus-5    # the default; override only to pin something else
+AI_EFFORT=medium                 # the default
 ```
 
-With `AI_PROVIDER=mock` (the default) the deterministic writers in
-`backend/src/modules/ai/provider.ts` produce plausible recommendations and document content —
-never invented facts, everything derivable is used, everything else is marked
-`TBD — PM confirmation required` — so the whole flow runs with no API key. Swapping providers only
-touches that one file.
+With `AI_PROVIDER=mock` the deterministic writers in `backend/src/modules/ai/provider.ts` still
+produce document drafts, so the generate-and-approve flow runs with no API key. **The planning
+analysis does not** — it throws, because an invented set of planning gaps in front of a PM is worse
+than an error. Note that mock is also the *failure* mode: with a bad key, the drafting calls fall
+back silently, which is why `AiApproachSuggestion.aiProvider` is stored and shown as a banner.
+
+### Database maintenance commands
+
+```bash
+npm --workspace backend run db:seed:catalog    # re-seed DocumentDefinition, prune what the catalog dropped
+npm --workspace backend run db:seed:customers  # customer library from data/raw — local (non-Docker) only
+npm --workspace backend run db:fix:gap-language -- --dry   # report PM questions not in English
+```
+
+`db:seed:catalog` is the one to remember: the full seed runs **only against an empty database**, so
+after changing `data/document-catalog.ts` — or after deploying newer code onto an existing
+database — the catalog is otherwise frozen at whatever the first boot wrote.
+
+## Deploying to Render
+
+`render.yaml` is a Blueprint that creates the Postgres instance, the API (from
+`backend/Dockerfile`, which runs `prisma migrate deploy` on every boot) and the static frontend.
+Three values it cannot know are left for the dashboard: `ANTHROPIC_API_KEY`, `CORS_ORIGIN` and
+`VITE_API_URL` — the last is baked into the bundle at build time, so changing it needs a rebuild.
+
+Two things that will bite otherwise:
+
+- **Uploads need a persistent disk.** Render's filesystem is ephemeral, so without one every deploy
+  wipes the customer templates, logos and checklists, and every document filled from a template
+  then fails with "its stored file is missing".
+- **The customer library does not travel with the code.** `data/raw` is outside the build context;
+  re-upload the checklists, templates and logos through the Customer library screen after deploying.
 
 ## Project layout
 
@@ -79,99 +107,117 @@ nextpm/
 ├── backend/
 │   ├── prisma/
 │   │   ├── schema.prisma          # models covering the whole domain
-│   │   └── seed.ts                # reproduces the prototype data set
+│   │   ├── seed.ts                # base data set; catalog seeding lives here too
+│   │   ├── seed-catalog.ts        # re-seed + prune DocumentDefinition only
+│   │   └── fix-gap-language.ts    # one-off repair for pre-English-rule questions
 │   └── src/
-│       ├── data/                  # input schemas, document catalog, governance-model metadata
+│       ├── data/                  # input schemas, document catalog, governance models, register columns
+│       ├── lib/                   # customer matching, text extraction, OOXML fill/read/build
 │       ├── modules/
-│       │   ├── auth/              # login, JWT, roles
-│       │   ├── admin/             # account administration (administrator-only)
+│       │   ├── auth/ admin/       # login, JWT, roles; account administration
 │       │   ├── program/           # program → project + access control + readiness roll-up
-│       │   ├── input/             # flow 1: values, verification, references, actions
-│       │   ├── rules/             # flow 2: AI recommendation snapshot + PM decision gate
-│       │   ├── documents/         # flow 3: catalog, templates, generation, approval, .docx/.html export
-│       │   ├── dashboard/         # control-center aggregation + widget layout
-│       │   ├── agent/             # planning agent conversation
-│       │   ├── audit/             # traceable event log
-│       │   └── ai/                # the two LLM "skills" — see below
+│       │   ├── input/             # flow 1: values, references, actions
+│       │   ├── rules/             # flow 2: the planning analysis snapshot + PM decision gate
+│       │   ├── documents/         # flow 3: catalog, generation, approval, Office export
+│       │   ├── customer/          # the customer reference library
+│       │   ├── checklist/         # scoring a project against its customer's checklist
+│       │   ├── dashboard/ agent/ audit/
+│       │   └── ai/                # the only file that talks to a model
 │       ├── app.ts                 # route wiring, helmet, cors, rate limit
 │       └── server.ts
 ├── frontend/
 │   └── src/
 │       ├── api/                   # typed client + endpoint map
+│       ├── hooks/                 # useProjectWrite / useReadOnlyGuard
 │       ├── pages/
 │       │   ├── AdminPage.tsx      # administrator account console
-│       │   ├── ProgramOverviewPage.tsx # program overview screen
-│       │   └── workspace/         # DashboardView, InputView, ApproachView, StudioView, AgentDrawer
+│       │   ├── CustomerLibraryPage.tsx
+│       │   ├── ProgramOverviewPage.tsx
+│       │   └── workspace/         # DashboardView, InputView, PlanningReviewView, StudioView, AgentDrawer
 │       └── styles/app.css         # design system from the handoff, unchanged
-├── docs/
-│   ├── ARCHITECTURE.md
-│   ├── API.md
-│   └── DATA-MODEL.md
+├── data/raw/                      # sample customer checklists and templates (local seeding only)
+├── docs/                          # ARCHITECTURE.md · API.md · DATA-MODEL.md
+├── render.yaml
 └── docker-compose.yml
 ```
 
 ## The three planning flows
 
-**1 · Input & verify** — `InputFieldDefinition` drives a type-specific form (SI / SM / Product).
-Values save as `PM_INPUT` and stay unverified until the PM runs *Verify input & continue*.
-Optional reference files are classified, produce candidate values, and are flagged for PM
-confirmation — never applied silently. A separate, optional **project description document**
-(PDF/DOCX/TXT) is read for its actual text on upload; the AI only reads that text once the PM
-asks for a recommendation (flow 2), not on verify.
+**1 · Project Input** — three fields: the project's name, its type, and the governance model the PM
+has already decided on (or "not decided yet", which is a real answer — it is what asks the analysis
+to recommend one). Everything else the app needs it reads from the uploaded documents, which is why
+the **project description document is mandatory** and the upload panels sit above the form. Files
+may be PDF, Word, Excel, PowerPoint or text.
 
-**2 · Governance model recommendation** — the PM asks the AI for a recommendation
-(`modules/rules/rules.service.ts`'s `runEvaluation()`, calling Skill 1 —
-`recommendGovernanceModel()` in `modules/ai/provider.ts`). It reads verified inputs plus the
-project description document and returns a governance model, a 0-100 suitability score,
-confidence level, reasons, evidence, risks and every scored alternative — as strict JSON, saved as
-an `AiApproachSuggestion` snapshot. Confirming or overriding freezes the document pack (every
-catalog document for the project type — existence no longer depends on which model was picked,
-only structure does) as the generation contract.
+**2 · Planning Review** — one press of *Analyze planning needs* sends every uploaded document and
+the typed inputs to the model in a single call, and the screen shows what came back in three
+panels: the project overview across the top, Planning Gaps and Risks & limitations bottom-left,
+and the Approach Advisory bottom-right. The advisory argues a case when the PM had not decided
+(four models, each with reasons and quoted evidence, switchable), and reports a fit when they had
+(one model, scored on nine weighted criteria, nothing to switch to). *Confirm and open Studio*
+freezes the model as the generation contract.
 
-**3 · Template, generate & approve** — the PM picks one of three PMBOK-aligned templates,
-edits the section list, and generates (Skill 2). Only checked sections are written. A required
-action item blocks generation of the document it guards. Generated documents download as real
-`.docx`; the project overview dashboard downloads as a real, self-contained `.html`.
+**3 · Planning Studio** — the Studio opens on **the documents the analysis said are missing**, plus
+the kickoff deck, with every count reflecting that list rather than the full catalog; a toggle
+shows everything. Each document is drafted by the model, which picks its own structure — there are
+no templates and no section contract. A fact the project data does not contain becomes a
+`{{gap:N}}` token plus a question for the PM, never a guess. Downloads are real Office files, and
+the container is the server's decision: registers and matrices as `.xlsx`, decks and the org chart
+as `.pptx`, everything else `.docx`.
 
-## The two AI skills
+## The customer reference library
 
-Two independent prompts, `backend/src/modules/ai/provider.ts`, never sent together:
+A checklist belongs to a **customer**, not to a project: LGCNS's intake checklist and SKAX's
+operational readiness checklist are uploaded once and every project for them is assessed against
+it. Same for document templates — a customer's kickoff `.pptx` is stored as the original binary so
+generation can fill it *in place*, keeping their masters, fonts and images.
 
-- **Skill 1 — `recommendGovernanceModel()`.** Extraction + scoring + alternatives, per
-  `instruction.md`/`SKILL.md`'s methodology-scoring section. Default candidate models and their
-  display metadata live in `backend/src/data/governance-models.ts`.
-- **Skill 2 — `generateDocument()` / `generateGovernanceArtifact()`.** Document drafting.
-  `generateGovernanceArtifact()` covers the six documents required for every project regardless of
-  model (Project Charter, Organization Chart, RACI Matrix, Communication Plan, Change / Escalation
-  Flow, Risk Plan) using per-model structure guidance from `governance-models.ts`, and can return a
-  `raciTable` / `riskRegister` for the two that need one. `generateDocument()` handles every other
-  catalog document generically.
+A project finds its customer by **matching text, not a foreign key**: `Project.customer` is free
+text, matched against each customer's aliases. An alias can be a spelling (`SK C&C`), a prefix rule
+(`SK*` — a whole corporate group in one rule) or `*`, the house default. Both are edited in the
+Customer library screen, so adding a customer never needs a code change.
+
+Parsing is per-format and the formats genuinely differ — this is where "adaptive" is load-bearing:
+an LGCNS `.xlsx` checklist is a grid with two blocks side by side on one sheet, while an AGS
+`.docx` is prose where each check is a paragraph ending in `■ Yes No N/A`. `lib/checklist-parser.ts`
+holds one strategy for each.
+
+## Language
+
+The interface is English whatever language the uploads are in. Where the point is traceability —
+governance evidence, checklist items — the source sentence is kept *beside* the English, never
+instead of it: a translation cannot be searched for in a Korean PDF. Proper nouns keep the spelling
+their document uses. The chat agent is the deliberate exception: it answers in whatever language
+the PM wrote in, because a conversation is not a page.
 
 ## Extending the governance-model list or a document's structure guidance
 
-Everything both skills need is in `backend/src/data/governance-models.ts` — add a governance
-model to `DEFAULT_GOVERNANCE_MODELS` + `GOVERNANCE_MODEL_META`, or a structure hint to
-`GOVERNANCE_ARTIFACT_GUIDANCE`, and nothing else needs to change (unknown models/artifacts fall
+Everything the drafting prompts need is in `backend/src/data/governance-models.ts` — add a model to
+`DEFAULT_GOVERNANCE_MODELS` + `GOVERNANCE_MODEL_META`, or a structure hint to
+`GOVERNANCE_ARTIFACT_GUIDANCE`, and nothing else needs to change (unknown models and artifacts fall
 back to a generic entry, so the app never breaks on an AI-proposed model outside the default list).
+Add a register document by adding one entry to `data/table-documents.ts`: the same column list
+feeds the prompt, the spreadsheet header and the on-screen grid, so those three cannot drift.
 
 ## Tests and checks
 
 ```bash
-npm --workspace backend run lint     # tsc --noEmit
+npm --workspace backend run lint     # tsc --noEmit — the only backend "lint"
 npm --workspace frontend run lint
 npm --workspace backend run test     # readiness formula unit tests
 ```
 
 ## What is intentionally left as an integration point
 
-- **Document parsing for the four classified reference groups** (Commitment, Scope, Organization,
-  Schedule) — `extractCandidates()` in `input.service.ts` still returns fixed candidates. The
-  project description document *is* parsed for real (`lib/extract-text.ts`, via `pdf-parse` /
-  `mammoth`); wire the same approach into the classified groups if they need it too.
-- **Organization Chart as a graphic** — rendered as a structured text/table representation in the
-  `.docx` export today, not a graphical diagram; a real org-chart renderer would slot into
-  `documents.service.ts`'s `renderDocumentDocx`.
+- **OCR for scanned documents** — `lib/extract-text.ts` pulls a text *layer* out of `.txt`,
+  `.docx`, `.pdf`, `.xlsx` and `.pptx`. A scanned PDF has no text layer in any language, so the
+  file is stored and flagged for re-upload. Pre-2007 binaries (`.doc`, `.xls`, `.ppt`) are a
+  different container format and are not parsed.
 - **Approved-baseline export** (`createExport`) still only records the job and returns approved
   content as JSON; it has not been upgraded to bundle a real multi-document package the way the
-  per-document `.docx` / dashboard `.html` downloads were.
-- **File storage** — uploads go to local disk via multer; switch `storageKey` to S3/Blob for production.
+  per-document Office / dashboard `.html` downloads were.
+- **File storage** — uploads go to local disk via multer (`UPLOAD_DIR`); switch `storageKey`
+  handling to S3/Blob for production.
+- **Prompt caching** — there is none. Every chat question re-sends the whole project context at
+  full input price, and that context grows as documents are generated. A `cache_control` breakpoint
+  on the project block is the largest single cost saving available.

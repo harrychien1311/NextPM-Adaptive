@@ -260,7 +260,7 @@ function sheetName(name: string): string {
 
 export async function buildDocumentXlsx(doc: XlsxDocument): Promise<{ fileName: string; buffer: Buffer }> {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'NextPM Adaptive';
+  workbook.creator = 'NEXTFIT AI ADAPTIVE';
   workbook.created = new Date();
 
   /**

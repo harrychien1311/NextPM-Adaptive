@@ -291,8 +291,8 @@ function contentSlideXml(slide: DeckSlide, index: number, total: number, logoDat
 
 const THEME_XML =
   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-  '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="NextPM">' +
-  '<a:themeElements><a:clrScheme name="NextPM">' +
+  '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="NEXTFIT AI">' +
+  '<a:themeElements><a:clrScheme name="NEXTFIT AI">' +
   '<a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1>' +
   '<a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>' +
   `<a:dk2><a:srgbClr val="${DOC_COLORS.navy}"/></a:dk2>` +
@@ -306,11 +306,11 @@ const THEME_XML =
   `<a:hlink><a:srgbClr val="${DOC_COLORS.blue}"/></a:hlink>` +
   `<a:folHlink><a:srgbClr val="${DOC_COLORS.muted}"/></a:folHlink>` +
   '</a:clrScheme>' +
-  '<a:fontScheme name="NextPM">' +
+  '<a:fontScheme name="NEXTFIT AI">' +
   '<a:majorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont>' +
   '<a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont>' +
   '</a:fontScheme>' +
-  '<a:fmtScheme name="NextPM">' +
+  '<a:fmtScheme name="NEXTFIT AI">' +
   '<a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill>' +
   '<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>' +
   '<a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst>' +
@@ -487,8 +487,8 @@ export async function buildDeck(spec: DeckSpec): Promise<Buffer> {
       'xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" ' +
       'xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">' +
       `<dc:title>${escapeXml(`${spec.projectName} — ${spec.documentName}`)}</dc:title>` +
-      '<dc:creator>NextPM Adaptive</dc:creator>' +
-      '<cp:lastModifiedBy>NextPM Adaptive</cp:lastModifiedBy>' +
+      '<dc:creator>NEXTFIT AI ADAPTIVE</dc:creator>' +
+      '<cp:lastModifiedBy>NEXTFIT AI ADAPTIVE</cp:lastModifiedBy>' +
       `<dcterms:created xsi:type="dcterms:W3CDTF">${new Date().toISOString()}</dcterms:created>` +
       '</cp:coreProperties>',
   );
@@ -497,7 +497,7 @@ export async function buildDeck(spec: DeckSpec): Promise<Buffer> {
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
       '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" ' +
       'xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">' +
-      '<Application>NextPM Adaptive</Application>' +
+      '<Application>NEXTFIT AI ADAPTIVE</Application>' +
       `<Slides>${slides.length}</Slides>` +
       '</Properties>',
   );

@@ -38,7 +38,7 @@ export function LoginPage() {
         <div className="brand">
           <div className="brand-mark">N</div>
           <div>
-            <strong>NextPM</strong>
+            <strong>NEXTFIT AI</strong>
             <span>Adaptive</span>
           </div>
         </div>

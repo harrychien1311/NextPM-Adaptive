@@ -186,7 +186,7 @@ export function ProgramOverviewPage() {
           <div className="brand portfolio-brand">
             <div className="brand-mark">N</div>
             <div>
-              <strong>NextPM</strong>
+              <strong>NEXTFIT AI</strong>
               <span>Adaptive</span>
             </div>
           </div>
