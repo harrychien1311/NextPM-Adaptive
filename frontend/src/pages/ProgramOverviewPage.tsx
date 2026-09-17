@@ -782,10 +782,21 @@ function CreateProjectModal({
   onClose: () => void;
   onSubmit: (body: { name: string; type: ProjectType; programId: string | null; customer: string; targetStart: string }) => void;
 }) {
-  const [name, setName] = useState('New Korea Delivery Project');
+  // Empty for the same reason as Customer below: a prefilled field is one nobody edits, and the
+  // project's name is its identity everywhere else in the app.
+  const [name, setName] = useState('');
   const [type, setType] = useState<ProjectType>('SI');
   const [programId, setProgramId] = useState<string>('');
-  const [customer, setCustomer] = useState('Korea — Enterprise');
+  /**
+   * Empty, with only a placeholder to suggest the shape of an answer.
+   *
+   * It used to arrive holding "Korea — Enterprise", and a prefilled field is one nobody edits — so
+   * that string became the customer of almost every project in the database. It matches no alias,
+   * which means those projects silently fall through to the house default: no customer checklist,
+   * and the neutral kickoff deck instead of the customer's own template. A prefilled value here is
+   * not a convenience, it is a wrong answer nobody was asked to confirm.
+   */
+  const [customer, setCustomer] = useState('');
   const [targetStart, setTargetStart] = useState('2026-10-01');
 
   const TYPES: { key: ProjectType; badge: string; title: string; hint: string }[] = [
@@ -811,7 +822,12 @@ function CreateProjectModal({
       >
         <label>
           Project name *
-          <input value={name} onChange={(event) => setName(event.target.value)} required />
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="e.g. Swing Order Operation, KR Commerce Modernization"
+            required
+          />
         </label>
         <label>
           Project type *
@@ -852,7 +868,7 @@ function CreateProjectModal({
             <input
               value={customer}
               onChange={(event) => setCustomer(event.target.value)}
-              placeholder="e.g. SK AX, LG CNS"
+              placeholder="e.g. SK AX, LG CNS, Viettel"
               required
             />
           </label>
