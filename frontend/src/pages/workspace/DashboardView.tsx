@@ -7,8 +7,9 @@ import { useReadOnlyGuard } from '../../hooks/useProjectWrite';
 import { DocumentPreview } from './DocumentPreview';
 import { UploadPreview } from './UploadPreview';
 import { CustomerReadinessPanel } from './CustomerReadinessPanel';
-import type { LibraryEntry } from '../../api/types';
-import type { WorkspaceView } from '../WorkspacePage';
+import { Backdrop, ModalShell } from '../../components/Modal';
+import type { ActionItem, LibraryEntry } from '../../api/types';
+import type { NavigateToView } from '../WorkspacePage';
 
 const TASK_STATE: Record<string, string> = {
   DONE: 'done-state',
@@ -69,7 +70,7 @@ export function DashboardView({
   onNavigate,
 }: {
   projectId: string;
-  onNavigate: (view: WorkspaceView) => void;
+  onNavigate: NavigateToView;
 }) {
   const notify = useToast();
   const queryClient = useQueryClient();
@@ -106,6 +107,12 @@ export function DashboardView({
   /** The action whose answer box is open, and what the PM has typed into it. */
   const [resolving, setResolving] = useState<string | null>(null);
   const [answer, setAnswer] = useState('');
+  /**
+   * The action the PM is being asked to close, once its document has been confirmed. Closing is a
+   * one-click path, so it asks first — the list is the record of what is still outstanding, and
+   * removing a row from it by accident is not something the screen makes obvious afterwards.
+   */
+  const [closing, setClosing] = useState<ActionItem | null>(null);
 
   const resolveAction = useMutation({
     mutationFn: ({ actionId, value }: { actionId: string; value: string }) =>
@@ -117,6 +124,7 @@ export function DashboardView({
       queryClient.invalidateQueries({ queryKey: ['input', projectId] });
       queryClient.invalidateQueries({ queryKey: ['workspace', projectId] });
       setResolving(null);
+      setClosing(null);
       setAnswer('');
       notify({ title: 'Action resolved', detail: 'It is off the list and recorded in the audit trail.' });
     },
@@ -313,18 +321,31 @@ export function DashboardView({
                 analysis found — run <em>Analyze planning needs</em> on Project Input to fill it.
               </div>
             )}
-            {data.actions.map((action) => (
+            {data.actions.map((action) => {
+              /**
+               * The PM has pressed *PM confirm* on the document this action asked for. That is the
+               * action answered, so the row says so and offers to close it — but it stays open
+               * until the PM says to close it, because approving a document and declaring the gap
+               * behind it closed are two different claims, and only one of them was made.
+               */
+              const answeredByDocument = action.targetDocumentStatus === 'APPROVED';
+              return (
               <div
                 key={action.id}
-                className={`decision-item ${action.priority === 'REQUIRED' ? 'critical' : action.priority === 'CONDITIONAL' ? 'warning' : 'info'}`}
+                className={`decision-item ${action.priority === 'REQUIRED' ? 'critical' : action.priority === 'CONDITIONAL' ? 'warning' : 'info'}${answeredByDocument ? ' is-answered' : ''}`}
               >
-                <span>{action.priority === 'REQUIRED' ? '!' : action.priority === 'CONDITIONAL' ? '◇' : 'i'}</span>
+                <span>{answeredByDocument ? '✓' : action.priority === 'REQUIRED' ? '!' : action.priority === 'CONDITIONAL' ? '◇' : 'i'}</span>
                 <div>
                   <small>
                     {action.priority} · {DOMAIN_LABEL[action.domain]?.toUpperCase()}
                   </small>
                   <strong>{action.title}</strong>
                   <p>{action.description}</p>
+                  {answeredByDocument && (
+                    <span className="answered-pill">
+                      Resolved · <strong>{action.targetDocument}</strong> confirmed by the PM
+                    </span>
+                  )}
                   {resolving === action.id && (
                     <form
                       className="action-answer"
@@ -368,21 +389,39 @@ export function DashboardView({
                 </div>
                 <div className="decision-buttons">
                   {/* Where the work actually happens — Input for a hole in the profile, the Studio
-                      for a missing document. The server picked which from the catalog. */}
-                  <button onClick={() => onNavigate(action.targetView)}>Open</button>
+                      for a missing document. The server picked which from the catalog, and named
+                      the document, so this lands on that document rather than on the Studio's
+                      default one. */}
                   <button
-                    className={lockClass.trim()}
-                    {...lockedProps}
-                    onClick={guard(() => {
-                      setResolving(resolving === action.id ? null : action.id);
-                      setAnswer('');
-                    })}
+                    onClick={() => onNavigate(action.targetView, action.targetDocument)}
+                    title={action.targetDocument ? `Open ${action.targetDocument} in the Planning Studio` : undefined}
                   >
-                    {canWrite && resolving === action.id ? 'Close' : 'Resolve'}
+                    Open
                   </button>
+                  {answeredByDocument ? (
+                    <button
+                      className={`primary small${lockClass}`}
+                      {...lockedProps}
+                      onClick={guard(() => setClosing(action))}
+                    >
+                      Close action
+                    </button>
+                  ) : (
+                    <button
+                      className={lockClass.trim()}
+                      {...lockedProps}
+                      onClick={guard(() => {
+                        setResolving(resolving === action.id ? null : action.id);
+                        setAnswer('');
+                      })}
+                    >
+                      {canWrite && resolving === action.id ? 'Cancel' : 'Resolve'}
+                    </button>
+                  )}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </article>
         )}
       </div>
@@ -557,6 +596,49 @@ export function DashboardView({
           }
         />
       )}
+
+      <Backdrop open={Boolean(closing)} onClose={() => setClosing(null)} />
+      <ModalShell open={Boolean(closing)} className="decision-modal">
+        <div className="modal-head">
+          <div>
+            <small>CLOSE PM ACTION</small>
+            <h2>{closing?.title}</h2>
+          </div>
+          <button onClick={() => setClosing(null)}>×</button>
+        </div>
+        <div className="rationale">
+          <p>
+            <strong>{closing?.targetDocument}</strong> has been confirmed by the PM in the Planning
+            Studio, which is what this action asked for.
+          </p>
+          {/* Said plainly, because the two are not the same claim and the PM is the one who knows
+              whether the document actually settled the gap. */}
+          <p>
+            Closing records it as resolved and takes it off this list. The document stays approved
+            either way — if the gap is not really settled, leave the action open.
+          </p>
+        </div>
+        <div className="modal-actions">
+          <button className="secondary" onClick={() => setClosing(null)}>
+            Keep it open
+          </button>
+          <button
+            className="primary"
+            disabled={resolveAction.isPending}
+            onClick={() =>
+              closing &&
+              resolveAction.mutate({
+                actionId: closing.id,
+                // The record of *why* it was closed, which is what makes the audit line readable a
+                // month later: "PM selected: Closed — Change / Escalation Flow confirmed by the PM".
+                value: `Closed — ${closing.targetDocument} confirmed by the PM`,
+              })
+            }
+          >
+            {resolveAction.isPending ? 'Closing…' : 'Close action'}
+          </button>
+        </div>
+      </ModalShell>
     </section>
   );
 }

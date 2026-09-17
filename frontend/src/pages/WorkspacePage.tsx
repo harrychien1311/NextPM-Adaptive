@@ -15,6 +15,16 @@ import { SignOutIcon } from '../components/icons';
 
 export type WorkspaceView = 'dashboard' | 'input' | 'approach' | 'studio';
 
+/**
+ * Switching view, optionally naming the document to land on.
+ *
+ * Most callers pass a view alone. The dashboard's PM action center passes the second argument,
+ * because "Open" on an action that says *the Risk Management Plan is missing* has to arrive at that
+ * document — landing on whichever one the Studio would have picked for itself makes every action on
+ * the list open the same screen, which is what it did before this existed.
+ */
+export type NavigateToView = (view: WorkspaceView, focusDocument?: string | null) => void;
+
 /** The values `?view=` accepts, so a hand-edited URL cannot put the workspace in a state that isn't one. */
 const WORKSPACE_VIEWS: WorkspaceView[] = ['dashboard', 'input', 'approach', 'studio'];
 
@@ -33,6 +43,18 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
   );
   const [agentOpen, setAgentOpen] = useState(false);
   const [teamOpen, setTeamOpen] = useState(false);
+
+  /**
+   * The document the next screen should open on, when the caller named one.
+   *
+   * Cleared on every navigation that does not name one, so a later plain "go to the Studio" does not
+   * silently reopen whatever an action pointed at half an hour ago.
+   */
+  const [focusDocument, setFocusDocument] = useState<string | null>(null);
+  const goToView: NavigateToView = (next, focus = null) => {
+    setFocusDocument(focus);
+    setView(next);
+  };
 
   const workspace = useQuery({
     queryKey: ['workspace', projectId],
@@ -213,10 +235,10 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
             </div>
           )}
 
-          {view === 'dashboard' && <DashboardView projectId={projectId} onNavigate={setView} />}
-          {view === 'input' && <InputView projectId={projectId} onNavigate={setView} />}
-          {view === 'approach' && <PlanningReviewView projectId={projectId} onNavigate={setView} />}
-          {view === 'studio' && <StudioView projectId={projectId} />}
+          {view === 'dashboard' && <DashboardView projectId={projectId} onNavigate={goToView} />}
+          {view === 'input' && <InputView projectId={projectId} onNavigate={goToView} />}
+          {view === 'approach' && <PlanningReviewView projectId={projectId} onNavigate={goToView} />}
+          {view === 'studio' && <StudioView projectId={projectId} focusDocument={focusDocument} />}
         </main>
       </div>
 

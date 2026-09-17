@@ -515,6 +515,14 @@ model ActionItem {
   title         String
   description   String?
   targetView    String           @default("input") // input | approach | studio
+  /// The catalog document this action is about, so "Open" lands on *that* document in the Studio
+  /// rather than on whatever the Studio would have selected by itself. Null when the gap names no
+  /// document, or names one the catalog does not hold — then `targetView` is "input".
+  ///
+  /// Deliberately its own column rather than reusing `suggestions[0]`: a suggestion is an answer
+  /// offered to the PM, and overloading it with a navigation target means one of the two silently
+  /// breaks the next time either is changed.
+  targetDocument String?
   suggestions   String[]         @default([])
   status        ActionStatus     @default(OPEN)
   resolvedValue String?

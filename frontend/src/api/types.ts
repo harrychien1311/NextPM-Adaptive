@@ -174,6 +174,13 @@ export interface ActionItem {
   title: string;
   description: string | null;
   targetView: 'input' | 'approach' | 'studio';
+  /** The catalog document this action is about, so "Open" can land on it rather than on the Studio's own default. */
+  targetDocument: string | null;
+  /**
+   * Where that document has got to in the Studio. `APPROVED` means the PM has pressed *PM confirm*
+   * on it, which is what marks this action ready to close — the server reports it, the PM closes it.
+   */
+  targetDocumentStatus: DocumentStatus | null;
   suggestions: string[];
   blocksDocument: string | null;
 }

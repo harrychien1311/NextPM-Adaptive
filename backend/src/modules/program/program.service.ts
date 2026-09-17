@@ -325,14 +325,12 @@ export async function createProject(params: {
           verified: false,
         })),
       },
-      tasks: {
-        create: [
-          { title: 'Complete minimum project profile', detail: `${definitions.filter((d) => d.required).length} required inputs`, state: 'TODO', order: 0 },
-          { title: 'Verify inputs & get AI recommendation', detail: 'Governance-model recommendation', state: 'TODO', order: 1 },
-          { title: 'Confirm governance model', detail: 'PM decision gate', state: 'TODO', order: 2 },
-          { title: 'Generate & approve planning pack', detail: 'AI drafts, PM approves', state: 'TODO', order: 3 },
-        ],
-      },
+      /**
+       * No `tasks` are written any more. These four steps were stored here at `TODO` and then never
+       * updated by anything — the dashboard now derives them from the project's real state
+       * (`dashboard.service`), so writing a copy that immediately goes stale only creates something
+       * for the two to disagree about. `PlanningTask` stays in the schema; nothing reads it.
+       */
       domainReadiness: {
         create: (['GOVERNANCE', 'SCOPE', 'SCHEDULE', 'FINANCE', 'STAKEHOLDERS', 'RESOURCES', 'RISK'] as const).map((domain) => ({
           domain,

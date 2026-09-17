@@ -217,14 +217,8 @@ async function main() {
         customFields: seed.fillInputs
           ? { create: [{ name: 'Peak traffic event', value: '11.11 campaign — zero downtime', useIn: 'BOTH' }] }
           : undefined,
-        tasks: {
-          create: [
-            { title: 'Project profile confirmed', detail: `${definitions.filter((d) => d.required).length} required inputs`, state: seed.verifyInputs ? 'DONE' : 'TODO', order: 0 },
-            { title: `${seed.approach ?? 'Management'} approach approved`, detail: 'Decision by Lina Vuong', state: seed.approach ? 'DONE' : 'TODO', order: 1 },
-            { title: 'Scope & Requirements Plan', detail: '3 PM questions', state: seed.generateSome ? 'REVIEW' : 'TODO', order: 2 },
-            { title: 'Risk & Dependency Plan', detail: 'Dependency owner missing', state: seed.generateSome ? 'BLOCKED' : 'TODO', order: 3 },
-          ],
-        },
+        // No seeded `tasks`: the Planning tasks panel is derived from each project's real state now
+        // (see `dashboard.service`), so these four decorative rows described nothing.
         dashboardLayouts: {
           create: {
             userId: users.LV,

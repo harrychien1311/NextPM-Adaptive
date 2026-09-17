@@ -422,10 +422,8 @@ export async function verifyInputs(projectId: string, actorId: string) {
   }
 
   await recomputeDomainReadiness(projectId);
-  await prisma.planningTask.updateMany({
-    where: { projectId, title: 'Complete minimum project profile' },
-    data: { state: 'DONE' },
-  });
+  // The `planningTask` row this used to tick is gone: the Planning tasks panel is derived from the
+  // project's state rather than stored, so there is nothing here to keep in step.
 
   await logEvent({
     projectId,
@@ -494,8 +492,9 @@ const GAP_PRIORITY: Record<PlanningGap['severity'], ActionPriority> = {
  *   says a document is missing; setting it here would, at REQUIRED priority, make `generateDraft`
  *   refuse to generate the very document that closes the gap — it checks exactly that pair. Scoping
  *   the delete means a hand-created blocker is never swept away by an analysis run either.
- * - **The domain comes from the catalog entry the gap names, never from the model.** The model is
- *   not asked for one, and a guessed domain files the entry under the wrong heading.
+ * - **The domain and the target document come from the catalog entry the gap names, never from the
+ *   model.** The model is not asked for a domain, and a guessed one files the entry under the wrong
+ *   heading; the catalog's own spelling of the name is what the Studio matches on.
  */
 export async function syncPlanningActions(projectId: string, gaps: PlanningGap[]) {
   const project = await prisma.project.findUnique({ where: { id: projectId }, select: { type: true } });
@@ -505,18 +504,18 @@ export async function syncPlanningActions(projectId: string, gaps: PlanningGap[]
     where: { projectType: project.type },
     select: { name: true, domain: true },
   });
-  const domainByDocument = new Map(definitions.map((definition) => [definition.name.trim().toLowerCase(), definition.domain]));
+  const catalogByName = new Map(definitions.map((definition) => [definition.name.trim().toLowerCase(), definition]));
 
   await prisma.actionItem.deleteMany({ where: { projectId, status: 'OPEN', blocksDocument: null } });
   if (!gaps.length) return 0;
 
   const { count } = await prisma.actionItem.createMany({
     data: gaps.map((gap) => {
-      const domain = gap.documentName ? domainByDocument.get(gap.documentName.trim().toLowerCase()) : undefined;
+      const catalogEntry = gap.documentName ? catalogByName.get(gap.documentName.trim().toLowerCase()) : undefined;
       return {
         projectId,
         priority: GAP_PRIORITY[gap.severity] ?? ActionPriority.CONDITIONAL,
-        domain: domain ?? ManagementDomain.GOVERNANCE,
+        domain: catalogEntry?.domain ?? ManagementDomain.GOVERNANCE,
         title: gap.title,
         description: gap.why,
         /**
@@ -524,8 +523,15 @@ export async function syncPlanningActions(projectId: string, gaps: PlanningGap[]
          * keys on that name, so sending the PM there for an unmatched one lands them on a filter
          * that hides everything. Anything else is a hole in the project profile: Input.
          */
-        targetView: domain ? 'studio' : 'input',
-        suggestions: gap.documentName ? [gap.documentName] : [],
+        targetView: catalogEntry ? 'studio' : 'input',
+        /**
+         * The catalog's own spelling, not the model's. The two differ in case and spacing often
+         * enough that matching on the model's version in the client would quietly fail, and the
+         * symptom — the Studio opening on the wrong document — looks like a navigation bug rather
+         * than a string mismatch.
+         */
+        targetDocument: catalogEntry?.name ?? null,
+        suggestions: catalogEntry ? [catalogEntry.name] : [],
       };
     }),
   });

@@ -19,8 +19,7 @@ const DEFAULT_WIDGETS = {
 export async function dashboard(projectId: string, userId: string) {
   const workspace = await projectWorkspace(projectId);
 
-  const [tasks, actions, domains, documents, references, activity, layout] = await Promise.all([
-    prisma.planningTask.findMany({ where: { projectId }, orderBy: { order: 'asc' } }),
+  const [actions, domains, documents, references, activity, layout] = await Promise.all([
     prisma.actionItem.findMany({ where: { projectId, status: 'OPEN' }, orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }] }),
     prisma.domainReadiness.findMany({ where: { projectId } }),
     prisma.planningDocument.findMany({
@@ -42,6 +41,27 @@ export async function dashboard(projectId: string, userId: string) {
    * documents, which reads as barely started when it is nearly done. Null means no analysis has
    * tied a gap to a document yet, and then the full pack is the honest denominator.
    */
+  /**
+   * What the Studio has done with the document each action points at.
+   *
+   * An action says "there is no escalation path"; pressing *PM confirm* on the Change / Escalation
+   * Flow is the PM answering it. The action center could not see that — the two lived side by side
+   * with no connection — so a PM who had just confirmed the document still read "No incident and
+   * change escalation path" on their dashboard as though nothing had happened.
+   *
+   * It is reported, not acted on: the row is marked ready to close and the PM closes it. Resolving
+   * it automatically would be the agent deciding on the PM's behalf, which is the one thing this
+   * application does not do — and approving a document is not always the same claim as closing the
+   * gap that asked for it.
+   */
+  const documentStatusByName = new Map(documents.map((doc) => [doc.name.trim().toLowerCase(), doc.status]));
+  const actionRows = actions.map((action) => ({
+    ...action,
+    targetDocumentStatus: action.targetDocument
+      ? documentStatusByName.get(action.targetDocument.trim().toLowerCase()) ?? null
+      : null,
+  }));
+
   const gapNames = await gapDocumentNames(projectId);
   const inScope = gapNames ? documents.filter((doc) => gapNames.includes(doc.name)) : documents;
 
@@ -51,6 +71,66 @@ export async function dashboard(projectId: string, userId: string) {
   const requiredPending = inScope.filter(
     (doc) => doc.requirement === 'REQUIRED' && doc.status !== DocumentStatus.APPROVED,
   ).length;
+
+  /**
+   * The four steps of the planning flow, **derived** — never stored.
+   *
+   * They used to be `PlanningTask` rows written once when the project was provisioned, all four at
+   * `TODO`, and the only code that ever moved one was `verifyInputs`, matching on the single title
+   * "Complete minimum project profile". That button was removed from Project Input when
+   * `analyzePlanningNeeds` replaced it, so nothing has updated a task since — a project with an
+   * analysis, a confirmed governance model and approved documents still reported four outstanding
+   * to-dos. Steps 2-4 never had an update path at all, in any version.
+   *
+   * A stored mirror of state that something else owns drifts the moment anyone forgets to update
+   * it, and nobody finds out. Every fact below is already loaded for the panels above, so this costs
+   * no extra query and cannot disagree with them.
+   */
+  const descriptionReadable = references.some(
+    (file) => file.group === 'DESCRIPTION' && (file.extraction as { textAvailable?: boolean } | null)?.textAvailable,
+  );
+  // The same three items Project Input counts in its "Required inputs 2/3" meter — the two screens
+  // must not give the PM different answers about whether the profile is complete.
+  const requiredInputs = [Boolean(workspace.name?.trim()), Boolean(workspace.type), descriptionReadable];
+  const requiredDone = requiredInputs.filter(Boolean).length;
+
+  const generated = inScope.length - notGenerated;
+  const planningTasks = [
+    {
+      id: 'profile',
+      title: 'Complete minimum project profile',
+      detail: `${requiredDone}/${requiredInputs.length} required inputs`,
+      state: requiredDone === requiredInputs.length ? 'DONE' : 'TODO',
+      order: 0,
+    },
+    {
+      id: 'analysis',
+      // Named after the button that exists. The old title said "Verify inputs & get AI
+      // recommendation", which is two buttons that were both deleted.
+      title: 'Analyze planning needs',
+      detail: workspace.recommendation
+        ? `${workspace.recommendation.approach} · ${workspace.recommendation.confidence}% fit`
+        : 'Reads the uploaded documents in one pass',
+      state: workspace.recommendation ? 'DONE' : 'TODO',
+      order: 1,
+    },
+    {
+      id: 'decision',
+      title: 'Confirm governance model',
+      detail: workspace.approach ? `${workspace.approach.approach} · ${workspace.approach.outcome}` : 'PM decision gate',
+      state: workspace.approach ? 'DONE' : 'TODO',
+      order: 2,
+    },
+    {
+      id: 'documents',
+      title: 'Generate & approve planning pack',
+      detail: inScope.length ? `${approved}/${inScope.length} approved` : 'AI drafts, PM approves',
+      // REVIEW, not DONE, while drafts exist that nobody has approved: generating is not finishing,
+      // and the whole point of the approval step is that it is a separate decision.
+      state: inScope.length && approved === inScope.length ? 'DONE' : generated ? 'REVIEW' : 'TODO',
+      order: 3,
+    },
+  ];
 
   const verdict =
     workspace.readiness >= 85 && requiredPending === 0
@@ -78,11 +158,11 @@ export async function dashboard(projectId: string, userId: string) {
       percent: inScope.length ? Math.round(((inScope.length - notGenerated) / inScope.length) * 100) : 0,
     },
     tasks: {
-      items: tasks,
-      complete: tasks.filter((task) => task.state === 'DONE').length,
-      total: tasks.length,
+      items: planningTasks,
+      complete: planningTasks.filter((task) => task.state === 'DONE').length,
+      total: planningTasks.length,
     },
-    actions,
+    actions: actionRows,
     domains: domains.map((row) => ({ domain: row.domain, score: row.score, target: row.target })),
     /**
      * Every document attached to this project, whichever end it came from: files the PM uploaded

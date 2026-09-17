@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { dashboardExportApi, documentsApi, projectApi } from '../../api/endpoints';
 import { useToast } from '../../components/Toast';
@@ -45,7 +45,14 @@ function SectionText({ content }: { content: string }) {
   );
 }
 
-export function StudioView({ projectId }: { projectId: string }) {
+export function StudioView({
+  projectId,
+  /** A catalog document name the caller wants opened — see `NavigateToView` in WorkspacePage. */
+  focusDocument,
+}: {
+  projectId: string;
+  focusDocument?: string | null;
+}) {
   const notify = useToast();
   const queryClient = useQueryClient();
 
@@ -113,6 +120,34 @@ export function StudioView({ projectId }: { projectId: string }) {
   // Hiding the tab the PM is standing on would leave them on an empty panel with nothing
   // highlighted, so the selection follows the list rather than the other way round.
   const activeDomain = visibleTabs.some((tab) => tab.domain === domain) ? domain : visibleTabs[0]?.domain ?? domain;
+
+  /**
+   * Open the document the caller named, instead of whatever this screen would have selected.
+   *
+   * Without this, `Open` on a PM action only switched the view, and the Studio then fell back to
+   * its own defaults — domain `GOVERNANCE`, first document in it — so every action on the list,
+   * whatever it was about, arrived at the same document.
+   *
+   * Two things it has to get right. It matches on the **catalog's** name, which is what the server
+   * stores in `targetDocument` for exactly this reason. And it drops the gap filter when that filter
+   * would hide the target: being sent to a document and shown an empty panel is worse than the bug
+   * this replaces.
+   *
+   * It applies once per named document rather than on every render of `data`: the studio query is
+   * invalidated after each generate, approve and fill, and re-applying the focus there would drag
+   * the PM back to this document every time they touched another one.
+   */
+  const appliedFocus = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusDocument || !data || appliedFocus.current === focusDocument) return;
+    const wanted = focusDocument.trim().toLowerCase();
+    const target = data.catalog.find((entry) => entry.name.trim().toLowerCase() === wanted);
+    if (!target) return;
+    appliedFocus.current = focusDocument;
+    setDomain(target.domain);
+    setDefinitionId(target.definitionId);
+    if (hasGapFilter && target.inPlanningGap !== true) setGapsOnly(false);
+  }, [focusDocument, data, hasGapFilter]);
 
   const domainDocs = useMemo(
     () => shown.filter((entry) => entry.domain === activeDomain),

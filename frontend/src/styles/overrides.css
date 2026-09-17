@@ -2533,3 +2533,31 @@ article.approach-option.is-locked:hover {
   font-size: 0.68rem;
   padding: 6px 11px;
 }
+
+/* A PM action whose document has been confirmed in the Studio: it reads as settled, and its button
+   offers to close it rather than asking for an answer that has already been given. */
+.decision-item.is-answered {
+  background: #f6fbf8;
+}
+.decision-item.is-answered > span {
+  background: #e3f4ec !important;
+  color: #25805f !important;
+}
+.answered-pill {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 0.62rem;
+  color: #25805f;
+  background: #e8f5ef;
+  border-radius: 99px;
+  padding: 4px 8px;
+}
+.answered-pill strong {
+  display: inline !important;
+  font-size: 0.62rem !important;
+  margin: 0 !important;
+}
+.decision-buttons .primary.small {
+  font-size: 0.68rem;
+  padding: 6px 10px;
+}
