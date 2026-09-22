@@ -10,6 +10,7 @@ import {
   approveDocument,
   catalogForProject,
   createExport,
+  discardDocument,
   documentDetail,
   documentSheets,
   documentSlides,
@@ -131,6 +132,24 @@ documentsRouter.post(
   asyncHandler(async (req, res) => {
     res.json(
       await approveDocument({
+        projectId: req.params.projectId,
+        documentId: req.params.documentId,
+        actorId: req.user!.id,
+      }),
+    );
+  }),
+);
+
+/**
+ * Throws away a generated draft, putting the catalog entry back to "not generated". Write role
+ * only — a reader may download a document but never remove one.
+ */
+documentsRouter.delete(
+  '/:projectId/documents/:documentId',
+  requireProjectRole(...PROJECT_WRITE_ROLES),
+  asyncHandler(async (req, res) => {
+    res.json(
+      await discardDocument({
         projectId: req.params.projectId,
         documentId: req.params.documentId,
         actorId: req.user!.id,

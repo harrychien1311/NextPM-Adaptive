@@ -1,4 +1,5 @@
 import path from 'node:path';
+import fsp from 'node:fs/promises';
 import { ActionPriority, InputSource, ManagementDomain, Prisma, ReferenceGroup, ReferenceStatus } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 import { badRequest, notFound } from '../../lib/http-error';
@@ -538,6 +539,28 @@ export async function syncPlanningActions(projectId: string, gaps: PlanningGap[]
   return count;
 }
 
+/**
+ * Puts back on the list every action that was closed because of a document that no longer exists.
+ *
+ * An action is marked ready to close when the Studio reports its document APPROVED, and closing it
+ * is the PM saying "that document settles this". Delete the document and the claim behind the
+ * closure is gone with it — leaving the action resolved would tell the PM a gap is handled when the
+ * only evidence for it has just been thrown away, which is the kind of quiet wrongness this whole
+ * panel exists to prevent.
+ *
+ * Matching is on `targetDocument`, not on the wording of `resolvedValue`. A PM who closed it with
+ * their own note still closed *this action, about this document*, so it reopens too; parsing the
+ * note to guess why would be both fragile and presumptuous. `resolvedValue` is cleared because it
+ * described a state that no longer holds — the audit trail keeps what it said.
+ */
+export async function reopenActionsForDocument(projectId: string, documentName: string) {
+  const { count } = await prisma.actionItem.updateMany({
+    where: { projectId, status: 'RESOLVED', targetDocument: documentName },
+    data: { status: 'OPEN', resolvedValue: null, resolvedAt: null },
+  });
+  return count;
+}
+
 /** Resolves a PM action item and writes the chosen value back into the input profile. */
 export async function resolveAction(params: { projectId: string; actionId: string; value: string; actorId: string }) {
   const action = await prisma.actionItem.findFirst({ where: { id: params.actionId, projectId: params.projectId } });
@@ -731,6 +754,8 @@ export async function referenceDetail(projectId: string, id: string) {
     message: file.message,
     sizeBytes: file.sizeBytes,
     uploadedAt: file.uploadedAt,
+    /** The preview needs it to decide whether a browser can render the original in place. */
+    mimeType: file.mimeType,
     textAvailable: Boolean(extraction?.textAvailable),
     text: extraction?.textAvailable ? (extraction.rawText ?? null) : null,
   };
@@ -743,11 +768,34 @@ export async function referenceFilePath(projectId: string, id: string) {
   return { path: path.join(env.uploadDir, file.storageKey), fileName: file.fileName, mimeType: file.mimeType };
 }
 
-export async function removeReference(projectId: string, id: string) {
+export async function removeReference(projectId: string, id: string, actorId?: string) {
   const file = await prisma.referenceFile.findFirst({ where: { id, projectId } });
   if (!file) throw notFound('Reference file not found');
   await prisma.referenceFile.delete({ where: { id } });
-  return { removed: true };
+
+  /**
+   * Delete the bytes too. This used to drop only the row, so every removed upload left its file
+   * behind for good — the uploads directory grew and nothing ever shrank it, which on a Render disk
+   * is an unbounded leak in a fixed amount of space.
+   *
+   * Only after the row is gone, and failure is swallowed: an orphaned file is untidy, a reference
+   * the PM cannot delete because its file has already vanished is a dead end they cannot get out of.
+   */
+  await fsp.rm(path.join(env.uploadDir, file.storageKey), { force: true }).catch(() => undefined);
+
+  if (actorId) {
+    await logEvent({
+      projectId,
+      actorId,
+      actorType: 'PM',
+      type: 'REFERENCE_DELETED',
+      title: `${file.fileName} removed`,
+      detail: `The uploaded ${file.group} file and the text extracted from it were deleted.`,
+      payload: { referenceId: id, group: file.group },
+    });
+  }
+
+  return { removed: true, fileName: file.fileName };
 }
 
 /**

@@ -195,7 +195,7 @@ inputRouter.delete(
   '/:projectId/references/:id',
   requireProjectRole(...PROJECT_WRITE_ROLES),
   asyncHandler(async (req, res) => {
-    res.json(await removeReference(req.params.projectId, req.params.id));
+    res.json(await removeReference(req.params.projectId, req.params.id, req.user!.id));
   }),
 );
 

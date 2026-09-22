@@ -178,9 +178,18 @@ export const inputApi = {
   /** Metadata + the text extracted on upload, for the preview panel. */
   reference: (projectId: string, id: string) =>
     api.get<ReferenceDetail>(`/projects/${projectId}/references/${id}`),
-  /** Absolute URL of the original file, for "open the real thing" links. */
-  referenceFileUrl: (projectId: string, id: string) =>
-    `${import.meta.env.VITE_API_URL ?? '/api'}/projects/${projectId}/references/${id}/file`,
+  /**
+   * Opens the original file as uploaded, in the browser's own viewer.
+   *
+   * Goes through `api.openInTab` rather than being an `<a href>`: the route sits behind
+   * `requireProjectMember` and this API authenticates with a Bearer token, which a plain link does
+   * not send — that link answered 401 for every file.
+   */
+  openReferenceFile: (projectId: string, id: string) =>
+    api.openInTab(`/projects/${projectId}/references/${id}/file`),
+  /** The original as a `blob:` URL, for embedding it in the preview panel. Caller revokes it. */
+  referenceFileObjectUrl: (projectId: string, id: string) =>
+    api.objectUrl(`/projects/${projectId}/references/${id}/file`),
 };
 
 export const rulesApi = {
@@ -257,6 +266,14 @@ export const documentsApi = {
   fill: (projectId: string, documentId: string) => api.post(`/projects/${projectId}/documents/${documentId}/fill`),
   approve: (projectId: string, documentId: string) =>
     api.post(`/projects/${projectId}/documents/${documentId}/approve`),
+  /**
+   * Throws the draft away and puts the catalog entry back to "not generated" — the row survives as
+   * the project's slot for that document, so it can be generated again.
+   */
+  remove: (projectId: string, documentId: string) =>
+    api.delete<{ deleted: boolean; name: string; wasApproved: boolean; reopenedActions: number }>(
+      `/projects/${projectId}/documents/${documentId}`,
+    ),
   export: (projectId: string, format: 'DOCX' | 'XLSX' | 'PDF' | 'CONFLUENCE') =>
     api.post(`/projects/${projectId}/exports`, { format }),
   /**

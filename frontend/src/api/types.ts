@@ -202,6 +202,8 @@ export interface ReferenceDetail {
   id: string;
   fileName: string;
   group: string;
+  /** Decides whether the preview can embed the original or has to offer it as a download. */
+  mimeType: string;
   status: string;
   message: string | null;
   sizeBytes: number;

@@ -90,4 +90,47 @@ export const api = {
     link.remove();
     URL.revokeObjectURL(url);
   },
+  /**
+   * A `blob:` URL for a file behind the API, which an `<iframe>` or `<img>` can load directly.
+   *
+   * This exists because a file URL cannot simply be put in `src` or `href`. The API authenticates
+   * with a Bearer token held in `localStorage`, and any plain browser-issued request — a link, an
+   * iframe, an image — carries no headers, so it is answered
+   * `{"error":{"message":"Authentication required"}}` instead of the file.
+   *
+   * The caller owns the URL and must `URL.revokeObjectURL` it when the view goes away.
+   */
+  objectUrl: async (path: string) => {
+    const token = tokenStore.get();
+    const response = await fetch(`${BASE_URL}${path}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) {
+      if (response.status === 401) rejectSession();
+      const text = await response.text();
+      const payload = text ? JSON.parse(text) : null;
+      throw new ApiError(response.status, payload?.error?.message ?? response.statusText, payload?.error?.details);
+    }
+    return URL.createObjectURL(await response.blob());
+  },
+  /**
+   * Opens such a file in a new tab, for the browser's own viewer to render it.
+   *
+   * The tab is opened **before** the await on purpose: a `window.open` after an async gap has lost
+   * the user's click and pop-up blockers stop it.
+   */
+  openInTab: async (path: string) => {
+    const tab = window.open('', '_blank');
+    try {
+      const url = await api.objectUrl(path);
+      if (tab) tab.location.href = url;
+      else window.location.href = url;
+      // Revoking straight away would pull the blob out from under the tab before it has loaded it;
+      // the browser frees it with the page anyway, this just stops it leaking for the whole session.
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (error) {
+      tab?.close();
+      throw error;
+    }
+  },
 };

@@ -2561,3 +2561,85 @@ article.approach-option.is-locked:hover {
   font-size: 0.68rem;
   padding: 6px 10px;
 }
+
+/* ---------------------------------------------------------------- library rows with two actions
+   `.library-row` used to be the button itself. It is a container now — the name area opens the
+   preview, the ✕ deletes — so the row keeps its look while the click targets are separate. */
+.library-open {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+.library-delete {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #e6d5d5;
+  background: #fff;
+  color: #b04a4a;
+  border-radius: 7px;
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.library-delete:hover {
+  background: #fdf3f3;
+  border-color: #d9b6b6;
+}
+/* Deleting an approved baseline or a file is not an "ok/cancel" of equal weight. */
+.primary.danger {
+  border-color: #b04a4a;
+  background: #b04a4a;
+}
+.primary.danger:hover {
+  background: #9c3f3f;
+}
+
+/* Two views of one upload: the text the agent read, and the file itself. */
+.preview-tabs {
+  display: inline-flex;
+  gap: 4px;
+  background: #eef2f6;
+  border-radius: 8px;
+  padding: 3px;
+  margin-right: 8px;
+}
+.preview-tabs button {
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  padding: 7px 12px;
+  font: inherit;
+  font-size: 0.74rem;
+  color: #5f6f83;
+  cursor: pointer;
+}
+.preview-tabs button[aria-selected='true'] {
+  background: #fff;
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(25, 46, 77, 0.12);
+}
+.original-pane {
+  display: flex;
+  padding: 16px;
+}
+/* The embedded original fills the panel — a PDF viewer in a small box is unreadable. */
+.original-frame {
+  flex: 1;
+  width: 100%;
+  min-height: 70vh;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}

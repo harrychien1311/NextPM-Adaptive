@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { documentsApi, inputApi, projectApi } from '../../api/endpoints';
+
 import { Ring } from '../../components/Ring';
 import { useToast } from '../../components/Toast';
 import { useReadOnlyGuard } from '../../hooks/useProjectWrite';
@@ -113,6 +114,43 @@ export function DashboardView({
    * removing a row from it by accident is not something the screen makes obvious afterwards.
    */
   const [closing, setClosing] = useState<ActionItem | null>(null);
+
+  /** The library row the PM is being asked to confirm deleting. */
+  const [removing, setRemoving] = useState<LibraryEntry | null>(null);
+
+  /**
+   * Deleting from the library, for both kinds of row.
+   *
+   * An upload loses its row, its extracted text and its bytes on disk. A generated document is
+   * reset to "not generated" — the catalog entry stays so it can be written again — which is what
+   * moves Document progress, and any PM action that was closed because that document was approved
+   * comes back open. The server does all of it; this only has to ask the right panels to reload.
+   */
+  const removeEntry = useMutation({
+    mutationFn: (entry: LibraryEntry) =>
+      entry.kind === 'GENERATED'
+        ? documentsApi.remove(projectId, entry.id)
+        : inputApi.removeReference(projectId, entry.id),
+    onSuccess: (_result, entry) => {
+      queryClient.invalidateQueries({ queryKey: ['dashboard', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['studio', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['workspace', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['input', projectId] });
+      if (entry.kind === 'GENERATED') queryClient.invalidateQueries({ queryKey: ['checklist', projectId] });
+      // If the PM was previewing the thing they just deleted, close it rather than leave a panel
+      // open on something that no longer exists.
+      setPreview((open) => (open && open.id === entry.id ? null : open));
+      setRemoving(null);
+      notify({
+        title: entry.kind === 'GENERATED' ? 'Document deleted' : 'Upload deleted',
+        detail:
+          entry.kind === 'GENERATED'
+            ? `${entry.name} is back to not generated. Document progress and the PM action center have been updated.`
+            : `${entry.name} and the text extracted from it are gone.`,
+      });
+    },
+    onError: (error) => notify({ title: 'Could not delete', detail: (error as Error).message }),
+  });
 
   const resolveAction = useMutation({
     mutationFn: ({ actionId, value }: { actionId: string; value: string }) =>
@@ -499,28 +537,39 @@ export function DashboardView({
             ) : (
               <div className="doc-library">
                 {data.library.map((item) => (
-                  <button
-                    className="library-row"
-                    key={`${item.kind}-${item.id}`}
-                    onClick={() => setPreview(item)}
-                    title="View document"
-                  >
-                    <span className={`library-icon ${item.kind === 'GENERATED' ? 'ai' : 'pm'}`}>
-                      {item.kind === 'GENERATED' ? '✦' : '▤'}
-                    </span>
-                    <span className="library-name">
-                      <b>{item.name}</b>
-                      <small>
-                        {item.category}
-                        {item.sizeBytes ? ` · ${Math.max(1, Math.round(item.sizeBytes / 1024))} KB` : ''}
-                        {item.at ? ` · ${new Date(item.at).toLocaleDateString()}` : ''}
-                      </small>
-                    </span>
-                    <span className={`origin-tag ${item.origin === 'AI_GENERATED' ? 'ai' : 'pm'}`}>
-                      {item.origin === 'AI_GENERATED' ? 'AI generated' : 'PM input'}
-                    </span>
-                    <span className="library-view">View document →</span>
-                  </button>
+                  /*
+                    A row, not a button: it holds two independent actions now. Nesting the delete
+                    control inside a button is invalid HTML and clicking it would open the preview
+                    on the way through.
+                  */
+                  <div className="library-row" key={`${item.kind}-${item.id}`}>
+                    <button className="library-open" onClick={() => setPreview(item)} title="View document">
+                      <span className={`library-icon ${item.kind === 'GENERATED' ? 'ai' : 'pm'}`}>
+                        {item.kind === 'GENERATED' ? '✦' : '▤'}
+                      </span>
+                      <span className="library-name">
+                        <b>{item.name}</b>
+                        <small>
+                          {item.category}
+                          {item.sizeBytes ? ` · ${Math.max(1, Math.round(item.sizeBytes / 1024))} KB` : ''}
+                          {item.at ? ` · ${new Date(item.at).toLocaleDateString()}` : ''}
+                        </small>
+                      </span>
+                      <span className={`origin-tag ${item.origin === 'AI_GENERATED' ? 'ai' : 'pm'}`}>
+                        {item.origin === 'AI_GENERATED' ? 'AI generated' : 'PM input'}
+                      </span>
+                      <span className="library-view">View document →</span>
+                    </button>
+                    <button
+                      className={`library-delete${lockClass}`}
+                      {...lockedProps}
+                      title={`Delete ${item.name}`}
+                      aria-label={`Delete ${item.name}`}
+                      onClick={guard(() => setRemoving(item))}
+                    >
+                      ✕
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -596,6 +645,64 @@ export function DashboardView({
           }
         />
       )}
+
+      <Backdrop open={Boolean(removing)} onClose={() => setRemoving(null)} />
+      <ModalShell open={Boolean(removing)} className="decision-modal">
+        <div className="modal-head">
+          <div>
+            <small>{removing?.kind === 'GENERATED' ? 'DELETE DOCUMENT' : 'DELETE UPLOAD'}</small>
+            <h2>{removing?.name}</h2>
+          </div>
+          <button onClick={() => setRemoving(null)}>×</button>
+        </div>
+        <div className="rationale">
+          {removing?.kind === 'GENERATED' ? (
+            <>
+              <p>
+                The draft, its sections and its PM questions are deleted. The catalog entry stays, so
+                you can generate this document again from the Planning Studio.
+              </p>
+              <p>
+                Document progress drops it from the generated count, the deletion is written to the
+                activity log, and any PM action closed because this document was confirmed goes back
+                to open.
+              </p>
+              {removing?.status === 'APPROVED' && (
+                /* An approved document is a baseline somebody signed off. Deleting it is allowed —
+                   otherwise a mistaken approval could never be undone — but never quietly. */
+                <p className="doc-note">
+                  <b>This document is approved.</b> Deleting it removes it from the approved planning
+                  baseline and the customer readiness score. The content cannot be recovered; only
+                  the audit record of it survives.
+                </p>
+              )}
+            </>
+          ) : (
+            <>
+              <p>
+                The file, the text extracted from it and the stored copy on disk are all deleted.
+                This cannot be undone — you would have to upload the file again.
+              </p>
+              <p>
+                Anything already produced from it stays as it is: a past analysis is a snapshot and a
+                generated document keeps what it says.
+              </p>
+            </>
+          )}
+        </div>
+        <div className="modal-actions">
+          <button className="secondary" onClick={() => setRemoving(null)}>
+            Keep it
+          </button>
+          <button
+            className="primary danger"
+            disabled={removeEntry.isPending}
+            onClick={() => removing && removeEntry.mutate(removing)}
+          >
+            {removeEntry.isPending ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
+      </ModalShell>
 
       <Backdrop open={Boolean(closing)} onClose={() => setClosing(null)} />
       <ModalShell open={Boolean(closing)} className="decision-modal">

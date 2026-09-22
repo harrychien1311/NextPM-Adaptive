@@ -88,6 +88,8 @@ import {
 } from './document-format';
 import { buildDocumentXlsx } from './xlsx-export';
 import { markAssessmentStale, reassessAfterApproval } from '../checklist/checklist.service';
+// `input` owns ActionItem, and it imports neither this module nor `rules`, so this edge is acyclic.
+import { reopenActionsForDocument } from '../input/input.service';
 
 export { documentExportFormat, readGaps } from './document-format';
 
@@ -734,6 +736,74 @@ export async function fillDocumentGaps(params: { projectId: string; documentId: 
 }
 
 /** PM approval — only after this can content enter the exported baseline. */
+/**
+ * Throws away a generated draft and puts the catalog entry back to "not generated".
+ *
+ * The row is **reset, not deleted**. `PlanningDocument` is unique per `(projectId, definitionId)`
+ * and `syncDocumentsWithPack` provisions one for every catalog document the moment a governance
+ * model is confirmed, so the row is the catalog entry's slot in this project — removing it would
+ * only make the next sync recreate an empty one. Resetting reaches the same place directly, and the
+ * dashboard library lists only documents that are not `NOT_GENERATED`, so the entry disappears from
+ * it exactly as the PM expects while the Studio keeps the tile to generate into again.
+ *
+ * Deleting an APPROVED document is allowed, because refusing would leave the PM no way to undo a
+ * mistaken approval — but it destroys a baseline, so the audit event records what was destroyed
+ * (name, version, status, whether it was approved) even though the content itself is gone.
+ */
+export async function discardDocument(params: { projectId: string; documentId: string; actorId: string }) {
+  const { projectId, documentId, actorId } = params;
+  const document = await prisma.planningDocument.findFirst({ where: { id: documentId, projectId } });
+  if (!document) throw notFound('Planning document not found');
+  if (document.status === DocumentStatus.NOT_GENERATED) {
+    throw badRequest(`"${document.name}" has not been generated — there is nothing to delete`);
+  }
+
+  const wasApproved = document.status === DocumentStatus.APPROVED;
+
+  await prisma.$transaction([
+    prisma.documentSection.deleteMany({ where: { documentId } }),
+    prisma.planningDocument.update({
+      where: { id: documentId },
+      data: {
+        status: DocumentStatus.NOT_GENERATED,
+        // Everything the draft produced goes with it. Leaving gaps or a RACI table behind would
+        // hand the next generation a half-populated document that looks generated and is not.
+        pmQuestions: [],
+        structuredData: Prisma.DbNull,
+        sourceTrace: Prisma.DbNull,
+        coverage: 0,
+        generatedAt: null,
+        approvedById: null,
+        approvedAt: null,
+      },
+    }),
+  ]);
+
+  /**
+   * A PM action closed on the strength of this document has to come back — see
+   * `reopenActionsForDocument`. `documents` calling `input` is a new edge and an acyclic one:
+   * `input.service` imports neither this module nor `rules`.
+   */
+  const reopened = await reopenActionsForDocument(projectId, document.name);
+
+  await logEvent({
+    projectId,
+    actorId,
+    actorType: 'PM',
+    type: 'DOCUMENT_DELETED',
+    title: `${document.name} deleted`,
+    detail: wasApproved
+      ? `An APPROVED v${document.version} was deleted — its content is gone and it has left the approved baseline.${reopened ? ` ${reopened} PM action reopened.` : ''}`
+      : `Draft v${document.version} deleted; the document can be generated again.${reopened ? ` ${reopened} PM action reopened.` : ''}`,
+    payload: { documentId, name: document.name, version: document.version, previousStatus: document.status, reopened },
+  });
+
+  // An approved document counted towards the customer checklist; removing it removes that evidence.
+  if (wasApproved) await markAssessmentStale(projectId);
+
+  return { deleted: true, name: document.name, wasApproved, reopenedActions: reopened };
+}
+
 export async function approveDocument(params: { projectId: string; documentId: string; actorId: string }) {
   const { projectId, documentId, actorId } = params;
   const document = await prisma.planningDocument.findFirst({ where: { id: documentId, projectId } });
