@@ -469,9 +469,16 @@ export function ProgramOverviewPage() {
                               </i>
                             ))}
                           </div>
+                          {/*
+                            One weight for every action on a card. They were a mix of filled and
+                            outlined, and the outline read as "not really available" next to the
+                            filled one — Edit and Change plan are ordinary actions, not lesser ones.
+                            The only exception is the locked state below, which must not look like
+                            something that can be pressed.
+                          */}
                           <div className="card-actions">
                             {project.canEdit && (
-                              <button className="secondary" onClick={() => setEditProject(project)} title="Rename, re-file or change status">
+                              <button className="primary" onClick={() => setEditProject(project)} title="Rename, re-file or change status">
                                 Edit
                               </button>
                             )}
@@ -486,7 +493,7 @@ export function ProgramOverviewPage() {
                             */}
                             {project.canChangePlan && (
                               <button
-                                className="secondary"
+                                className="primary"
                                 disabled={startChange.isPending}
                                 title="Record something that has changed since this plan was confirmed"
                                 onClick={() => startChange.mutate(project.id)}
@@ -498,7 +505,7 @@ export function ProgramOverviewPage() {
                             )}
                             {project.canOpen ? (
                               <button
-                                className={project.status === 'ACTIVE' ? 'primary' : 'secondary'}
+                                className="primary"
                                 onClick={() => navigate(`/projects/${project.id}`)}
                               >
                                 {project.status === 'DRAFT'
