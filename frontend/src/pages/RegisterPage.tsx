@@ -47,7 +47,7 @@ export function RegisterPage() {
           <div className="brand-mark">N</div>
           <div>
             <strong>NEXTFIT AI</strong>
-            <span>Adaptive</span>
+            <span>Adaptive Planning Agent</span>
           </div>
         </div>
         <h1>Create your workspace account</h1>

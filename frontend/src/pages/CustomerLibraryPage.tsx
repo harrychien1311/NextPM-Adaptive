@@ -149,7 +149,7 @@ export function CustomerLibraryPage() {
             <div className="brand-mark">N</div>
             <div>
               <strong>NEXTFIT AI</strong>
-              <span>Adaptive</span>
+              <span>Adaptive Planning Agent</span>
             </div>
           </div>
           <div className="portfolio-level">

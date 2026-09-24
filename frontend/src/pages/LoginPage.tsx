@@ -39,7 +39,7 @@ export function LoginPage() {
           <div className="brand-mark">N</div>
           <div>
             <strong>NEXTFIT AI</strong>
-            <span>Adaptive</span>
+            <span>Adaptive Planning Agent</span>
           </div>
         </div>
         <h1>Sign in to your workspace</h1>
@@ -48,8 +48,7 @@ export function LoginPage() {
           internal vocabulary that means nothing to someone who has not used the app yet, which is
           everyone reading this screen.
         */}
-        {/* Typographic apostrophe, as the rest of the app's copy uses. */}
-        <p>Let’s plan your project</p>
+        <p>Let NEXTFIT help you plan your project</p>
         {error && <div className="auth-error">{error}</div>}
         <label>
           Work email

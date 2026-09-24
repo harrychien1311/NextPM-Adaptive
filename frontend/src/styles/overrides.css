@@ -16,6 +16,19 @@
 .auth-card .brand {
   padding: 0 0 20px;
 }
+
+/*
+ * The wordmark under NEXTFIT AI reads "Adaptive Planning Agent". The prototype's `.brand span`
+ * was tracked at .16em for the single word "ADAPTIVE"; three words at that spacing measure about
+ * 190px, and the workspace sidebar leaves the text block only ~160px beside the 36px mark — so it
+ * wraps. Tightening the tracking and pulling the line-height in keeps the wrapped pair compact
+ * enough that the nav below it does not visibly shift, while the auth card (356px of content)
+ * still holds the whole line.
+ */
+.brand span {
+  letter-spacing: 0.1em;
+  line-height: 1.3;
+}
 .auth-card h1 {
   font-size: 1.35rem;
   margin: 0 0 6px;
