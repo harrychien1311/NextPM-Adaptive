@@ -213,9 +213,6 @@ npm --workspace backend run test     # readiness formula unit tests
   `.docx`, `.pdf`, `.xlsx` and `.pptx`. A scanned PDF has no text layer in any language, so the
   file is stored and flagged for re-upload. Pre-2007 binaries (`.doc`, `.xls`, `.ppt`) are a
   different container format and are not parsed.
-- **Approved-baseline export** (`createExport`) still only records the job and returns approved
-  content as JSON; it has not been upgraded to bundle a real multi-document package the way the
-  per-document Office / dashboard `.html` downloads were.
 - **File storage** — uploads go to local disk via multer (`UPLOAD_DIR`); switch `storageKey`
   handling to S3/Blob for production.
 - **Prompt caching** — there is none. Every chat question re-sends the whole project context at

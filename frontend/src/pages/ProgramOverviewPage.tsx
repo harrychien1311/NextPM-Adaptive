@@ -12,8 +12,19 @@ import { ApiError } from '../api/client';
 const STATUS_META: Record<string, { className: string; label: string }> = {
   ACTIVE: { className: 'active-status', label: '● Active' },
   DRAFT: { className: 'draft-status', label: '○ Draft' },
-  HOLD: { className: 'hold-status', label: 'Ⅱ On hold' },
+  // "On Hold" everywhere — the filter said "Hold", this badge said "On hold" and the status
+  // dropdown said "On hold", so one state had three spellings on one screen.
+  HOLD: { className: 'hold-status', label: 'Ⅱ On Hold' },
   CLOSED: { className: 'closed-status', label: '✓ Closed' },
+};
+
+/** Spelled out rather than derived from the filter key, so "hold" cannot become "Hold" again. */
+const STATUS_FILTER_LABEL: Record<'all' | 'active' | 'draft' | 'hold' | 'closed', string> = {
+  all: 'All',
+  active: 'Active',
+  draft: 'Draft',
+  hold: 'On Hold',
+  closed: 'Closed',
 };
 
 const TYPE_LABEL: Record<ProjectType, string> = { SI: 'SI', SM: 'SM', PRODUCT: 'PRODUCT' };
@@ -360,8 +371,9 @@ export function ProgramOverviewPage() {
                     className={statusFilter === status ? 'active' : ''}
                     onClick={() => setStatusFilter(status)}
                   >
-                    {status === 'all' ? 'All' : status[0].toUpperCase() + status.slice(1)}{' '}
-                    <b>{summary.statusCounts[status]}</b>
+                    {/* Capitalising the key gave "Hold" while the badge beside it said "On hold" —
+                        one status, two names, a metre apart. */}
+                    {STATUS_FILTER_LABEL[status]} <b>{summary.statusCounts[status]}</b>
                   </button>
                 ))}
               </div>
@@ -733,7 +745,7 @@ function EditProjectModal({
             <select value={status} onChange={(event) => setStatus(event.target.value as ProjectStatus)}>
               <option value="DRAFT">Draft</option>
               <option value="ACTIVE">Active</option>
-              <option value="HOLD">On hold</option>
+              <option value="HOLD">On Hold</option>
               <option value="CLOSED">Closed</option>
             </select>
           </label>

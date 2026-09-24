@@ -13,7 +13,8 @@ import {
   TextRun,
   WidthType,
 } from 'docx';
-import { DocumentStatus, ManagementDomain, Prisma, Requirement } from '@prisma/client';
+import { DocumentStatus, ManagementDomain, Prisma } from '@prisma/client';
+import JSZip from 'jszip';
 import { prisma } from '../../lib/prisma';
 import { badRequest, conflict, notFound } from '../../lib/http-error';
 import {
@@ -528,7 +529,7 @@ export async function generateDraft(params: { projectId: string; documentId: str
     const documentOutput = await generateDocument(generationContext);
     output = documentOutput;
     // A catalog document outside the six artifacts can still be a RACI matrix (SM's
-    // "Support Organization & RACI") or a register (the change log, the WBS), and its .xlsx
+    // a RACI) or a register (the Decision Log, the WBS), and its .xlsx
     // export needs those rows.
     if (documentOutput.raciTable || documentOutput.riskRegister || documentOutput.table) {
       structuredData = {
@@ -977,13 +978,134 @@ export async function templateFit(projectId: string, definitionId: string) {
   };
 }
 
-/** Export policy: approved documents only. Drafts and TBD values are excluded. */
-export async function createExport(params: { projectId: string; format: string; actorId: string }) {
+/** `PROJECT_PLAN` → `Project plan`. Derived from the enum so a new domain needs no table entry. */
+function domainFolder(domain: ManagementDomain): string {
+  const words = domain.replace(/_/g, ' ').toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** Two documents may render to the same file name; the archive must still hold both. */
+function uniqueEntry(taken: Set<string>, entryPath: string): string {
+  if (!taken.has(entryPath)) {
+    taken.add(entryPath);
+    return entryPath;
+  }
+  const dot = entryPath.lastIndexOf('.');
+  const stem = dot > 0 ? entryPath.slice(0, dot) : entryPath;
+  const extension = dot > 0 ? entryPath.slice(dot) : '';
+  for (let n = 2; ; n += 1) {
+    const candidate = `${stem} (${n})${extension}`;
+    if (!taken.has(candidate)) {
+      taken.add(candidate);
+      return candidate;
+    }
+  }
+}
+
+/**
+ * The approved baseline as one `.zip` — every document the PM has confirmed, each in the container
+ * it downloads as individually, filed under its management domain, with a manifest.
+ *
+ * Invariant 7 is what shapes it: **approved content only**. A draft is work in progress; a baseline
+ * is what the project has promised, and one archive holding both is how a draft ends up quoted as a
+ * commitment. Each file comes from `renderDocumentExport`, so a document taken out of the baseline
+ * and the same document downloaded from the Studio are the same file — there is no second renderer
+ * to drift.
+ *
+ * The manifest is not decoration. An archive that arrives with nineteen files when the project has
+ * twenty approved documents cannot be told apart from a complete one, so what was packed, what
+ * failed to render and what was deliberately left out are all stated in writing beside the files.
+ */
+export async function renderApprovedBaseline(params: {
+  projectId: string;
+  format: string;
+  actorId: string;
+}): Promise<{ fileName: string; buffer: Buffer; contentType: string; packed: number }> {
+  const project = await prisma.project.findUnique({
+    where: { id: params.projectId },
+    select: { name: true, customer: true },
+  });
+  if (!project) throw notFound('Project not found');
+
   const approved = await prisma.planningDocument.findMany({
     where: { projectId: params.projectId, status: DocumentStatus.APPROVED },
-    include: { sections: { where: { included: true }, orderBy: { order: 'asc' } } },
+    orderBy: [{ domain: 'asc' }, { name: 'asc' }],
+    select: {
+      id: true,
+      name: true,
+      domain: true,
+      version: true,
+      approvedAt: true,
+      staleReason: true,
+      approvedBy: { select: { name: true } },
+    },
   });
   if (!approved.length) throw badRequest('No approved documents yet — approve at least one output before exporting');
+
+  const notApproved = await prisma.planningDocument.count({
+    where: { projectId: params.projectId, status: { notIn: [DocumentStatus.APPROVED, DocumentStatus.NOT_GENERATED] } },
+  });
+
+  const zip = new JSZip();
+  const taken = new Set<string>();
+  const packed: string[] = []; // manifest lines — two or three per document, so not a count
+  const failed: string[] = [];
+  let packedCount = 0;
+
+  for (const document of approved) {
+    let rendered: { fileName: string; buffer: Buffer; contentType: string };
+    try {
+      rendered = await renderDocumentExport(params.projectId, document.id);
+    } catch (error) {
+      // One document whose template has gone missing must not cost the PM the other nineteen.
+      // It is named in the manifest instead, so a missing file is never silent.
+      failed.push(`${document.name} — ${error instanceof Error ? error.message : 'could not be rendered'}`);
+      continue;
+    }
+    const entry = uniqueEntry(taken, `${domainFolder(document.domain)}/${rendered.fileName}`);
+    zip.file(entry, rendered.buffer);
+    packedCount += 1;
+    const approver = document.approvedBy?.name ?? 'the PM';
+    const when = document.approvedAt ? document.approvedAt.toISOString().slice(0, 10) : 'date not recorded';
+    // Every line is its own entry so the whole manifest is joined with one line ending. A `.txt`
+    // that mixes \n and \r\n renders as a single run-on line in a Windows editor.
+    packed.push(`  ${entry}`, `      ${document.name} · v${document.version} · confirmed by ${approver} on ${when}`);
+    if (document.staleReason) {
+      packed.push(`      ⚠ flagged out of date by a plan change: ${document.staleReason}`);
+    }
+  }
+
+  const manifest = [
+    `Approved baseline — ${project.name}`,
+    project.customer ? `Customer: ${project.customer}` : null,
+    `Exported: ${new Date().toISOString().slice(0, 19).replace('T', ' ')} UTC`,
+    '',
+    `${packedCount} document${packedCount === 1 ? '' : 's'} confirmed by the PM:`,
+    '',
+    ...packed,
+    '',
+    failed.length ? `${failed.length} approved document(s) could not be rendered into this archive:` : null,
+    ...failed.map((line) => `  ${line}`),
+    failed.length ? '' : null,
+    'Deliberately not in this archive:',
+    notApproved
+      ? `  · ${notApproved} document(s) still in draft or being generated — a baseline carries confirmed content only.`
+      : '  · nothing — every generated document in this project has been confirmed.',
+    '  · the "PM confirmation needed" question lists. Unanswered blanks still appear inside the',
+    '    documents as a highlighted "[ answer needed ]", which is the honest form of a gap; the list',
+    '    of gaps is a working aid and stays in the application.',
+  ]
+    .filter((line): line is string => line !== null)
+    .join('\r\n');
+  zip.file('MANIFEST.txt', manifest);
+
+  const buffer = await zip.generateAsync({
+    type: 'nodebuffer',
+    // Office files are already deflated zips, so heavy re-compression buys almost nothing and costs
+    // real CPU on a twenty-document pack. Level 1 still shrinks the manifest.
+    compression: 'DEFLATE',
+    compressionOptions: { level: 1 },
+  });
 
   const job = await prisma.exportJob.create({
     data: { projectId: params.projectId, format: params.format, status: 'READY' },
@@ -994,19 +1116,19 @@ export async function createExport(params: { projectId: string; format: string; 
     actorId: params.actorId,
     actorType: 'PM',
     type: 'BASELINE_EXPORTED',
-    title: `Approved baseline exported (${params.format})`,
-    detail: `${approved.length} approved documents · drafts and unconfirmed AI content excluded`,
-    payload: { jobId: job.id },
+    title: `Approved baseline exported (${packedCount} document${packedCount === 1 ? '' : 's'})`,
+    detail:
+      `${packedCount} confirmed document${packedCount === 1 ? '' : 's'} packed` +
+      (failed.length ? ` · ${failed.length} could not be rendered` : '') +
+      ' · drafts and unconfirmed AI content excluded',
+    payload: { jobId: job.id, documents: approved.map((doc) => doc.name), failed },
   });
 
   return {
-    job,
-    documents: approved.map((doc) => ({
-      name: doc.name,
-      domain: doc.domain,
-      requirement: doc.requirement as Requirement,
-      sections: doc.sections.map((section) => ({ title: section.title, content: section.content })),
-    })),
+    fileName: `${slugForFile(project.name)}-approved-baseline-${new Date().toISOString().slice(0, 10)}.zip`,
+    buffer,
+    contentType: 'application/zip',
+    packed: packedCount,
   };
 }
 

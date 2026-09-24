@@ -9,7 +9,6 @@ import {
   answerDocumentGap,
   approveDocument,
   catalogForProject,
-  createExport,
   discardDocument,
   documentDetail,
   documentSheets,
@@ -17,6 +16,7 @@ import {
   domainSummary,
   fillDocumentGaps,
   generateDocumentForDefinition,
+  renderApprovedBaseline,
   renderDashboardHtml,
   renderDocumentDocx,
   renderDocumentExport,
@@ -228,11 +228,23 @@ documentsRouter.get(
   }),
 );
 
+/**
+ * The approved baseline as one downloadable `.zip`. A POST because it is not only a read — it
+ * records an `ExportJob` and a `BASELINE_EXPORTED` audit event, which is how "what was promised,
+ * and when" stays answerable after the files have left the application.
+ */
 documentsRouter.post(
   '/:projectId/exports',
   requireProjectRole(...PROJECT_WRITE_ROLES),
   asyncHandler(async (req, res) => {
-    const body = parse(z.object({ format: z.enum(['DOCX', 'XLSX', 'PDF', 'CONFLUENCE']) }), req.body);
-    res.status(201).json(await createExport({ projectId: req.params.projectId, format: body.format, actorId: req.user!.id }));
+    const { fileName, buffer, contentType, packed } = await renderApprovedBaseline({
+      projectId: req.params.projectId,
+      format: 'ZIP',
+      actorId: req.user!.id,
+    });
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', contentDisposition('attachment', fileName));
+    res.setHeader('X-Document-Count', String(packed));
+    res.send(buffer);
   }),
 );

@@ -326,8 +326,12 @@ export const documentsApi = {
     api.delete<{ deleted: boolean; name: string; wasApproved: boolean; reopenedActions: number }>(
       `/projects/${projectId}/documents/${documentId}`,
     ),
-  export: (projectId: string, format: 'DOCX' | 'XLSX' | 'PDF' | 'CONFLUENCE') =>
-    api.post(`/projects/${projectId}/exports`, { format }),
+  /**
+   * The approved baseline: a `.zip` holding every document the PM has confirmed, each in the
+   * container it downloads as on its own. POST, because the server also records the export.
+   */
+  exportBaseline: (projectId: string) =>
+    api.download(`/projects/${projectId}/exports`, 'approved-baseline.zip', 'POST'),
   /**
    * One download for every document — the server chooses `.docx` or `.xlsx` and says so in the
    * response headers. `format` only shapes the fallback name used when those headers are missing.

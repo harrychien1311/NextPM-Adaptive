@@ -565,8 +565,8 @@ function mockGenerate(context: GenerationContext): GovernanceArtifactOutput {
 
 /**
  * Returns `GovernanceArtifactOutput` rather than plain `GenerationOutput` because a catalog
- * document outside the six mandated artifacts can still be a RACI matrix — SM projects have
- * "Support Organization & RACI" — and those export as a spreadsheet, which needs the rows.
+ * document outside the six mandated artifacts can still carry a RACI table, and those export as a
+ * spreadsheet, which needs the rows.
  */
 export async function generateDocument(context: GenerationContext): Promise<GovernanceArtifactOutput> {
   if (env.ai.provider === 'anthropic' && env.ai.anthropicKey) {
@@ -586,8 +586,8 @@ export async function generateDocument(context: GenerationContext): Promise<Gove
 
 // ---------------------------------------------------------------------------
 // Skill 2b — governance artifact draft (the 6 documents required for every model:
-// Project Charter, Organization Chart, RACI Matrix, Communication Plan,
-// Change / Escalation Flow, Risk Plan). Structure varies by governance model.
+// Project Charter, Organization Chart, RACI Matrix, Communications Management Plan,
+// Issue Escalation Procedure, Risk Management Plan). Structure varies by governance model.
 // ---------------------------------------------------------------------------
 
 const GOVERNANCE_ARTIFACT_SYSTEM_PROMPT = `You are the NextPM planning agent, drafting one governance artifact after the PM
@@ -717,7 +717,7 @@ function mockGenerateGovernanceArtifact(context: GovernanceArtifactContext): Gov
         risk: 'Scope/requirement change beyond agreed control',
         severity: 'Medium',
         owner: 'PM',
-        mitigation: `Handled via this model's change control path (see Change / Escalation Flow).`,
+        mitigation: `Handled via this model's change control path (see the Change Management Plan).`,
       },
     ];
     return { ...base, gaps, unresolved, riskRegister };
@@ -1391,11 +1391,51 @@ export interface PlanningAnalysisContext {
   catalogDocuments: string[];
 }
 
-const NINE_CRITERIA = `Score against these nine weighted criteria, and return the breakdown:
-scope stability 20%, requirement volatility 15%, delivery predictability 15%, customer involvement
-10%, contract/commercial model 10%, compliance/governance need 10%, technical uncertainty 10%,
-team/delivery setup 5%, risk/dependency profile 5%. A criterion you have no evidence for is left
-out of the weighted total rather than guessed at 50% — say so in its note.`;
+/**
+ * The nine criteria, as the project's own methodology definition states them.
+ *
+ * They had drifted: an earlier set weighted scope stability at 20% and requirement volatility at
+ * 15%, which put a third of the score on one underlying question, while dropping two criteria
+ * entirely — **work type** (a finite delivery against continuous operation) and **team experience
+ * and culture**. Losing work type mattered most: it is the criterion that tells Kanban apart from
+ * Scrum and Waterfall, and every SM project in this application is continuous operation by nature,
+ * so the one question that decides their model was not being asked.
+ *
+ * Weights are equal by default, because the definition says so. Judging one criterion twice as
+ * important as another needs a reason from the material, not a number chosen in advance — so the
+ * only way a weight moves is the document itself insisting on it, and the model has to say so.
+ */
+const NINE_CRITERIA = `Score the model against these nine criteria and return the full breakdown. Each carries an EQUAL
+weight of 11.1% by default — nine criteria, one hundred points:
+
+1. Requirement clarity — is scope fixed, or still changing? Clear and stable leans Waterfall;
+   vague or evolving leans Scrum.
+2. Customer / end-user involvement — does this need a continuous feedback loop? Yes leans
+   Scrum or Kanban; no leans Waterfall.
+3. Time and budget constraint — a hard fixed deadline and budget, or flexible to value? Hard
+   leans Waterfall; flexible leans Scrum.
+4. Compliance and regulation — is there an audit trail or phase sign-off requirement (construction,
+   pharmaceutical, financial)? Heavy compliance leans Waterfall or Hybrid.
+5. Scale and number of teams — one small team, several, or many coordinating? One leans Scrum;
+   many large teams lean SAFe or Hybrid.
+6. Work type — does this project have a clear end (delivered once), or is it continuous operation
+   and support? A clear end leans Waterfall; continuous flow leans Kanban.
+7. Team experience and culture — is the team used to agile, and does the organisation run a
+   traditional PMO? Agile-experienced leans Scrum; a traditional PMO leans Waterfall or Hybrid.
+8. Technical and technology risk — is the stack proven, or experimental and R&D? Experimental
+   leans Scrum or Kanban.
+9. External parties — are vendors or subcontractors engaged on fixed milestones, an SOW per phase?
+   Yes leans Waterfall or Hybrid.
+
+Two rules on the weights, and both come from the methodology rather than from convenience:
+
+- A criterion you have **no evidence for** is left out of the weighted total rather than guessed at
+  50%. Set its weight to 0, say so in its note, and score the model on what remains — a number
+  invented to fill a gap is worse than a smaller honest denominator.
+- You **may** raise one criterion's weight above 11.1 when the material insists on it — an SOW that
+  says "fixed price, fixed scope" genuinely makes the time and budget constraint weigh more than
+  team culture does. Do it only on that kind of explicit evidence, say which sentence justified it
+  in that criterion's note, and keep the weights of the criteria you did score adding to 100.`;
 
 const OVERVIEW_RULES = `"overview" is what the project IS, read from the material you were given. Use these keys, in this
 order, and omit any the material genuinely cannot support: "scope", "requirements", "schedule",
@@ -1409,6 +1449,13 @@ has defined, no organisation chart, no decision log, no acceptance criteria. Jud
 the documents actually contain, never against a generic checklist of good practice: a gap you
 cannot point at a hole for is not a gap. Set "documentName" to the catalog document that would
 close it, copied EXACTLY from the list you are given, or null when none fits.
+
+"None fits" is a normal answer and you must give it rather than reach. The name you choose is a
+navigation target: the PM presses a button on this gap and is taken to that document to work on it,
+so a near-miss sends them to the wrong document with no hint that it is wrong. If the gap is about a
+work breakdown and the list has no work-breakdown document, the answer is null — never the
+nearest-sounding entry, never the charter because it is the most general one. Only name a document
+when producing THAT document is what would close THIS gap.
 
 "findings" is different and must not be padded with gaps: it is where two documents contradict each
 other, where a date or a number disagrees with another, where something is stated that cannot be
@@ -1430,9 +1477,24 @@ advise them.
 
 ${NINE_CRITERIA}
 
-Return the FOUR best-scoring models, highest first, from ${DEFAULT_GOVERNANCE_MODELS.join(', ')} —
-you may include one outside that list only when the evidence clearly calls for it. Each carries its
-reasons and its supporting evidence, because you are making a case the PM has to be able to check.
+Score every model in ${DEFAULT_GOVERNANCE_MODELS.join(', ')} and return the FOUR best, highest
+first. You may include one outside that list only when the evidence clearly calls for it. Each
+carries its reasons and its supporting evidence, because you are making a case the PM has to be
+able to check.
+
+A model's score is how well IT fits this project, judged on its own — the four do not compete for a
+share of anything and their scores do not add to 100.
+
+SAFE is conditional on scale. Recommend it only for genuinely multi-team work that needs
+coordinating; on one team the overhead of an Agile Release Train buys nothing that Scrum does not
+already give, so score it low and say why rather than offering it as one more option.
+
+**The Hybrid rule.** If the two highest-scoring models are within 10 points of each other and both
+score above 60, lead with HYBRID as the primary recommendation instead, and say in its reasons
+exactly which half comes from which model and why the combination beats either alone. Two models
+that fit almost equally well is evidence that the project has both characters in it — picking one
+and discarding the other throws away half of what you read. Still return four entries, with HYBRID
+first; the two close models stay in the list as the alternatives the PM can switch to.
 
 ${OVERVIEW_RULES}
 

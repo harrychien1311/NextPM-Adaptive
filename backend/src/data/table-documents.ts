@@ -24,17 +24,26 @@ export interface TableDocumentSchema {
 }
 
 export const TABLE_DOCUMENTS: Record<string, TableDocumentSchema> = {
-  'Change & Decision Log': {
-    columns: ['Ref', 'Date', 'Type', 'Item', 'Decision or change', 'Raised by', 'Decided by', 'Impact', 'Status'],
+  /**
+   * One register for all three kinds of governance entry, and the `Type` column is what separates
+   * them. It was "Change & Decision Log" for SI and "Decision & Assumption Log" for Product — two
+   * names, each merging a different arbitrary pair of change / decision / assumption, so neither
+   * project type had anywhere to record the third.
+   */
+  'Decision Log': {
+    columns: ['Ref', 'Date', 'Type', 'Item', 'Decision', 'Raised by', 'Decided by', 'Impact', 'Status'],
     rowMeaning:
-      'one decision taken or change accepted on this project, with who raised it, who decided it, ' +
-      'what it affects and whether it is open or closed. "Type" is Decision or Change.',
+      'one entry in this project\'s governance record, with who raised it, who decided it, what it ' +
+      'affects and whether it is open or closed. "Type" is Decision, Change or Assumption — a ' +
+      'change request and a recorded assumption are both decisions the project has to be able to ' +
+      'point back at.',
   },
-  'Change / Escalation Flow': {
+  'Issue Escalation Procedure': {
     columns: ['Step', 'Trigger', 'Raised by', 'Handled by', 'Action', 'Target response', 'Escalates to', 'Evidence'],
     rowMeaning:
-      'one step of the path a change or an issue travels, in order, from first report to final ' +
-      'decision — who holds it at that step, how long they have, and who it goes to if unresolved.',
+      'one step of the path an issue travels, in order, from first report to final decision — who ' +
+      'holds it at that step, how long they have, and who it goes to if unresolved. How a change ' +
+      'request is assessed and approved belongs to the Change Management Plan, not here.',
   },
   'WBS & Integration Boundary': {
     columns: ['WBS ID', 'Work package', 'Deliverable', 'Owner', 'In scope', 'Out of scope / boundary', 'Depends on'],

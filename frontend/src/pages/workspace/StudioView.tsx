@@ -243,11 +243,13 @@ export function StudioView({
   });
 
   const exportPack = useMutation({
-    mutationFn: () => documentsApi.export(projectId, 'DOCX'),
-    onSuccess: () =>
+    mutationFn: () => documentsApi.exportBaseline(projectId),
+    onSuccess: ({ fileName, count }) =>
       notify({
-        title: 'Approved baseline prepared',
-        detail: 'Drafts, unanswered blanks and unconfirmed AI content were excluded.',
+        title: count
+          ? `${count} confirmed document${count === 1 ? '' : 's'} downloaded`
+          : 'Approved baseline downloaded',
+        detail: `${fileName} · one file per document, filed by domain. Drafts and unconfirmed AI content were excluded.`,
       }),
     onError: fail('Export not possible'),
   });

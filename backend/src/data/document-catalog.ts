@@ -39,8 +39,17 @@ export const DOCUMENT_CATALOG: Record<ProjectType, Record<ManagementDomain, Cata
     GOVERNANCE: [
       { name: 'Project Charter', requirement: 'REQUIRED' },
       { name: 'PM Operating Model', requirement: 'REQUIRED' },
-      { name: 'Change & Decision Log', requirement: 'REQUIRED' },
-      { name: 'Change / Escalation Flow', requirement: 'REQUIRED' },
+      /**
+       * One log, three kinds of entry. SI called it "Change & Decision Log" and Product called it
+       * "Decision & Assumption Log" — two names for one register, each merging a different arbitrary
+       * pair of the three things a governance log records. The register's own `Type` column is what
+       * separates a change from a decision from an assumption, so one document does the work and a
+       * PM looking for "the decision log" finds it under that name in every project type.
+       */
+      { name: 'Decision Log', requirement: 'REQUIRED' },
+      // Was "Change / Escalation Flow", which read as a second change-management document beside
+      // the change plan. It is the escalation path and nothing else, so it says that.
+      { name: 'Issue Escalation Procedure', requirement: 'REQUIRED' },
     ],
     SCOPE: [
       { name: 'Scope Management Plan', requirement: 'REQUIRED' },
@@ -61,8 +70,9 @@ export const DOCUMENT_CATALOG: Record<ProjectType, Record<ManagementDomain, Cata
       { name: 'Stakeholder Register', requirement: 'REQUIRED' },
       { name: 'Stakeholder Engagement Plan', requirement: 'REQUIRED' },
       // "Communication Management Plan" used to sit here next to "Communication Plan" — two
-      // documents for one subject, which only ever produced two overlapping drafts to review.
-      { name: 'Communication Plan', requirement: 'REQUIRED' },
+      // documents for one subject, which only ever produced two overlapping drafts to review. The
+      // survivor now carries the PMI Lexicon name, the same one in all three project types.
+      { name: 'Communications Management Plan', requirement: 'REQUIRED' },
     ],
     // PROJECT_PLAN intentionally holds no documents — see the note on `PROJECT_PLAN` above.
     PROJECT_PLAN: [],
@@ -80,15 +90,28 @@ export const DOCUMENT_CATALOG: Record<ProjectType, Record<ManagementDomain, Cata
   },
   SM: {
     GOVERNANCE: [
-      { name: 'Service Management Charter', requirement: 'REQUIRED' },
-      { name: 'Service Operating Model', requirement: 'REQUIRED' },
-      { name: 'Change Governance Plan', requirement: 'REQUIRED' },
+      /**
+       * One charter per project, and it is the Project Charter.
+       *
+       * "Service Management Charter" sat here beside it saying the same thing — why this engagement
+       * exists, who sponsors it, what authority the manager has — so every SM project produced two
+       * documents with one subject and a PM had to read both to find out which was authoritative.
+       * `Service Operating Model` below already carries how the service is run, which is the part a
+       * service charter adds over a project charter.
+       */
       { name: 'Project Charter', requirement: 'REQUIRED' },
-      { name: 'Change / Escalation Flow', requirement: 'REQUIRED' },
+      { name: 'Service Operating Model', requirement: 'REQUIRED' },
+      // PMI Lexicon. "Change Governance Plan" was this project's own coinage for a document every
+      // PM already knows by its standard name.
+      { name: 'Change Management Plan', requirement: 'REQUIRED' },
+      { name: 'Decision Log', requirement: 'REQUIRED' },
+      { name: 'Issue Escalation Procedure', requirement: 'REQUIRED' },
+      // Moved from SCOPE. An SLA is the governing agreement for the service — what is promised and
+      // what happens when it is missed — not a statement of what work is in or out.
+      { name: 'SLA / OLA Management Plan', requirement: 'REQUIRED' },
     ],
     SCOPE: [
       { name: 'Service Scope & Catalogue', requirement: 'REQUIRED' },
-      { name: 'SLA / OLA Management Plan', requirement: 'REQUIRED' },
       { name: 'Maintenance Backlog Approach', requirement: 'CONDITIONAL', conditionKey: 'ticketVariability=High seasonal variation' },
     ],
     SCHEDULE: [
@@ -103,29 +126,39 @@ export const DOCUMENT_CATALOG: Record<ProjectType, Record<ManagementDomain, Cata
     ],
     STAKEHOLDERS: [
       { name: 'Stakeholder Register', requirement: 'REQUIRED' },
-      { name: 'Service Communication Plan', requirement: 'REQUIRED' },
+      /**
+       * "Service Communication Plan" and "Communication Plan" were the same document twice, which
+       * renaming to the PMI name would only have made more obvious. `Service Reporting Plan` below
+       * is genuinely different — it is the service's reporting pack and cadence, not who is told
+       * what — so it stays.
+       */
+      { name: 'Communications Management Plan', requirement: 'REQUIRED' },
       { name: 'Service Reporting Plan', requirement: 'REQUIRED' },
-      { name: 'Communication Plan', requirement: 'REQUIRED' },
     ],
     // PROJECT_PLAN intentionally holds no documents — see the note on `PROJECT_PLAN` above.
     PROJECT_PLAN: [],
     KICKOFF: [{ name: KICKOFF_DECK, requirement: 'REQUIRED' }],
     RESOURCES: [
-      { name: 'Support Organization & RACI', requirement: 'REQUIRED' },
-      { name: 'Skills & Capacity Plan', requirement: 'REQUIRED' },
-      { name: 'Knowledge Transfer Plan', requirement: 'REQUIRED' },
+      /**
+       * "Support Organization & RACI" carried a RACI beside the `RACI Matrix` below, and its
+       * organisation half is `Organization Chart`. SI and Product already have exactly one RACI and
+       * one chart; SM now matches them.
+       */
       { name: 'RACI Matrix', requirement: 'REQUIRED' },
       { name: 'Organization Chart', requirement: 'REQUIRED' },
+      { name: 'Skills & Capacity Plan', requirement: 'REQUIRED' },
+      { name: 'Knowledge Transfer Plan', requirement: 'REQUIRED' },
     ],
     RISK: [{ name: 'Risk Management Plan', requirement: 'REQUIRED' }],
   },
   PRODUCT: {
     GOVERNANCE: [
-      { name: 'Product Charter', requirement: 'REQUIRED' },
-      { name: 'Product Operating Model', requirement: 'REQUIRED' },
-      { name: 'Decision & Assumption Log', requirement: 'REQUIRED' },
+      // "Product Charter" and "Project Charter" were the same document twice, exactly as in SM.
+      // `Product Operating Model` carries what a product charter adds over a project charter.
       { name: 'Project Charter', requirement: 'REQUIRED' },
-      { name: 'Change / Escalation Flow', requirement: 'REQUIRED' },
+      { name: 'Product Operating Model', requirement: 'REQUIRED' },
+      { name: 'Decision Log', requirement: 'REQUIRED' },
+      { name: 'Issue Escalation Procedure', requirement: 'REQUIRED' },
     ],
     SCOPE: [
       { name: 'Product Vision & Scope', requirement: 'REQUIRED' },
@@ -145,13 +178,15 @@ export const DOCUMENT_CATALOG: Record<ProjectType, Record<ManagementDomain, Cata
     STAKEHOLDERS: [
       { name: 'Stakeholder Register', requirement: 'REQUIRED' },
       { name: 'Discovery & Feedback Plan', requirement: 'REQUIRED' },
-      { name: 'Communication Plan', requirement: 'REQUIRED' },
+      { name: 'Communications Management Plan', requirement: 'REQUIRED' },
     ],
     // PROJECT_PLAN intentionally holds no documents — see the note on `PROJECT_PLAN` above.
     PROJECT_PLAN: [],
     KICKOFF: [{ name: KICKOFF_DECK, requirement: 'REQUIRED' }],
     RESOURCES: [
-      { name: 'Product Team Charter', requirement: 'REQUIRED' },
+      // Not a third "Charter". It is what the team agrees about how it works together, and calling
+      // it that stops it being mistaken for the document that authorises the project.
+      { name: 'Product Team Working Agreement', requirement: 'REQUIRED' },
       { name: 'Roles & Decision Rights', requirement: 'REQUIRED' },
       { name: 'Capability Plan', requirement: 'CONDITIONAL' },
       { name: 'RACI Matrix', requirement: 'REQUIRED' },

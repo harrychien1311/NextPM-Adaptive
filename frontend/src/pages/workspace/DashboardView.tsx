@@ -291,7 +291,12 @@ export function DashboardView({
                       : 'Not selected'}
                 </strong>
                 <p>{data.workspace.approach?.rigor ?? 'Awaiting PM decision'}</p>
-                {data.workspace.recommendation && <small>Rule match {data.workspace.recommendation.confidence}%</small>}
+                {/*
+                  "Fit score", the same name Planning Review uses for the same number. "Rule match"
+                  survived from the version that had a deterministic rule engine — there is none,
+                  and the figure is the weighted score over the nine criteria.
+                */}
+                {data.workspace.recommendation && <small>Fit score {data.workspace.recommendation.confidence}%</small>}
               </div>
             </div>
             <button className="text-button" onClick={() => onNavigate('approach')}>

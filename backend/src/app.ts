@@ -25,7 +25,16 @@ export function createApp() {
   app.set('trust proxy', 1);
 
   app.use(helmet());
-  app.use(cors({ origin: env.corsOrigin, credentials: true }));
+  // `Content-Disposition` carries the real file name of every download; without exposing it a
+  // cross-origin client (the Vite dev server on :5173) can only read the fallback name the caller
+  // guessed, so a `.zip` baseline would save as whatever the button happened to pass.
+  app.use(
+    cors({
+      origin: env.corsOrigin,
+      credentials: true,
+      exposedHeaders: ['Content-Disposition', 'X-Document-Count'],
+    }),
+  );
   app.use(express.json({ limit: '2mb' }));
   if (!env.isProd) app.use(morgan('dev'));
 

@@ -31,6 +31,9 @@ const GOVERNANCE_MODELS: { value: string; label: string }[] = [
   { value: 'HYBRID', label: 'Hybrid' },
   { value: 'ITERATIVE', label: 'Iterative' },
   { value: 'STAGE_GATE', label: 'Predictive / Stage-Gate' },
+  // Last, and labelled with the condition: SAFe is only the right answer for multi-team work, and a
+  // PM picking from a list has no other way to know that before they have picked it.
+  { value: 'SAFE', label: 'SAFe / Scaled Agile (multi-team only)' },
 ];
 
 /** Every format `lib/extract-text.ts` is asked to read, in one place so both upload boxes agree. */

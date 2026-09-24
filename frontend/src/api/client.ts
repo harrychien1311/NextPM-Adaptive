@@ -63,9 +63,10 @@ export const api = {
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
   upload: <T>(path: string, form: FormData) => request<T>(path, { method: 'POST', body: form }),
   /** Downloads a binary/text file (docx, html...) and saves it via the browser, bypassing JSON parsing. */
-  download: async (path: string, fallbackFileName: string) => {
+  download: async (path: string, fallbackFileName: string, method: 'GET' | 'POST' = 'GET') => {
     const token = tokenStore.get();
     const response = await fetch(`${BASE_URL}${path}`, {
+      method,
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!response.ok) {
@@ -89,6 +90,7 @@ export const api = {
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
+    return { fileName, count: Number(response.headers.get('x-document-count')) || null };
   },
   /**
    * A `blob:` URL for a file behind the API, which an `<iframe>` or `<img>` can load directly.

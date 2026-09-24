@@ -7,7 +7,13 @@ interface ToastPayload {
 
 const ToastContext = createContext<(payload: ToastPayload) => void>(() => {});
 
-/** Mirrors the prototype toast: "Your decision was added to the audit log." */
+/**
+ * The fallback line says **Decision Log**, not "audit log".
+ *
+ * The Decision Log is a real document this application produces, under that exact name in all three
+ * project types — so the toast names something the PM can open, instead of a concept they would
+ * have to go looking for.
+ */
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toast, setToast] = useState<ToastPayload | null>(null);
   const timer = useRef<number>();
@@ -25,7 +31,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         <span>✓</span>
         <div>
           <strong>{toast?.title ?? 'Saved'}</strong>
-          <small>{toast?.detail ?? 'Your decision was added to the audit log.'}</small>
+          <small>{toast?.detail ?? 'Your decision was added to the Decision Log.'}</small>
         </div>
       </div>
     </ToastContext.Provider>

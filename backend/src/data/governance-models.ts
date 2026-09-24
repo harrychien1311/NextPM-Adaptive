@@ -4,7 +4,17 @@
  * calls for it (e.g. PRINCE2, Lean) — GOVERNANCE_MODEL_META and GOVERNANCE_ARTIFACT_GUIDANCE
  * fall back to a generic entry for any code not in this list, so nothing breaks.
  */
-export const DEFAULT_GOVERNANCE_MODELS = ['WATERFALL', 'SCRUM', 'KANBAN', 'HYBRID', 'ITERATIVE', 'STAGE_GATE'] as const;
+export const DEFAULT_GOVERNANCE_MODELS = [
+  'WATERFALL',
+  'SCRUM',
+  'KANBAN',
+  'HYBRID',
+  'ITERATIVE',
+  'STAGE_GATE',
+  // Scored like the rest but only ever recommended for multi-team work — see `SAFE` in the meta
+  // table below and the scale rule in the scoring prompt.
+  'SAFE',
+] as const;
 
 export type GovernanceModelCode = (typeof DEFAULT_GOVERNANCE_MODELS)[number];
 
@@ -95,6 +105,26 @@ export const GOVERNANCE_MODEL_META: Record<GovernanceModelCode, GovernanceModelM
       'Risk review': 'Gate risk assessment',
     },
   },
+  /**
+   * Scaled Agile, and it is **conditional on scale** — the methodology skill admits it only for
+   * genuinely multi-team work. A single team running SAFe carries the ceremony of an Agile Release
+   * Train with nothing to coordinate, which is worse than Scrum on every axis, so the scoring prompt
+   * is told to score it low rather than treat it as one more option.
+   */
+  SAFE: {
+    title: 'SAFe / Scaled Agile',
+    tagline: 'Multi-team agile at scale',
+    summary:
+      'Coordinates several agile teams on one cadence through an Agile Release Train — for multi-team programmes only; on a single team its overhead buys nothing.',
+    rigor: 'Standard+ rigor',
+    controls: {
+      'Planning horizon': 'PI planning every 8-12 weeks',
+      'Requirement control': 'Program backlog + team backlogs',
+      'Change control': 'Re-prioritised at the PI boundary',
+      'Customer decisions': 'System demo each iteration',
+      'Risk review': 'ROAM at PI planning and Inspect & Adapt',
+    },
+  },
 };
 
 export const GENERIC_GOVERNANCE_MODEL_META: GovernanceModelMeta = {
@@ -126,8 +156,11 @@ export const GOVERNANCE_ARTIFACT_NAMES = [
   'Project Charter',
   'Organization Chart',
   'RACI Matrix',
-  'Communication Plan',
-  'Change / Escalation Flow',
+  // PMI Lexicon, and the same name in all three project types.
+  'Communications Management Plan',
+  // Was "Change / Escalation Flow": one document trying to be both the change-control process and
+  // the escalation path. Change control belongs to the Change Management Plan; this is the path.
+  'Issue Escalation Procedure',
   // Named "Risk Plan" until the RISK domain was cut to a single document. It absorbed the separate
   // per-type risk documents (register, contingency plan, operational/assumption plan), so it now
   // carries the name PMs actually use. The mandated-artifact rule is unchanged: still six.
@@ -147,6 +180,7 @@ export const GOVERNANCE_ARTIFACT_GUIDANCE: Record<GovernanceArtifactName, Partia
     HYBRID: 'Combine a phase-based charter for fixed commitments with sprint-level detail called out per phase.',
     ITERATIVE: 'State the vision and the increment plan; each increment restates what it will refine from the last.',
     STAGE_GATE: 'Organize by stage with an explicit go/no-go decision criterion required to exit each stage.',
+    SAFE: 'Lead with the portfolio/programme vision and the Agile Release Train it runs on; scope is held as a program backlog and committed one Program Increment at a time, never for the whole engagement.',
   },
   'Organization Chart': {
     WATERFALL: 'Structure by function/department; the PM is the single point of control.',
@@ -155,6 +189,7 @@ export const GOVERNANCE_ARTIFACT_GUIDANCE: Record<GovernanceArtifactName, Partia
     HYBRID: 'Combine a functional/departmental structure with Agile sub-teams nested under each function.',
     ITERATIVE: 'Structure by function with a delivery lead per increment cycle.',
     STAGE_GATE: 'Structure by function/department with a named gatekeeper accountable for each stage exit.',
+    SAFE: 'One column per agile team on the train, plus the train-level roles above them — Release Train Engineer, Product Management, System Architect — so the coordination layer is visible and not implied.',
   },
   'RACI Matrix': {
     WATERFALL: 'One row per deliverable/milestone in the work breakdown structure.',
@@ -163,22 +198,25 @@ export const GOVERNANCE_ARTIFACT_GUIDANCE: Record<GovernanceArtifactName, Partia
     HYBRID: 'Two layers: phase-level rows (Waterfall-style) plus iteration-level rows (Agile-style).',
     ITERATIVE: 'One row per increment activity (planning, build, review) repeated per increment.',
     STAGE_GATE: 'One row per stage plus one row for each gate-review decision.',
+    SAFE: 'Two layers: train-level rows (PI planning, System Demo, Inspect & Adapt) and team-level rows beneath them, so it is clear which decisions belong to the train and which to a team.',
   },
-  'Communication Plan': {
+  'Communications Management Plan': {
     WATERFALL: 'Organize by milestone reporting; low frequency, formal written reports.',
     SCRUM: 'Organize by Scrum ceremony cadence (Daily, Sprint Review, Retrospective).',
     KANBAN: 'Organize by continuous cadence (standup, board review) rather than fixed meeting dates.',
     HYBRID: 'Combine formal phase reporting with sprint-ceremony-style updates within each phase.',
     ITERATIVE: 'Organize by increment: a kickoff and a review/demo communication per increment.',
     STAGE_GATE: 'Organize by stage, with a formal gate-review communication at every stage boundary.',
+    SAFE: 'Organize by the train cadence: PI planning, the System Demo each iteration, and Inspect & Adapt at the PI boundary — plus how the teams sync between them (Scrum of Scrums, PO sync).',
   },
-  'Change / Escalation Flow': {
-    WATERFALL: 'Formal Change Control Board; every change request follows a phase-gated approval path.',
-    SCRUM: 'Backlog reprioritization through the Product Owner; minimal formal change-request paperwork.',
-    KANBAN: 'Flexible adjustment through WIP limits and board policy rather than a change board.',
-    HYBRID: 'Small changes flow through the Agile team; changes affecting a phase baseline go through a Change Control Board.',
-    ITERATIVE: 'Changes are assessed and queued at increment boundaries rather than mid-increment.',
-    STAGE_GATE: 'Changes are only accepted at a gate review; mid-stage changes require an exception approval.',
+  'Issue Escalation Procedure': {
+    WATERFALL: 'Formal tiers with named authorities at each level and a documented response time per tier.',
+    SCRUM: 'The team resolves what it can within the Sprint; impediments the Scrum Master cannot clear go to the Product Owner, then to the sponsor.',
+    KANBAN: 'Escalate on blocked-item age and WIP-limit breach rather than on a meeting calendar.',
+    HYBRID: 'Iteration-level issues are cleared by the team; anything touching a phase baseline escalates to the steering body.',
+    ITERATIVE: 'Issues are triaged within the increment; those that cannot be absorbed escalate at the increment boundary.',
+    STAGE_GATE: 'Escalate to the gate authority; an issue that cannot wait for the gate needs an explicit exception approval.',
+    SAFE: 'The team clears what it can in the iteration; what it cannot goes to the Scrum of Scrums, then to the Release Train Engineer, then to programme stakeholders — say which impediments each level owns.',
   },
   'Risk Management Plan': {
     WATERFALL: 'A fixed Risk Register reviewed at each phase/gate.',
@@ -187,6 +225,7 @@ export const GOVERNANCE_ARTIFACT_GUIDANCE: Record<GovernanceArtifactName, Partia
     HYBRID: 'Two tiers: formal phase-level risks plus lighter, continuously-updated iteration-level risks.',
     ITERATIVE: 'Risk is reassessed at the start of every increment based on what the previous increment learned.',
     STAGE_GATE: 'Risk is formally assessed as part of every gate-review decision package.',
+    SAFE: 'Risks are ROAMed at PI planning — Resolved, Owned, Accepted or Mitigated — and reviewed again at Inspect & Adapt; cross-team dependencies are the ones that belong at train level.',
   },
 };
 
