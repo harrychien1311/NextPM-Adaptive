@@ -346,6 +346,12 @@ export async function catalogForProject(projectId: string, domain?: ManagementDo
           structuredData: byDefinition.get(definition.id)!.structuredData,
           generatedAt: byDefinition.get(definition.id)!.generatedAt,
           approvedAt: byDefinition.get(definition.id)!.approvedAt,
+          /**
+           * Set when an applied plan change made this draft out of date. A flag and nothing more —
+           * the Studio says so in amber and the PM decides whether to regenerate or delete it.
+           */
+          staleReason: byDefinition.get(definition.id)!.staleReason,
+          staleSince: byDefinition.get(definition.id)!.staleSince,
         }
       : null,
   }));
@@ -411,7 +417,18 @@ export async function generateDraft(params: { projectId: string; documentId: str
     include: { sections: { orderBy: { order: 'asc' } }, project: true, definition: true },
   });
   if (!document) throw notFound('Planning document not found');
-  if (document.status === DocumentStatus.APPROVED) {
+  /**
+   * An approved document is a baseline and is normally frozen. The one exception is a document an
+   * applied plan change has flagged as out of date: the change *is* the record of why this version
+   * no longer holds, and refusing to regenerate it left the PM in a dead end — the Studio banner
+   * telling them to regenerate while the button answered "create a new version", which nothing
+   * implements.
+   *
+   * Regenerating then produces a new version (below) and returns it to PM review, so invariant 5 is
+   * intact: approval is still a separate act and the PM has to sign the new draft too.
+   */
+  const regeneratingApproved = document.status === DocumentStatus.APPROVED;
+  if (regeneratingApproved && !document.staleReason) {
     throw conflict('Approved documents are versioned — create a new version before regenerating');
   }
 
@@ -548,6 +565,17 @@ export async function generateDraft(params: { projectId: string; documentId: str
       status: DocumentStatus.PM_REVIEW,
       generatedAt: new Date(),
       coverage: 100,
+      // A fresh draft is written against the plan as it stands now, so whatever a past change said
+      // was out of date about the old one no longer applies. Leaving the flag would tell the PM
+      // their new document is stale the moment it is written.
+      staleReason: null,
+      staleSince: null,
+      /**
+       * Replacing an approved baseline is a new version of it, and it leaves the baseline until the
+       * PM approves it again. Keeping the old approval stamp on new content would be the worst of
+       * both: a document nobody signed, carrying the name of someone who signed something else.
+       */
+      ...(regeneratingApproved ? { version: { increment: 1 }, approvedById: null, approvedAt: null } : {}),
       // Holds DocumentGap objects ({ token, question, answer }) — the token is what
       // "Fill out the document" substitutes the answer for.
       pmQuestions: output.gaps as unknown as Prisma.InputJsonValue,
@@ -775,6 +803,13 @@ export async function discardDocument(params: { projectId: string; documentId: s
         generatedAt: null,
         approvedById: null,
         approvedAt: null,
+        /**
+         * "This draft is out of date" describes a draft. Once there is no draft the statement has
+         * nothing left to be about, and leaving the flag kept an entry in the PM action center
+         * pointing at a document that had already been dealt with — by deleting it.
+         */
+        staleReason: null,
+        staleSince: null,
       },
     }),
   ]);

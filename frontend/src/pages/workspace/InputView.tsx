@@ -1,12 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+﻿import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { inputApi, projectApi, rulesApi } from '../../api/endpoints';
+import { inputApi, planChangeApi, projectApi, rulesApi } from '../../api/endpoints';
 import { ApiError } from '../../api/client';
 import { useToast } from '../../components/Toast';
 import { useDebouncedCallback } from '../../hooks/useDebouncedCallback';
 import { useProjectWrite } from '../../hooks/useProjectWrite';
 import { CustomerConfirmBanner } from './CustomerConfirmBanner';
-import type { InputField, ProjectType } from '../../api/types';
+import type { InputField, PlanChange, ProjectType } from '../../api/types';
 import type { WorkspaceView } from '../WorkspacePage';
 
 /** One wording for every disabled control, so a reader is told why rather than left guessing. */
@@ -35,6 +35,10 @@ const GOVERNANCE_MODELS: { value: string; label: string }[] = [
 
 /** Every format `lib/extract-text.ts` is asked to read, in one place so both upload boxes agree. */
 const UPLOAD_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt';
+
+/** Mirrors the server's own limits for change uploads, so the box states them before it refuses. */
+const MAX_CHANGE_DOCUMENTS = 10;
+const MAX_CHANGE_UPLOAD_MB = 10;
 
 /** What this screen genuinely requires before *Analyze planning needs* can do anything. */
 interface RequiredState {
@@ -169,6 +173,9 @@ export function InputView({
     mutationFn: (file: File) => inputApi.uploadDescription(projectId, file),
     onSuccess: (_result, file: File) => {
       queryClient.invalidateQueries({ queryKey: ['input', projectId] });
+      // The server pairs this upload with the version it replaced when a change is open, so the
+      // panel has to re-read it or the two selects would still show the state from before.
+      queryClient.invalidateQueries({ queryKey: ['plan-change', projectId] });
       refreshDashboard();
       notify({
         title: 'Project description saved',
@@ -209,6 +216,120 @@ export function InputView({
       queryClient.invalidateQueries({ queryKey: ['input', projectId] });
       refreshDashboard();
     },
+  });
+
+  // ---------------------------------------------------------------- change plan mode
+  //
+  // Once a governance model is confirmed the project has a plan, and "analyse it again" stops being
+  // the right action — what the PM needs then is to say what *changed*. The screen does not become a
+  // different screen; the last button does.
+
+  const planChange = useQuery({
+    queryKey: ['plan-change', projectId],
+    queryFn: () => planChangeApi.current(projectId),
+  });
+  const hasPlan = Boolean(workspace.data?.approach);
+  const openChange = planChange.data?.change ?? null;
+  const [changeNote, setChangeNote] = useState('');
+
+  /**
+   * Load the stored note whenever a different change comes into view.
+   *
+   * Without this the textarea started empty on every page load, and its `onBlur` would then save
+   * that emptiness over whatever the PM had already written — losing their words to a refresh. Keyed
+   * on the change id so it does not fight the PM's typing within one change.
+   */
+  const loadedNoteFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!openChange || loadedNoteFor.current === openChange.id) return;
+    loadedNoteFor.current = openChange.id;
+    setChangeNote(openChange.note ?? '');
+  }, [openChange]);
+
+  const refreshChange = () => queryClient.invalidateQueries({ queryKey: ['plan-change', projectId] });
+
+  const startChange = useMutation({
+    mutationFn: () => planChangeApi.start(projectId),
+    onSuccess: async (created: PlanChange) => {
+      setChangeNote(created.note ?? '');
+      await refreshChange();
+    },
+    onError: (error) => notify({ title: 'Could not start a change', detail: (error as Error).message }),
+  });
+
+  /**
+   * One call: save what the PM wrote, then measure it against the analysis already on file.
+   *
+   * The note is saved first rather than sent with the analysis, so a failed model call still leaves
+   * the PM's own words recorded — losing what somebody typed because a network request failed is
+   * never acceptable.
+   */
+  const analyzeChange = useMutation({
+    mutationFn: async () => {
+      if (!openChange) throw new Error('No change is open');
+      await planChangeApi.update(projectId, openChange.id, { note: changeNote.trim() || null });
+      return planChangeApi.analyze(projectId, openChange.id);
+    },
+    onSuccess: async () => {
+      await Promise.all([refreshChange(), queryClient.invalidateQueries({ queryKey: ['approach', projectId] })]);
+      notify({ title: 'Change analysed', detail: 'Opening the impact.' });
+      setTimeout(() => onNavigate('approach'), 350);
+    },
+    onError: (error) =>
+      notify({
+        title: 'Could not analyse the change',
+        detail: error instanceof ApiError ? error.message : (error as Error).message,
+      }),
+  });
+
+  /** Uploading into the change. The only upload box on the screen while one is open. */
+  const uploadChangeDocument = useMutation({
+    mutationFn: (file: File) => planChangeApi.uploadDocument(projectId, openChange!.id, file),
+    onSuccess: async (result, file) => {
+      await Promise.all([refreshChange(), queryClient.invalidateQueries({ queryKey: ['input', projectId] })]);
+      refreshDashboard();
+      notify({
+        title: `${file.name} added to this change`,
+        // Says what was assumed, because the assumption decides whether the document is compared
+        // against a predecessor or read as new material — and it is a guess from the file name.
+        detail: result.proposedReplacement
+          ? `Proposed as a new version of ${result.proposedReplacement}. Change it on the row if that is wrong.`
+          : 'Proposed as a new document. Set it as a new version on the row if it replaces something.',
+      });
+    },
+    onError: (error) => notify({ title: 'Upload rejected', detail: (error as Error).message }),
+  });
+
+  const setChangeDocumentReplaces = useMutation({
+    mutationFn: ({ referenceId, replaces }: { referenceId: string; replaces: string | null }) =>
+      planChangeApi.setReplaces(projectId, openChange!.id, referenceId, replaces),
+    onSuccess: refreshChange,
+    onError: (error) => notify({ title: 'Could not set the version link', detail: (error as Error).message }),
+  });
+  /**
+   * ✕ deletes the file, here as everywhere else.
+   *
+   * It used to only unlink the document from the change, which left the upload on disk with nothing
+   * in the interface pointing at it — invisible, and growing. One ✕ now means one thing throughout
+   * the app: the row, the extracted text and the bytes all go.
+   */
+  const removeChangeDocument = useMutation({
+    mutationFn: (referenceId: string) => inputApi.removeReference(projectId, referenceId),
+    onSuccess: async () => {
+      await Promise.all([refreshChange(), queryClient.invalidateQueries({ queryKey: ['input', projectId] })]);
+      refreshDashboard();
+    },
+    onError: (error) => notify({ title: 'Could not delete the document', detail: (error as Error).message }),
+  });
+
+  const cancelChange = useMutation({
+    mutationFn: () => planChangeApi.dismiss(projectId, openChange!.id),
+    onSuccess: async () => {
+      setChangeNote('');
+      await refreshChange();
+      notify({ title: 'Change discarded', detail: 'The plan is unchanged.' });
+    },
+    onError: (error) => notify({ title: 'Could not discard', detail: (error as Error).message }),
   });
 
   /** The same call, from the reference groups — without it a PM cannot clear a file they added. */
@@ -318,23 +439,29 @@ export function InputView({
 
           `computeInputReadiness` is deliberately left alone: domain readiness, project readiness
           and the program roll-up all share it, and none of them is this screen's progress bar.
+
+          Hidden while a change is being recorded: those three are what the *first* analysis needs,
+          they were satisfied before the plan was ever confirmed, and a completed checklist sitting
+          beside an unrelated task only invites the PM to hunt for what it wants from them now.
         */}
-        <div className="completion required-inputs">
-          <span>Required inputs</span>
-          <strong>
-            {requiredDone}/{REQUIRED_INPUTS.length}
-          </strong>
-          <div>
-            <i style={{ width: `${(requiredDone / REQUIRED_INPUTS.length) * 100}%` }} />
+        {!openChange && (
+          <div className="completion required-inputs">
+            <span>Required inputs</span>
+            <strong>
+              {requiredDone}/{REQUIRED_INPUTS.length}
+            </strong>
+            <div>
+              <i style={{ width: `${(requiredDone / REQUIRED_INPUTS.length) * 100}%` }} />
+            </div>
+            <ul>
+              {REQUIRED_INPUTS.map((item) => (
+                <li key={item.key} className={item.done(requiredState) ? 'done' : ''}>
+                  {item.done(requiredState) ? '✓' : '○'} {item.label}
+                </li>
+              ))}
+            </ul>
           </div>
-          <ul>
-            {REQUIRED_INPUTS.map((item) => (
-              <li key={item.key} className={item.done(requiredState) ? 'done' : ''}>
-                {item.done(requiredState) ? '✓' : '○'} {item.label}
-              </li>
-            ))}
-          </ul>
-        </div>
+        )}
       </div>
 
       {/*
@@ -345,10 +472,214 @@ export function InputView({
       <CustomerConfirmBanner projectId={projectId} suggestion={data.customerSuggestion} />
 
       {/*
+        Change mode. The screen is the same screen — the PM still uploads here and still types here —
+        so the mode announces itself with one panel at the top rather than by becoming something
+        unfamiliar. The note and the upload are two ways of saying the same thing and either alone
+        is enough; the server refuses only when both are empty.
+      */}
+      {openChange && (
+        <article className="panel change-panel">
+          <div className="panel-head">
+            <div>
+              <h2>⇄ Recording a plan change</h2>
+              <p>
+                Describe what changed, upload the document that carries it, or both. The analysis
+                measures it against the plan already on file instead of reading the project again.
+              </p>
+            </div>
+            {/*
+              "Either one" rather than a star on both fields, because that is what the server
+              enforces — it refuses only when the note and the documents are *both* empty. Marking
+              each field mandatory would be asking for two things where one will do.
+            */}
+            <span className="required-chip mandatory-chip">Mandatory * — a note or a document</span>
+            <button
+              className="ghost"
+              onClick={() => cancelChange.mutate()}
+              disabled={!canWrite || cancelChange.isPending}
+            >
+              Discard
+            </button>
+          </div>
+          <label className="change-note">
+            What changed? <em className="mandatory-mark">*</em>
+            <textarea
+              value={changeNote}
+              onChange={(event) => setChangeNote(event.target.value)}
+              onBlur={() =>
+                openChange.note !== changeNote.trim() &&
+                planChangeApi
+                  .update(projectId, openChange.id, { note: changeNote.trim() || null })
+                  .then(refreshChange)
+                  .catch(() => undefined)
+              }
+              placeholder="e.g. The customer moved go-live from March to June and added a payments module to the scope."
+              rows={3}
+              disabled={!canWrite}
+            />
+          </label>
+          {/*
+            The documents this change brings.
+
+            Proposed automatically from everything uploaded since the last analysis — including the
+            pairing of a new version with the one it replaced — and editable, because neither half
+            works alone: sweeping in every upload catches files that have nothing to do with the
+            change, and asking the PM to add each one by hand is how the second and third documents
+            of a three-document change get forgotten. That is what the single-pair version did.
+          */}
+          <div className="change-docs">
+            <small>
+              DOCUMENTS IN THIS CHANGE <em className="mandatory-mark">*</em>
+            </small>
+            {/*
+              No empty-state line: the drop zone directly below already says what to do and what the
+              limits are, so a paragraph above it repeating that is one more thing to read past.
+            */}
+            {openChange.documents.length > 0 && (
+              <ul>
+                {openChange.documents.map((document) => {
+                  const file = data.uploads.find((upload) => upload.id === document.referenceId);
+                  const replaced = document.supersedesReferenceId
+                    ? data.uploads.find((upload) => upload.id === document.supersedesReferenceId)
+                    : null;
+                  return (
+                    <li key={document.id}>
+                      <div>
+                        <strong>{file?.fileName ?? '(file removed)'}</strong>
+                        {/*
+                          The one thing nothing else can work out. The upload slot proposes an
+                          answer — the description slot holds one file so a new upload there looks
+                          like a replacement, a reference group holds several so an upload there
+                          looks new — and that guess is wrong in both directions often enough to
+                          matter. It decides whether the document is compared against a predecessor
+                          or read as new material, so the PM settles it here.
+                        */}
+                        <select
+                          value={document.supersedesReferenceId ?? ''}
+                          disabled={!canWrite || setChangeDocumentReplaces.isPending}
+                          onChange={(event) =>
+                            setChangeDocumentReplaces.mutate({
+                              referenceId: document.referenceId,
+                              replaces: event.target.value || null,
+                            })
+                          }
+                        >
+                          <option value="">New document — nothing to compare against</option>
+                          {data.uploads
+                            .filter((upload) => upload.id !== document.referenceId)
+                            .map((upload) => (
+                              <option key={upload.id} value={upload.id}>
+                                New version of {upload.fileName}
+                                {upload.superseded ? ' (replaced)' : ''}
+                              </option>
+                            ))}
+                        </select>
+                        <small>
+                          {replaced
+                            ? `Compared against ${replaced.fileName} — the analysis reports what differs`
+                            : 'Read as new material, and checked against everything already on file'}
+                          {file && !file.textAvailable ? ' · no text could be read from it' : ''}
+                        </small>
+                      </div>
+                      <button
+                        type="button"
+                        className="library-delete"
+                        title={`Delete ${file?.fileName ?? 'this document'} — the file is removed, not just unlinked`}
+                        disabled={!canWrite || removeChangeDocument.isPending}
+                        onClick={() => {
+                          // Asked for, because it cannot be undone: the file is gone and the only
+                          // way back is to upload it again.
+                          if (
+                            window.confirm(
+                              `Delete ${file?.fileName ?? 'this document'}?\n\nThe file and the text read from it are removed for good. Upload it again if you need it back.`,
+                            )
+                          ) {
+                            removeChangeDocument.mutate(document.referenceId);
+                          }
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+
+            {/*
+              The upload box for change mode, and the only one on the screen while a change is open.
+              The project's own two panels are hidden below: "what is this project" and "what has
+              changed about it" are different questions, and answering the first while recording the
+              second is how a document ends up attached to neither.
+            */}
+            <label className={`drop-zone change-drop${canWrite ? '' : ' is-locked'}`}>
+              <span>↑</span>
+              <strong>
+                {uploadChangeDocument.isPending ? 'Uploading…' : 'Drop the changed documents here, or browse'}
+              </strong>
+              <p>
+                Up to {MAX_CHANGE_DOCUMENTS} documents, {MAX_CHANGE_UPLOAD_MB} MB each · PDF, Word,
+                Excel, PowerPoint or TXT
+              </p>
+              <small>
+                {openChange.documents.length}/{MAX_CHANGE_DOCUMENTS} attached · each one is proposed
+                as a new version or as new material, and you can correct it above
+              </small>
+              <input
+                type="file"
+                accept={UPLOAD_ACCEPT}
+                multiple
+                disabled={!canWrite || uploadChangeDocument.isPending}
+                onChange={(event) => {
+                  const files = [...(event.target.files ?? [])];
+                  event.target.value = '';
+                  const room = MAX_CHANGE_DOCUMENTS - openChange.documents.length;
+                  if (files.length > room) {
+                    notify({
+                      title: `Room for ${room} more document${room === 1 ? '' : 's'}`,
+                      detail: `A change carries at most ${MAX_CHANGE_DOCUMENTS}. Remove one, or upload fewer at a time.`,
+                    });
+                    return;
+                  }
+                  // Sequentially: each upload looks at what is already on file to propose the
+                  // version relationship, so two in flight at once would read a stale list.
+                  void files.reduce<Promise<void>>(
+                    (queue, file) =>
+                      queue.then(async () => {
+                        await uploadChangeDocument.mutateAsync(file).catch(() => undefined);
+                      }),
+                    Promise.resolve(),
+                  );
+                }}
+              />
+            </label>
+
+            {/*
+              "Add an earlier document" is gone on purpose. It existed to re-attach something that
+              had been unlinked, and ✕ no longer unlinks — it deletes. There is nothing left to add
+              back, and everything uploaded since the last analysis arrives here by itself.
+            */}
+          </div>
+          {openChange.status === 'ANALYZED' && (
+            <p className="doc-note">
+              This change has been analysed. Editing it here clears that reading — the impact on
+              screen would otherwise describe a different change from the one recorded.
+            </p>
+          )}
+        </article>
+      )}
+
+      {/*
         The uploads come before the form on purpose. Reading a document is the cheapest way to fill
         this profile in, so the PM should be offered it first — answering thirty fields by hand and
         only then finding the upload box is the wrong order.
+
+        Both panels are hidden while a change is open. The change has its own upload box, and two
+        sets of upload boxes on one screen is how a document ends up in the project but not in the
+        change the PM was recording — attached to neither question.
       */}
+      {!openChange && (
+      <>
       <article className="panel upload-panel description-panel">
         <div className="upload-head">
           <div>
@@ -481,6 +812,8 @@ export function InputView({
           })}
         </div>
       </article>
+      </>
+      )}
 
       {/* Full width now: the "Missing information" aside that used to sit beside this form is gone. */}
       <div className="input-single">
@@ -627,19 +960,52 @@ export function InputView({
               click event, so it can never explain itself — the PM was left with a grey control and
               a tooltip they had to go looking for. Pressing it now names the gap.
             */}
-            <button
-              type="button"
-              className="primary"
-              onClick={startAnalysis}
-              disabled={!canWrite || analyze.isPending}
-              title={
-                canWrite
-                  ? 'Read every uploaded document and return the project overview, the approach advisory and the planning gaps'
-                  : READ_ONLY_HINT
-              }
-            >
-              {analyze.isPending ? '✦ Analyzing…' : '✦ Analyze planning needs'}
-            </button>
+            {/*
+              The last button follows the project's state. Before a governance model is confirmed
+              there is no plan, so "analyse it" is the right action; after one, analysing the whole
+              project again is the wrong question — what has changed is the right one.
+            */}
+            {!hasPlan ? (
+              <button
+                type="button"
+                className="primary"
+                onClick={startAnalysis}
+                disabled={!canWrite || analyze.isPending}
+                title={
+                  canWrite
+                    ? 'Read every uploaded document and return the project overview, the approach advisory and the planning gaps'
+                    : READ_ONLY_HINT
+                }
+              >
+                {analyze.isPending ? '✦ Analyzing…' : '✦ Analyze planning needs'}
+              </button>
+            ) : openChange ? (
+              <button
+                type="button"
+                className="primary"
+                onClick={() =>
+                  openChange.status === 'ANALYZED' ? onNavigate('approach') : analyzeChange.mutate()
+                }
+                disabled={!canWrite || analyzeChange.isPending}
+                title={canWrite ? 'Measure what changed against the analysis already on file' : READ_ONLY_HINT}
+              >
+                {analyzeChange.isPending
+                  ? '✦ Analyzing the change…'
+                  : openChange.status === 'ANALYZED'
+                    ? 'View change impact →'
+                    : '✦ Analyze the change'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="primary"
+                onClick={() => startChange.mutate()}
+                disabled={!canWrite || startChange.isPending}
+                title={canWrite ? 'Record something that has changed since the plan was confirmed' : READ_ONLY_HINT}
+              >
+                {startChange.isPending ? 'Opening…' : '⇄ Record a plan change'}
+              </button>
+            )}
           </div>
         </form>
 

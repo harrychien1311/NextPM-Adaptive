@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { programApi, projectApi } from '../api/endpoints';
+import { planChangeApi, programApi, projectApi } from '../api/endpoints';
 import type { ProgramGroup, ProjectCard, ProjectStatus, ProjectType } from '../api/types';
 import { useAuth } from '../store/auth';
 import { useToast } from '../components/Toast';
@@ -102,6 +102,20 @@ export function ProgramOverviewPage() {
   const fail = (title: string) => (error: unknown) =>
     notify({ title, detail: error instanceof ApiError ? error.message : 'Unexpected error' });
   const refreshOverview = () => queryClient.invalidateQueries({ queryKey: ['overview'] });
+
+  /**
+   * "Change plan" from a project card.
+   *
+   * Opens the change first, then goes to Project Input. The mode is decided by data — a `PlanChange`
+   * in DRAFT or ANALYZED — so navigating without opening one would land the PM on the ordinary input
+   * screen and leave them to find the button again. `startPlanChange` hands back the change already
+   * open if there is one, so pressing this twice is harmless.
+   */
+  const startChange = useMutation({
+    mutationFn: (projectId: string) => planChangeApi.start(projectId),
+    onSuccess: (_change, projectId) => navigate(`/projects/${projectId}?view=input`),
+    onError: fail('Could not start a plan change'),
+  });
 
   const updateProgram = useMutation({
     mutationFn: ({ id, body }: { id: string; body: { name?: string; description?: string | null; targetOutcome?: string | null } }) =>
@@ -459,6 +473,27 @@ export function ProgramOverviewPage() {
                             {project.canEdit && (
                               <button className="secondary" onClick={() => setEditProject(project)} title="Rename, re-file or change status">
                                 Edit
+                              </button>
+                            )}
+                            {/*
+                              Straight into change mode, not just to the workspace: opening the
+                              change here is what puts Project Input into it, so the PM lands on the
+                              panel they came for instead of having to find the button again.
+
+                              Hidden unless the project has a confirmed governance model — before
+                              that there is no plan to change and the server refuses — and unless
+                              the viewer can write.
+                            */}
+                            {project.canChangePlan && (
+                              <button
+                                className="secondary"
+                                disabled={startChange.isPending}
+                                title="Record something that has changed since this plan was confirmed"
+                                onClick={() => startChange.mutate(project.id)}
+                              >
+                                {startChange.isPending && startChange.variables === project.id
+                                  ? 'Opening…'
+                                  : '⇄ Change plan'}
                               </button>
                             )}
                             {project.canOpen ? (

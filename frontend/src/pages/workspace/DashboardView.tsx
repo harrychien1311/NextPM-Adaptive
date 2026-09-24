@@ -12,6 +12,20 @@ import { Backdrop, ModalShell } from '../../components/Modal';
 import type { ActionItem, LibraryEntry } from '../../api/types';
 import type { NavigateToView } from '../WorkspacePage';
 
+/** The same wording the Plan history screen uses, so one change reads the same in both places. */
+const HISTORY_LABEL: Record<string, string> = {
+  APPLIED: 'Applied',
+  DISMISSED: 'Dismissed',
+  ANALYZED: 'Awaiting you',
+  DRAFT: 'Draft',
+};
+const HISTORY_TONE: Record<string, string> = {
+  APPLIED: 'approved-status',
+  DISMISSED: 'blocked-status',
+  ANALYZED: 'review-status',
+  DRAFT: 'draft-status',
+};
+
 const TASK_STATE: Record<string, string> = {
   DONE: 'done-state',
   REVIEW: 'review-state',
@@ -60,7 +74,7 @@ const WIDGET_LABELS: [string, string][] = [
   ['outputs', 'Document progress'],
   ['tasks', 'Planning tasks'],
   ['decisions', 'PM decisions'],
-  ['domains', 'Project information coverage'],
+  ['history', 'Plan history'],
   ['customer', 'Project readiness by customer standardization'],
   ['library', 'Planning documents'],
   ['activity', 'Agent activity'],
@@ -314,6 +328,14 @@ export function DashboardView({
                 </li>
               </ul>
             </div>
+            {/*
+              Every number above is answered in one place, and it was three clicks away through the
+              left nav. The neighbouring metrics already carry a way through to what they describe —
+              "View rationale →" on the approach — so this one had the gap.
+            */}
+            <button className="text-button" onClick={() => onNavigate('studio')}>
+              Open Planning studio →
+            </button>
           </article>
         )}
       </div>
@@ -356,7 +378,8 @@ export function DashboardView({
             {data.actions.length === 0 && (
               <div className="program-empty">
                 No open PM decisions right now. The list is built from the planning gaps the last
-                analysis found — run <em>Analyze planning needs</em> on Project Input to fill it.
+                analysis found, plus any document an applied plan change left out of date — run{' '}
+                <em>Analyze planning needs</em> on Project Input to fill it.
               </div>
             )}
             {data.actions.map((action) => {
@@ -367,21 +390,34 @@ export function DashboardView({
                * behind it closed are two different claims, and only one of them was made.
                */
               const answeredByDocument = action.targetDocumentStatus === 'APPROVED';
+              /**
+               * A document an applied plan change made out of date. It is derived from the flag on
+               * the document rather than stored, so there is nothing to resolve or close — it goes
+               * when the PM regenerates the document or deletes it. Only *Open* makes sense.
+               */
+              const stale = action.kind === 'STALE_DOCUMENT';
               return (
               <div
                 key={action.id}
-                className={`decision-item ${action.priority === 'REQUIRED' ? 'critical' : action.priority === 'CONDITIONAL' ? 'warning' : 'info'}${answeredByDocument ? ' is-answered' : ''}`}
+                className={`decision-item ${action.priority === 'REQUIRED' ? 'critical' : action.priority === 'CONDITIONAL' ? 'warning' : 'info'}${answeredByDocument ? ' is-answered' : ''}${stale ? ' is-stale' : ''}`}
               >
-                <span>{answeredByDocument ? '✓' : action.priority === 'REQUIRED' ? '!' : action.priority === 'CONDITIONAL' ? '◇' : 'i'}</span>
+                <span>{stale ? '⇄' : answeredByDocument ? '✓' : action.priority === 'REQUIRED' ? '!' : action.priority === 'CONDITIONAL' ? '◇' : 'i'}</span>
                 <div>
                   <small>
-                    {action.priority} · {DOMAIN_LABEL[action.domain]?.toUpperCase()}
+                    {stale ? 'OUT OF DATE AFTER A PLAN CHANGE' : action.priority} ·{' '}
+                    {DOMAIN_LABEL[action.domain]?.toUpperCase()}
                   </small>
                   <strong>{action.title}</strong>
                   <p>{action.description}</p>
                   {answeredByDocument && (
                     <span className="answered-pill">
                       Resolved · <strong>{action.targetDocument}</strong> confirmed by the PM
+                    </span>
+                  )}
+                  {stale && (
+                    /* Says how it goes away, since there is no button here that removes it. */
+                    <span className="stale-pill">
+                      Clears when you regenerate <strong>{action.targetDocument}</strong> or delete it
                     </span>
                   )}
                   {resolving === action.id && (
@@ -436,7 +472,8 @@ export function DashboardView({
                   >
                     Open
                   </button>
-                  {answeredByDocument ? (
+                  {/* Nothing to resolve or close on a derived row — the flag is the whole of it. */}
+                  {stale ? null : answeredByDocument ? (
                     <button
                       className={`primary small${lockClass}`}
                       {...lockedProps}
@@ -465,39 +502,53 @@ export function DashboardView({
       </div>
 
       <div className="dashboard-grid lower">
-        {show('domains') && (
+        {/*
+          Plan history replaced "Project information coverage" here.
+
+          That panel measured how full the intake form is — our own administration, not anything
+          about the project — which is the same reason it was kept out of the Ready-to-Start score.
+          What has moved since the plan was confirmed is a question a PM actually asks, and it had
+          nowhere on this screen to be asked.
+
+          Three entries, not the lot: this answers "has anything changed lately", and the full story
+          is one click away on its own screen.
+        */}
+        {show('history') && (
           <article className="panel widget">
             <div className="panel-head">
               <div>
-                {/*
-                  This measures INPUT FIELDS, not documents — `recomputeDomainReadiness` scores the
-                  share of each domain's inputs that are filled and PM-verified. The old name
-                  ("Planning readiness by domain") read as if it were about generated documents,
-                  which is a different widget entirely.
-                */}
-                <h2>Project information coverage</h2>
-                <p>Share of each domain’s input fields that are filled and PM-verified</p>
+                <h2>Plan history</h2>
+                <p>What has changed since the governance model was confirmed</p>
               </div>
-              <span className="legend">
-                <i />
-                Target 80%
-              </span>
+              <button className="ghost" onClick={() => onNavigate('history')}>
+                View detail
+              </button>
             </div>
-            <div className="domain-bars">
-              {data.domains.map((row) => (
-                <div key={row.domain}>
-                  <span>{DOMAIN_LABEL[row.domain]}</span>
-                  <div>
-                    <i
-                      className={row.score >= 75 ? '' : row.score >= 55 ? 'warn' : 'danger'}
-                      style={{ width: `${row.score}%` }}
-                    />
-                    <b className="target" />
-                  </div>
-                  <strong>{row.score}%</strong>
-                </div>
-              ))}
-            </div>
+            {data.planChanges.length === 0 ? (
+              <div className="program-empty">
+                Nothing has changed since the plan was confirmed. Record a change on Project Input
+                when something does.
+              </div>
+            ) : (
+              <ul className="history-mini">
+                {data.planChanges.map((change) => (
+                  <li key={change.id}>
+                    <span className={`doc-status ${HISTORY_TONE[change.status] ?? 'draft-status'}`}>
+                      {HISTORY_LABEL[change.status] ?? change.status}
+                    </span>
+                    <div>
+                      <strong>{change.summary}</strong>
+                      <small>
+                        {new Date(change.at).toLocaleDateString()} · {change.by}
+                        {change.documents > 0 && ` · ${change.documents} document${change.documents === 1 ? '' : 's'}`}
+                        {/* Only worth saying for an applied change — nothing was flagged otherwise. */}
+                        {change.status === 'APPLIED' && change.affected > 0 && ` · ${change.affected} affected`}
+                      </small>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
           </article>
         )}
 
@@ -521,13 +572,19 @@ export function DashboardView({
                 <p>Everything attached to this project — what you uploaded and what the AI wrote</p>
               </div>
               <span className="copilot-badge">{data.library.length} total</span>
+              {/* The way into Plan history is its own panel's "View detail" now — one door, in the
+                  place that shows what is behind it. */}
+              {/*
+                A labelled button rather than the ▾ chevron it replaces. The arrow was the only
+                control on this panel and gave no clue what was behind it — a count and a caret ask
+                the PM to guess whether it opens a list, a screen or a menu.
+              */}
               <button
-                className="disclosure"
+                className="ghost"
                 aria-expanded={libraryOpen}
-                title={libraryOpen ? 'Hide the document list' : 'Show the document list'}
                 onClick={() => setLibraryOpen((open) => !open)}
               >
-                {libraryOpen ? '▴' : '▾'}
+                {libraryOpen ? 'Hide detail' : 'View detail'}
               </button>
             </div>
             {!libraryOpen ? null : data.library.length === 0 ? (

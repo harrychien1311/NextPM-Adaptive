@@ -22,6 +22,9 @@ import {
   saveValues,
   verifyInputs,
 } from './input.service';
+// A route composing two services. `rules` already imports `input`, so `input.service` importing
+// back would be a cycle — the composition belongs here instead.
+import { detachReferenceFromChanges, linkUploadToOpenChange } from '../rules/plan-change.service';
 
 /** Every group with its own upload tile; DESCRIPTION has a separate endpoint below. */
 const CLASSIFIED_GROUPS = ['COMMITMENT', 'SCOPE', 'ORGANIZATION', 'SCHEDULE', 'OTHER'] as const;
@@ -195,6 +198,14 @@ inputRouter.delete(
   '/:projectId/references/:id',
   requireProjectRole(...PROJECT_WRITE_ROLES),
   asyncHandler(async (req, res) => {
+    /**
+     * One delete for every ✕ in the app: the row, the extracted text and the bytes on disk all go.
+     *
+     * Detach first. `PlanChangeDocument` has no foreign key to `ReferenceFile`, so removing the
+     * upload without this leaves a change listing a document that cannot be opened, cannot be
+     * compared and cannot be cleared.
+     */
+    await detachReferenceFromChanges(req.params.projectId, req.params.id);
     res.json(await removeReference(req.params.projectId, req.params.id, req.user!.id));
   }),
 );
@@ -206,15 +217,27 @@ inputRouter.post(
   upload.single('file'),
   asyncHandler(async (req, res) => {
     if (!req.file) return res.status(400).json({ error: { message: 'A file is required' } });
-    res.status(201).json(
-      await registerDescriptionDocument({
-        projectId: req.params.projectId,
-        fileName: decodeUploadFileName(req.file.originalname),
-        mimeType: req.file.mimetype,
-        sizeBytes: req.file.size,
-        storageKey: req.file.filename,
-        actorId: req.user!.id,
-      }),
-    );
+    const { file, supersededId } = await registerDescriptionDocument({
+      projectId: req.params.projectId,
+      fileName: decodeUploadFileName(req.file.originalname),
+      mimeType: req.file.mimetype,
+      sizeBytes: req.file.size,
+      storageKey: req.file.filename,
+      actorId: req.user!.id,
+    });
+
+    /**
+     * If the PM is recording a plan change, this upload is what the change is *about* — so pair it
+     * with the version it replaced without making them pick both from a dropdown afterwards.
+     * "Upload the new version and it gets compared with the old one" is what the feature promises,
+     * and asking them to wire it up by hand is how a promise becomes a footnote.
+     */
+    await linkUploadToOpenChange({
+      projectId: req.params.projectId,
+      newReferenceId: file.id,
+      supersededId,
+    });
+
+    res.status(201).json(file);
   }),
 );

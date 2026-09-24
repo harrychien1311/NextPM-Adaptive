@@ -2643,3 +2643,392 @@ article.approach-option.is-locked:hover {
   border-radius: 10px;
   background: #fff;
 }
+
+/* ---------------------------------------------------------------- change plan mode */
+.change-panel {
+  padding: 20px;
+  margin-bottom: 16px;
+  border-left: 3px solid var(--cyan);
+}
+.change-note {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #445468;
+}
+.change-note textarea {
+  width: 100%;
+  border: 1px solid #ccd6e1;
+  border-radius: 7px;
+  padding: 10px 11px;
+  margin-top: 6px;
+  font: inherit;
+  font-size: 0.78rem;
+  color: #25364a;
+  background: #fff;
+  resize: vertical;
+}
+/* One block of the overview that moved: what it said, then what it says now. */
+.change-blocks {
+  display: grid;
+  gap: 10px;
+}
+.change-block {
+  border: 1px solid #e0e7ee;
+  border-radius: 9px;
+  padding: 12px 14px;
+}
+.change-block small {
+  font-size: 0.59rem;
+  letter-spacing: 0.08em;
+  color: #7f8da0;
+}
+.change-block p {
+  font-size: 0.75rem;
+  margin: 6px 0 0;
+}
+.change-block p b {
+  display: inline-block;
+  min-width: 34px;
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  color: #8a97a8;
+}
+/* The previous reading is struck through rather than removed: seeing the movement is the point. */
+.change-previous {
+  color: #93a1b2;
+  text-decoration: line-through;
+  text-decoration-color: #cfd8e2;
+}
+.change-now {
+  color: var(--ink);
+}
+.change-block ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+.change-block li {
+  font-size: 0.72rem;
+  color: #5e6d7e;
+  line-height: 1.45;
+}
+.cost-policy.approach-warning {
+  background: #fff6e9;
+  border-color: #e3c68f;
+}
+.cost-policy.approach-warning > span {
+  background: #f6e1bd;
+  color: #a2660f;
+}
+
+/* A draft an applied change made out of date. Amber, not red: nothing is broken, it is stale. */
+.stale-banner {
+  display: grid;
+  grid-template-columns: 30px 1fr;
+  gap: 12px;
+  align-items: start;
+  background: #fff6e9;
+  border: 1px solid #e3c68f;
+  border-radius: 10px;
+  padding: 13px 15px;
+  margin-bottom: 14px;
+}
+.stale-banner > span {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: #f6e1bd;
+  color: #a2660f;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+}
+.stale-banner strong {
+  font-size: 0.78rem;
+  display: block;
+}
+.stale-banner p {
+  font-size: 0.72rem;
+  color: #6d5a3c;
+  margin: 5px 0 0;
+  line-height: 1.5;
+}
+
+/* ---------------------------------------------------------------- plan history */
+.history-list {
+  display: grid;
+  gap: 10px;
+}
+.history-entry {
+  padding: 0;
+  overflow: hidden;
+}
+.history-entry > header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  cursor: pointer;
+}
+.history-entry > header:hover {
+  background: #fbfdff;
+}
+.history-entry > header > div {
+  flex: 1;
+  min-width: 0;
+}
+.history-entry header small {
+  display: block;
+  font-size: 0.64rem;
+  color: #8290a3;
+}
+.history-entry header strong {
+  display: block;
+  font-size: 0.82rem;
+  margin: 3px 0;
+}
+.history-files {
+  color: #6d7b8c !important;
+}
+.history-detail {
+  border-top: 1px solid #e8edf2;
+  padding: 16px 18px;
+}
+.history-note {
+  font-size: 0.75rem;
+  color: #46566a;
+  background: #f5f8fb;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0 0 14px;
+}
+.history-note b {
+  display: block;
+  font-size: 0.6rem;
+  letter-spacing: 0.07em;
+  color: #8a97a8;
+  margin-bottom: 4px;
+}
+.history-stats {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0;
+  margin: 14px 0;
+}
+.history-stats li {
+  font-size: 0.68rem;
+  color: #5f6f83;
+  background: #eef3f7;
+  border-radius: 99px;
+  padding: 6px 11px;
+}
+.history-stats b {
+  color: var(--ink);
+}
+.history-detail h3 {
+  font-size: 0.82rem;
+  margin: 16px 0 6px;
+}
+
+/* The "this file replaces that one" pair, side by side because they are one thought. */
+.change-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 14px;
+}
+.change-pair label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #445468;
+}
+.change-pair select {
+  width: 100%;
+  border: 1px solid #ccd6e1;
+  border-radius: 7px;
+  padding: 9px 10px;
+  margin-top: 6px;
+  font: inherit;
+  font-size: 0.76rem;
+  color: #25364a;
+  background: #fff;
+}
+.change-pair select:disabled {
+  background: #f4f7fa;
+  color: #97a4b4;
+}
+@media (max-width: 720px) {
+  .change-pair {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* The documents a change carries — proposed automatically, edited by the PM. */
+.change-docs {
+  margin-top: 14px;
+}
+.change-docs > small {
+  display: block;
+  font-size: 0.59rem;
+  letter-spacing: 0.08em;
+  color: #7f8da0;
+  margin-bottom: 8px;
+}
+.change-docs ul {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 10px;
+  display: grid;
+  gap: 6px;
+}
+.change-docs li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 12px;
+  background: #fff;
+}
+.change-docs li > div {
+  flex: 1;
+  min-width: 0;
+}
+.change-docs li strong {
+  display: block;
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.change-docs li small {
+  display: block;
+  font-size: 0.66rem;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.change-add {
+  width: 100%;
+  border: 1px dashed #c3cfdb;
+  border-radius: 7px;
+  padding: 9px 10px;
+  font: inherit;
+  font-size: 0.74rem;
+  color: #5f6f83;
+  background: #fafcfd;
+}
+
+/* The version relationship — the one thing the upload slot can only guess at. */
+.change-docs li select {
+  width: 100%;
+  border: 1px solid #ccd6e1;
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin: 5px 0 2px;
+  font: inherit;
+  font-size: 0.71rem;
+  color: #25364a;
+  background: #fff;
+}
+.change-docs li select:disabled {
+  background: #f4f7fa;
+  color: #97a4b4;
+}
+
+/* The change panel's own upload box — the only one on the screen while a change is open. */
+.change-drop {
+  margin: 0 0 10px;
+  border-color: #a9cdd2;
+  background: #f7fbfc;
+}
+.change-drop > span {
+  background: #dff0f2;
+  color: #1f7d86;
+}
+.change-drop small {
+  display: block;
+  font-size: 0.63rem;
+  color: #8496a4;
+  margin-top: 6px;
+}
+
+/* "Either one" on the change panel: the star sits on both fields because the server accepts a note
+   or a document, and the chip in the header says which of the two it is. */
+.mandatory-mark {
+  font-style: normal;
+  color: var(--red);
+  font-weight: 700;
+}
+.change-panel .panel-head {
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.change-panel .mandatory-chip {
+  white-space: nowrap;
+}
+
+/* A document an applied plan change left out of date. Amber like the Studio banner that says the
+   same thing, so the two read as one fact rather than two. */
+.decision-item.is-stale {
+  background: #fffaf2;
+}
+.decision-item.is-stale > span {
+  background: #f6e1bd !important;
+  color: #a2660f !important;
+}
+.stale-pill {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 0.62rem;
+  color: #8a6a2c;
+  background: #fbf0dc;
+  border-radius: 99px;
+  padding: 4px 8px;
+}
+.stale-pill strong {
+  display: inline !important;
+  font-size: 0.62rem !important;
+  margin: 0 !important;
+}
+
+/* The three most recent changes on the dashboard. Compact — the full story is its own screen. */
+.history-mini {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+.history-mini li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #edf1f4;
+}
+.history-mini li:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.history-mini li > div {
+  flex: 1;
+  min-width: 0;
+}
+.history-mini strong {
+  display: block;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+.history-mini small {
+  display: block;
+  font-size: 0.65rem;
+  color: var(--muted);
+  margin-top: 3px;
+}
+.history-mini .doc-status {
+  flex-shrink: 0;
+  margin-top: 2px;
+}

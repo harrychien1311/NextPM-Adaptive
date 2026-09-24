@@ -17,6 +17,8 @@ import type {
   DocumentStructuredData,
   InputProfile,
   ManagementDomain,
+  PlanChange,
+  PlanChangeHistoryEntry,
   ProgramOverview,
   ProjectRole,
   ProjectStatus,
@@ -190,6 +192,56 @@ export const inputApi = {
   /** The original as a `blob:` URL, for embedding it in the preview panel. Caller revokes it. */
   referenceFileObjectUrl: (projectId: string, id: string) =>
     api.objectUrl(`/projects/${projectId}/references/${id}/file`),
+};
+
+/**
+ * Change plan mode. Every screen reads `current` to decide whether it is in change mode — the state
+ * lives in the data, not in a URL flag, so a refresh or a bookmarked link lands in the right place.
+ */
+export const planChangeApi = {
+  current: (projectId: string) =>
+    api.get<{ change: PlanChange | null }>(`/projects/${projectId}/plan-changes/current`),
+  history: (projectId: string) =>
+    api.get<{ changes: PlanChangeHistoryEntry[] }>(`/projects/${projectId}/plan-changes`),
+  /** Opens change mode, or hands back the one already open — at most one may be open per project. */
+  start: (projectId: string) => api.post<PlanChange>(`/projects/${projectId}/plan-changes`),
+  update: (projectId: string, changeId: string, body: { note?: string | null }) =>
+    api.patch<PlanChange>(`/projects/${projectId}/plan-changes/${changeId}`, body),
+  /**
+   * Uploads straight into the change. While one is open this is the only upload box on Project
+   * Input — the project's own panels are hidden, so a document cannot end up attached to neither.
+   */
+  uploadDocument: (projectId: string, changeId: string, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.upload<{ proposedReplacement: string | null }>(
+      `/projects/${projectId}/plan-changes/${changeId}/documents/upload`,
+      form,
+    );
+  },
+  /**
+   * "This is a new version of X", or null for "this is a new document".
+   *
+   * The upload slot only guesses: the description slot holds one file so a new upload there looks
+   * like a replacement, a reference group holds several so an upload there looks new — and both
+   * guesses are wrong the other way round often enough to matter. The PM settles it.
+   */
+  setReplaces: (projectId: string, changeId: string, referenceId: string, supersedesReferenceId: string | null) =>
+    api.patch(`/projects/${projectId}/plan-changes/${changeId}/documents/${referenceId}`, {
+      supersedesReferenceId,
+    }),
+  // Removing a document from a change is `inputApi.removeReference` — ✕ deletes the file, here as
+  // on every other screen, so there is no "unlink but keep it" any more.
+  /** Skill 1c — the delta call. Produces the impact for review; changes nothing yet. */
+  analyze: (projectId: string, changeId: string) =>
+    api.post<PlanChange>(`/projects/${projectId}/plan-changes/${changeId}/analyze`),
+  /** The PM gate: merge the delta into a new snapshot and move the plan. */
+  apply: (projectId: string, changeId: string) =>
+    api.post<{ snapshotId: string; flagged: number; openActions: number }>(
+      `/projects/${projectId}/plan-changes/${changeId}/apply`,
+    ),
+  dismiss: (projectId: string, changeId: string) =>
+    api.post<PlanChange>(`/projects/${projectId}/plan-changes/${changeId}/dismiss`),
 };
 
 export const rulesApi = {

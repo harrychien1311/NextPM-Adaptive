@@ -85,6 +85,11 @@ export interface ProjectCard {
   canEdit: boolean;
   /** May delete it — stricter than canEdit, since deletion cascades and cannot be undone. */
   canDelete: boolean;
+  /**
+   * May record a plan change from here: there is a confirmed governance model to change, and the
+   * viewer can write. Before a plan exists the right action is the analysis itself.
+   */
+  canChangePlan: boolean;
   readiness: number;
   /** See `Workspace.basis` — the same number, built the same way, on the overview card. */
   basis: 'CUSTOMER_AND_OUTPUTS' | 'CUSTOMER' | 'INPUT_AND_OUTPUTS' | 'INPUT';
@@ -169,6 +174,12 @@ export interface ProjectTeamMember {
 
 export interface ActionItem {
   id: string;
+  /**
+   * `GAP` is a stored `ActionItem` the analysis opened. `STALE_DOCUMENT` is derived on read from a
+   * document an applied plan change made out of date — it has no row, so it cannot be resolved or
+   * closed; it disappears when the document is regenerated or deleted.
+   */
+  kind: 'GAP' | 'STALE_DOCUMENT';
   priority: 'REQUIRED' | 'CONDITIONAL' | 'INFO';
   domain: ManagementDomain;
   title: string;
@@ -235,6 +246,16 @@ export interface DashboardResponse {
   };
   actions: ActionItem[];
   domains: { domain: ManagementDomain; score: number; target: number }[];
+  /** The three most recent plan changes, for the dashboard panel. The full story is its own screen. */
+  planChanges: {
+    id: string;
+    status: PlanChangeStatus;
+    summary: string;
+    at: string;
+    by: string;
+    documents: number;
+    affected: number;
+  }[];
   library: LibraryEntry[];
   activity: {
     id: string;
@@ -287,6 +308,19 @@ export interface InputProfile {
     sizeBytes: number;
     textAvailable: boolean;
   } | null;
+  /**
+   * Every upload on this project, newest first, including older versions of the description
+   * document. Change plan mode pairs one of these with the earlier one it replaces.
+   */
+  uploads: {
+    id: string;
+    fileName: string;
+    group: string;
+    uploadedAt: string;
+    textAvailable: boolean;
+    /** Replaced by a later upload — kept so it can be the "before" half of a comparison. */
+    superseded: boolean;
+  }[];
   policy: { maxFilesPerGroup: number; maxUploadMb: number };
   missingInformation: {
     id: string;
@@ -561,7 +595,74 @@ export interface CatalogEntry {
     structuredData: DocumentStructuredData | null;
     generatedAt: string | null;
     approvedAt: string | null;
+    /** Set by an applied plan change: why this draft is out of date. A flag, not a status. */
+    staleReason: string | null;
+    staleSince: string | null;
   } | null;
+}
+
+// ---------------------------------------------------------------- change plan mode
+
+export type PlanChangeStatus = 'DRAFT' | 'ANALYZED' | 'APPLIED' | 'DISMISSED';
+
+/** One block of the project overview a change has moved. */
+export interface OverviewChange {
+  key: string;
+  label: string;
+  /** What the previous analysis said — the panel shows the movement, not just the result. */
+  previous: string;
+  summary: string;
+  points: string[];
+}
+
+export interface AffectedDocument {
+  documentName: string;
+  reason: string;
+  severity: 'HIGH' | 'MEDIUM' | 'LOW';
+}
+
+/** The delta the model returned. Everything else about a change is derived from it. */
+export interface PlanChangeImpact {
+  summary: string;
+  changedOverview: OverviewChange[];
+  newGaps: PlanningGap[];
+  /** One-based positions in the previous gap list — never titles. */
+  closedGaps: number[];
+  newFindings: AnalysisFinding[];
+  approach: { stillFits: boolean; score: number; note: string; suggested: string | null };
+  affectedDocuments: AffectedDocument[];
+}
+
+/** One document in a change, with the version it replaces where it replaces one. */
+export interface PlanChangeDocument {
+  id: string;
+  referenceId: string;
+  supersedesReferenceId: string | null;
+}
+
+export interface PlanChange {
+  id: string;
+  note: string | null;
+  /** Proposed from what has been uploaded since the last analysis; the PM adds and removes. */
+  documents: PlanChangeDocument[];
+  status: PlanChangeStatus;
+  impact: PlanChangeImpact | null;
+  createdAt: string;
+  analyzedAt: string | null;
+  appliedAt: string | null;
+}
+
+/** A row on the Plan history screen. */
+export interface PlanChangeHistoryEntry {
+  id: string;
+  note: string | null;
+  status: PlanChangeStatus;
+  createdAt: string;
+  analyzedAt: string | null;
+  appliedAt: string | null;
+  createdBy: { id: string; name: string; initials: string };
+  documents: { fileName: string; replacesFileName: string | null }[];
+  impact: PlanChangeImpact | null;
 }
 
 // ---------------------------------------------------------------- customer reference library

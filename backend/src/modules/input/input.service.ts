@@ -57,7 +57,10 @@ export async function inputProfile(projectId: string) {
     prisma.actionItem.findMany({ where: { projectId, status: 'OPEN' }, orderBy: { priority: 'asc' } }),
   ]);
 
-  const descriptionFile = references.find((file) => file.group === DESCRIPTION_GROUP) ?? null;
+  // The current description, not a replaced one: superseded rows are kept for comparison but are
+  // not what this project's profile is about.
+  const descriptionFile =
+    references.find((file) => file.group === DESCRIPTION_GROUP && !file.supersededAt) ?? null;
   const descriptionExtraction = descriptionFile?.extraction as { textAvailable?: boolean } | null;
 
   return {
@@ -99,6 +102,26 @@ export async function inputProfile(projectId: string) {
           textAvailable: Boolean(descriptionExtraction?.textAvailable),
         }
       : null,
+    /**
+     * Every upload on this project, newest first — including the older DESCRIPTION versions that
+     * `descriptionDocument` above hides, since that slot deliberately shows only the current one.
+     *
+     * Change plan mode needs the whole list: "this new file replaces that earlier one" is a pair the
+     * PM picks, and the earlier one is by definition no longer the current version of anything.
+     */
+    uploads: references.map((file) => {
+      const extraction = file.extraction as { textAvailable?: boolean } | null;
+      return {
+        id: file.id,
+        fileName: file.fileName,
+        group: file.group,
+        uploadedAt: file.uploadedAt,
+        /** A file nothing could be read from cannot carry a change, so the picker says so. */
+        textAvailable: Boolean(extraction?.textAvailable),
+        /** Replaced by a later upload. Still listed — it is the "before" half of a comparison. */
+        superseded: Boolean(file.supersededAt),
+      };
+    }),
     policy: { maxFilesPerGroup: env.maxFilesPerGroup, maxUploadMb: env.maxUploadMb },
     missingInformation: openActions.map((action) => ({
       id: action.id,
@@ -697,12 +720,21 @@ export async function registerDescriptionDocument(params: {
 }) {
   const { actorId, ...fileData } = params;
 
+  /**
+   * The previous description is **superseded, not deleted**.
+   *
+   * It used to be deleted outright, which made Change plan mode impossible to use as intended: the
+   * PM uploads the new version of a document precisely so the analysis can say what differs from the
+   * old one, and the old one had just been destroyed by the upload that was supposed to be compared
+   * against it.
+   *
+   * Superseded rows are hidden from the current-document slot and excluded from every analysis — so
+   * nothing reads two versions at once and mistakes the difference between them for a contradiction
+   * in the project — but they stay on disk and stay selectable when recording a change.
+   */
   const previous = await prisma.referenceFile.findMany({
-    where: { projectId: params.projectId, group: DESCRIPTION_GROUP },
+    where: { projectId: params.projectId, group: DESCRIPTION_GROUP, supersededAt: null },
   });
-  if (previous.length) {
-    await prisma.referenceFile.deleteMany({ where: { id: { in: previous.map((file) => file.id) } } });
-  }
 
   const { text, unsupportedFormat } = await extractTextFromFile({
     storageKey: params.storageKey,
@@ -723,6 +755,20 @@ export async function registerDescriptionDocument(params: {
     },
   });
 
+  /**
+   * Marked superseded only now that the replacement exists, and pointed at it.
+   *
+   * `supersededById` is what makes pairing an exact lookup later — a file uploaded before the PM
+   * opened a change is paired by following this pointer, not by guessing from upload times within
+   * a group. Writing only the timestamp left that lookup permanently empty.
+   */
+  if (previous.length) {
+    await prisma.referenceFile.updateMany({
+      where: { id: { in: previous.map((entry) => entry.id) } },
+      data: { supersededAt: new Date(), supersededById: file.id },
+    });
+  }
+
   await logEvent({
     projectId: params.projectId,
     actorId,
@@ -734,7 +780,8 @@ export async function registerDescriptionDocument(params: {
       : 'File stored, but no readable text was found.',
   });
 
-  return file;
+  /** The caller links these into an open plan change, so the two versions can be compared. */
+  return { file, supersededId: previous[0]?.id ?? null };
 }
 
 /**

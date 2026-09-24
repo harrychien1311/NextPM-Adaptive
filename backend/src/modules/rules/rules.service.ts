@@ -26,7 +26,10 @@ async function loadRecommendationContext(projectId: string) {
   const [definitions, values, descriptionFile] = await Promise.all([
     prisma.inputFieldDefinition.findMany({ where: { projectType: project.type } }),
     prisma.projectInputValue.findMany({ where: { projectId }, include: { definition: true } }),
-    prisma.referenceFile.findFirst({ where: { projectId, group: 'DESCRIPTION' }, orderBy: { uploadedAt: 'desc' } }),
+    prisma.referenceFile.findFirst({
+      where: { projectId, group: 'DESCRIPTION', supersededAt: null },
+      orderBy: { uploadedAt: 'desc' },
+    }),
   ]);
 
   const verifiedInputs = values
@@ -131,7 +134,10 @@ export async function runPlanningAnalysis(projectId: string, actorId: string) {
 
   const [values, references, definitions] = await Promise.all([
     prisma.projectInputValue.findMany({ where: { projectId }, include: { definition: true } }),
-    prisma.referenceFile.findMany({ where: { projectId }, orderBy: { uploadedAt: 'asc' } }),
+    // Current uploads only. A superseded version is kept so a plan change can compare against it,
+    // but feeding both versions to this call would have the model report the difference between
+    // them as a contradiction inside the project — which is exactly what it is not.
+    prisma.referenceFile.findMany({ where: { projectId, supersededAt: null }, orderBy: { uploadedAt: 'asc' } }),
     prisma.documentDefinition.findMany({ where: { projectType: project.type }, orderBy: { name: 'asc' } }),
   ]);
 

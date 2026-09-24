@@ -1,19 +1,26 @@
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { projectApi } from '../api/endpoints';
+import { planChangeApi, projectApi } from '../api/endpoints';
 import { useAuth } from '../store/auth';
 import { DashboardView } from './workspace/DashboardView';
 import { InputView } from './workspace/InputView';
 // The view keeps the `approach` route key so existing links and state survive the rename.
 import { PlanningReviewView } from './workspace/PlanningReviewView';
+import { PlanChangeView } from './workspace/PlanChangeView';
+import { PlanHistoryView } from './workspace/PlanHistoryView';
 import { StudioView } from './workspace/StudioView';
 import { AgentDrawer } from './workspace/AgentDrawer';
 import { FloatingAgentButton } from './workspace/FloatingAgentButton';
 import { TeamModal } from './workspace/TeamModal';
 import { SignOutIcon } from '../components/icons';
 
-export type WorkspaceView = 'dashboard' | 'input' | 'approach' | 'studio';
+/**
+ * `history` is the Plan history screen. It is a view but deliberately **not** a nav item: it is not
+ * a step in the planning flow, it is the record of one, so it is entered from the dashboard and
+ * goes back there.
+ */
+export type WorkspaceView = 'dashboard' | 'input' | 'approach' | 'studio' | 'history';
 
 /**
  * Switching view, optionally naming the document to land on.
@@ -26,7 +33,7 @@ export type WorkspaceView = 'dashboard' | 'input' | 'approach' | 'studio';
 export type NavigateToView = (view: WorkspaceView, focusDocument?: string | null) => void;
 
 /** The values `?view=` accepts, so a hand-edited URL cannot put the workspace in a state that isn't one. */
-const WORKSPACE_VIEWS: WorkspaceView[] = ['dashboard', 'input', 'approach', 'studio'];
+const WORKSPACE_VIEWS: WorkspaceView[] = ['dashboard', 'input', 'approach', 'studio', 'history'];
 
 export function WorkspacePage({ projectId }: { projectId: string }) {
   const navigate = useNavigate();
@@ -59,6 +66,16 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
   const workspace = useQuery({
     queryKey: ['workspace', projectId],
     queryFn: () => projectApi.workspace(projectId),
+  });
+
+  /**
+   * The change the PM currently has open, if any. Held here rather than inside a view because two
+   * screens read it — Project Input to know which button to offer, and `approach` to know whether it
+   * is showing Planning Review or Change impact.
+   */
+  const planChange = useQuery({
+    queryKey: ['plan-change', projectId],
+    queryFn: () => planChangeApi.current(projectId),
   });
 
   if (workspace.isLoading) {
@@ -237,8 +254,19 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
 
           {view === 'dashboard' && <DashboardView projectId={projectId} onNavigate={goToView} />}
           {view === 'input' && <InputView projectId={projectId} onNavigate={goToView} />}
-          {view === 'approach' && <PlanningReviewView projectId={projectId} onNavigate={goToView} />}
+          {/*
+            One route, two screens, chosen by data rather than by a flag: an analysed plan change
+            turns Planning Review into Change impact. A refresh or an old bookmark therefore lands
+            in the right place, and applying the change hands the route straight back.
+          */}
+          {view === 'approach' &&
+            (planChange.data?.change?.status === 'ANALYZED' ? (
+              <PlanChangeView projectId={projectId} change={planChange.data.change} onNavigate={goToView} />
+            ) : (
+              <PlanningReviewView projectId={projectId} onNavigate={goToView} />
+            ))}
           {view === 'studio' && <StudioView projectId={projectId} focusDocument={focusDocument} />}
+          {view === 'history' && <PlanHistoryView projectId={projectId} onNavigate={goToView} />}
         </main>
       </div>
 

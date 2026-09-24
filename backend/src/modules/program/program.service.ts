@@ -214,6 +214,17 @@ export async function programOverview(user: { id: string; role: Role }) {
         canEdit: isProgramOwner || isProjectOwner || membership?.role === ProjectRole.OWNER,
         /** Deletion is irreversible, so it stays with the project's own owner (or the program owner). */
         canDelete: isProgramOwner || isProjectOwner,
+        /**
+         * Whether "Change plan" belongs on this card. Two conditions, and both matter:
+         *
+         * there must be a plan to change — before a governance model is confirmed the right action
+         * is the analysis itself, and `startPlanChange` refuses — and the viewer must be able to
+         * write, since recording a change is a write like any other. Computed here beside the other
+         * capability flags rather than inferred in the client from `approach !== null`, which would
+         * offer a reader a button the server answers 403.
+         */
+        canChangePlan:
+          Boolean(decision) && (isProgramOwner || isProjectOwner || membership?.role === ProjectRole.OWNER),
         ...stats,
       };
     }),

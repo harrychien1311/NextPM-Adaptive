@@ -1,4 +1,4 @@
-import { DocumentStatus, Prisma } from '@prisma/client';
+import { ActionPriority, DocumentStatus, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 import { notFound } from '../../lib/http-error';
 import { listEvents } from '../audit/audit.service';
@@ -11,7 +11,11 @@ const DEFAULT_WIDGETS = {
   outputs: true,
   tasks: true,
   decisions: true,
-  domains: true,
+  // `domains` (Project information coverage) was retired from the dashboard — it measured how full
+  // the intake form is, which is our administration rather than anything about the project. Plan
+  // history took its place. `domains` stays in the payload: `recomputeDomainReadiness` still runs
+  // and the rows are still the record of per-domain input coverage.
+  history: true,
   activity: true,
 };
 
@@ -19,15 +23,36 @@ const DEFAULT_WIDGETS = {
 export async function dashboard(projectId: string, userId: string) {
   const workspace = await projectWorkspace(projectId);
 
-  const [actions, domains, documents, references, activity, layout] = await Promise.all([
+  const [actions, domains, documents, references, planChanges, activity, layout] = await Promise.all([
     prisma.actionItem.findMany({ where: { projectId, status: 'OPEN' }, orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }] }),
     prisma.domainReadiness.findMany({ where: { projectId } }),
     prisma.planningDocument.findMany({
       where: { projectId },
-      select: { id: true, name: true, status: true, requirement: true, version: true, domain: true, generatedAt: true },
+      select: {
+        id: true,
+        name: true,
+        status: true,
+        requirement: true,
+        version: true,
+        domain: true,
+        generatedAt: true,
+        staleReason: true,
+        staleSince: true,
+      },
       orderBy: { name: 'asc' },
     }),
     prisma.referenceFile.findMany({ where: { projectId }, orderBy: { uploadedAt: 'desc' } }),
+    /**
+     * The three most recent plan changes, for the dashboard panel. Three because the panel answers
+     * "has anything moved lately", not "what is the history" — the history screen is one click away
+     * and is the right place for the whole story.
+     */
+    prisma.planChange.findMany({
+      where: { projectId },
+      orderBy: { createdAt: 'desc' },
+      take: 3,
+      include: { createdBy: { select: { name: true } }, documents: { select: { id: true } } },
+    }),
     listEvents(projectId, 8),
     prisma.dashboardLayout.findUnique({ where: { projectId_userId: { projectId, userId } } }),
   ]);
@@ -57,10 +82,48 @@ export async function dashboard(projectId: string, userId: string) {
   const documentStatusByName = new Map(documents.map((doc) => [doc.name.trim().toLowerCase(), doc.status]));
   const actionRows = actions.map((action) => ({
     ...action,
+    kind: 'GAP' as const,
     targetDocumentStatus: action.targetDocument
       ? documentStatusByName.get(action.targetDocument.trim().toLowerCase()) ?? null
       : null,
   }));
+
+  /**
+   * A document an applied plan change made out of date is an open question for the PM, so it belongs
+   * on this list — the flag alone only shows to somebody who happens to open that document in the
+   * Studio, which is precisely the person who already knows.
+   *
+   * **Derived, not stored.** `syncPlanningActions` rebuilds the whole OPEN set from the gaps on every
+   * analysis, so an `ActionItem` written here would be wiped by the next one. Deriving it also gives
+   * the entry the right lifetime for free: it disappears when the document is regenerated or
+   * deleted, because that is when the flag goes, and there is nothing to keep in step.
+   *
+   * `targetDocumentStatus` is deliberately left null. It drives the "Resolved — confirmed by the PM"
+   * pill, and a document that is both approved *and* out of date is the one case where that reading
+   * would be exactly backwards.
+   */
+  const staleRows = documents
+    .filter((doc) => doc.staleReason)
+    .map((doc) => ({
+      id: `stale:${doc.id}`,
+      projectId,
+      kind: 'STALE_DOCUMENT' as const,
+      // An approved baseline that no longer holds is the more urgent of the two: it is the version
+      // somebody signed and may already have sent.
+      priority: (doc.status === DocumentStatus.APPROVED ? 'REQUIRED' : 'CONDITIONAL') as ActionPriority,
+      domain: doc.domain,
+      title: `${doc.name} is out of date`,
+      description: doc.staleReason,
+      targetView: 'studio',
+      targetDocument: doc.name,
+      targetDocumentStatus: null,
+      suggestions: [],
+      status: 'OPEN' as const,
+      resolvedValue: null,
+      blocksDocument: null,
+      createdAt: doc.staleSince ?? new Date(),
+      resolvedAt: null,
+    }));
 
   const gapNames = await gapDocumentNames(projectId);
   const inScope = gapNames ? documents.filter((doc) => gapNames.includes(doc.name)) : documents;
@@ -162,8 +225,29 @@ export async function dashboard(projectId: string, userId: string) {
       complete: planningTasks.filter((task) => task.state === 'DONE').length,
       total: planningTasks.length,
     },
-    actions: actionRows,
+    /**
+     * Out-of-date documents first: they are the consequence of a change the PM has just applied, so
+     * they are the newest thing on the list and the reason they came to this screen.
+     */
+    actions: [...staleRows, ...actionRows],
     domains: domains.map((row) => ({ domain: row.domain, score: row.score, target: row.target })),
+    /**
+     * What the Plan history panel shows. Flattened here rather than sent whole: the panel needs a
+     * headline and a count, and shipping every impact for three changes would put several kilobytes
+     * of JSON on a screen that shows one line each.
+     */
+    planChanges: planChanges.map((change) => {
+      const impact = change.impact as { summary?: string; affectedDocuments?: unknown[] } | null;
+      return {
+        id: change.id,
+        status: change.status,
+        summary: impact?.summary || change.note || 'Change recorded',
+        at: change.appliedAt ?? change.analyzedAt ?? change.createdAt,
+        by: change.createdBy.name,
+        documents: change.documents.length,
+        affected: impact?.affectedDocuments?.length ?? 0,
+      };
+    }),
     /**
      * Every document attached to this project, whichever end it came from: files the PM uploaded
      * on the Input screen, and drafts the AI wrote in the Planning Studio. `origin` is what the

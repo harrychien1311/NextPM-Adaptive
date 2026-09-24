@@ -87,6 +87,10 @@ enum ReferenceGroup {
   SCHEDULE // committed dates, launch calendar, estimate
   OTHER // anything else about the project the PM wants the agent to read
   DESCRIPTION // free-form project description document, read for AI analysis
+  /// Uploaded while recording a plan change. Its own value so these do not land in one of the four
+  /// classified tiles and exhaust that tile's two-file limit — a PM who attached ten documents to a
+  /// change would otherwise find they could never add an "Others" reference again.
+  CHANGE
 }
 
 enum ReferenceStatus {
@@ -127,6 +131,17 @@ enum ActionStatus {
   DISMISSED
 }
 
+enum PlanChangeStatus {
+  /// The PM is still writing it — the note and the upload are being collected.
+  DRAFT
+  /// The model has produced a delta and the PM is looking at the impact.
+  ANALYZED
+  /// Merged into a new snapshot; the plan has moved.
+  APPLIED
+  /// Abandoned. Kept rather than deleted, so "we considered this and decided against it" survives.
+  DISMISSED
+}
+
 enum TaskState {
   TODO
   REVIEW
@@ -161,6 +176,7 @@ model User {
   ownedPrograms    Program[]
   ownedProjects    Project[]           @relation("projectOwner")
   agentSessions    AgentSession[]
+  planChanges      PlanChange[]        @relation("planChangeAuthor")
   memberships      ProjectMember[]
   decisions        ApproachDecision[]
   approvedDocs     PlanningDocument[]  @relation("documentApprover")
@@ -232,6 +248,7 @@ model Project {
   decisions        ApproachDecision[]
   documents        PlanningDocument[]
   actionItems      ActionItem[]
+  planChanges      PlanChange[]
   tasks            PlanningTask[]
   domainReadiness  DomainReadiness[]
   auditEvents      AuditEvent[]
@@ -336,6 +353,17 @@ model ReferenceFile {
   aiSuggestions AiApproachSuggestion[]
 
   @@index([projectId, group])
+  /// Set when a newer upload took this file's place. The row and its bytes are kept: a plan change
+  /// is measured by comparing the new version against the one it replaced, and a superseded file
+  /// that has been deleted cannot be compared with anything.
+  ///
+  /// Superseded files are excluded from every analysis — reading both versions at once would make
+  /// the model report the difference between them as a contradiction in the project.
+  supersededAt DateTime?
+  /// Which upload took its place. Kept alongside the timestamp so pairing a change's documents is
+  /// an exact lookup rather than a guess from upload times within the same group.
+  supersededById String?
+
   @@map("reference_files")
 }
 
@@ -375,6 +403,9 @@ model AiApproachSuggestion {
   /// RECOMMENDED when the model chose the approach, PM_CHOSEN when it merely scored the PM's own.
   /// The Approach Advisory panel is read-only in the second case — there is nothing to switch to.
   approachMode        String   @default("RECOMMENDED")
+  /// The snapshot this one was merged from, when a plan change produced it. Snapshots are immutable,
+  /// so a change writes a new row and links back — that chain is the history of the plan itself.
+  changeOfId          String?
   /// Which writer produced this snapshot: "anthropic" or "mock". The AI call falls back to the
   /// deterministic mock on any error, so without this a heuristic result is indistinguishable
   /// from a real one — both to the PM and to anyone auditing the decision later.
@@ -472,6 +503,11 @@ model PlanningDocument {
   approvedById  String?
   approvedAt    DateTime?
   pmQuestions   Json             @default("[]")
+  /// Why a plan change made this draft out of date, in the model's words. A flag only: the document
+  /// is never rewritten, unapproved or deleted on its own — an approved document is something the PM
+  /// signed, and only the PM decides what happens to it.
+  staleReason   String?
+  staleSince    DateTime?
   createdAt     DateTime         @default(now())
   updatedAt     DateTime         @updatedAt
 
@@ -534,6 +570,60 @@ model ActionItem {
 
   @@index([projectId, status])
   @@map("action_items")
+}
+
+/// One recorded change to a plan that already exists, and what it turned out to affect.
+///
+/// The PM enters this mode only once the project has a confirmed governance model — before that
+/// there is no plan to change and re-running the analysis is the right move. At most one row per
+/// project may be DRAFT or ANALYZED: two changes analysed in parallel would be merged onto the same
+/// snapshot and nobody could say what the result represents.
+model PlanChange {
+  id                    String           @id @default(uuid())
+  projectId             String
+  /// What the PM says changed, in their own words. Optional — the change may be a document alone.
+  note                  String?
+  status                PlanChangeStatus @default(DRAFT)
+  /// Uploads the PM took out of this change. A tombstone list, so the automatic suggestion pass does
+  /// not put them straight back — which would make the remove button look broken.
+  removedReferenceIds   Json             @default("[]")
+  /// The delta the model returned, kept after applying so the history screen can replay it.
+  impact                Json?
+  /// The snapshot that applying this change produced.
+  analysisId            String?
+  createdById           String
+  createdAt             DateTime         @default(now())
+  analyzedAt            DateTime?
+  appliedAt             DateTime?
+
+  project   Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy User                 @relation("planChangeAuthor", fields: [createdById], references: [id], onDelete: Cascade)
+  documents PlanChangeDocument[]
+
+  @@index([projectId, status])
+  @@map("plan_changes")
+}
+
+/// One document that is part of a change, and the version it replaced if it replaced one.
+///
+/// A change is rarely one file — a revised SOW usually arrives with a change request form and an
+/// updated schedule — and a single pair on `PlanChange` silently dropped everything but the newest
+/// upload. Rows are proposed automatically from what has been uploaded since the last analysis and
+/// the PM removes what does not belong; both halves matter, because auto-including everything sweeps
+/// up unrelated files and asking the PM to add each one by hand is how documents get forgotten.
+model PlanChangeDocument {
+  id                    String   @id @default(uuid())
+  changeId              String
+  /// The new or revised document.
+  referenceId           String
+  /// The version it supersedes, when it is a new version of something rather than a new document.
+  supersedesReferenceId String?
+  createdAt             DateTime @default(now())
+
+  change PlanChange @relation(fields: [changeId], references: [id], onDelete: Cascade)
+
+  @@unique([changeId, referenceId])
+  @@map("plan_change_documents")
 }
 
 model PlanningTask {

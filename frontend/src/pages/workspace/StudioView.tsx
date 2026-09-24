@@ -267,6 +267,13 @@ export function StudioView({
   const gaps = draft?.gaps ?? [];
   const answeredCount = gaps.filter((gap) => gap.answer?.trim()).length;
   const isApproved = draft?.status === 'APPROVED';
+  /**
+   * An approved baseline is frozen — except when an applied plan change has said this version no
+   * longer holds. The change is the record of why, so regenerating is allowed there and writes a
+   * new version the PM has to approve again. Without this the banner told them to regenerate while
+   * the button stayed grey.
+   */
+  const frozen = isApproved && !draft?.staleReason;
 
   const startEditing = () => {
     setEditSections((draft?.sections ?? []).map((section) => ({ title: section.title, content: section.content ?? '' })));
@@ -440,20 +447,51 @@ export function StudioView({
               className={`primary${lockClass}`}
               {...lockedProps}
               onClick={guard(() => generate.mutate())}
-              disabled={canWrite && (generate.isPending || !selected || isApproved)}
+              disabled={canWrite && (generate.isPending || !selected || frozen)}
               title={
-                canWrite && isApproved
+                canWrite && frozen
                   ? 'Approved documents are versioned — they cannot be regenerated'
-                  : lockedProps.title
+                  : canWrite && isApproved
+                    ? `A plan change made this version out of date — regenerating writes v${(draft?.version ?? 1) + 1} for you to approve`
+                    : lockedProps.title
               }
             >
               {generate.isPending
                 ? '✦ Generating…'
-                : draft && draft.status !== 'NOT_GENERATED'
-                  ? '✦ Regenerate document'
-                  : '✦ Generate document'}
+                : isApproved
+                  ? `✦ Regenerate as v${(draft?.version ?? 1) + 1}`
+                  : draft && draft.status !== 'NOT_GENERATED'
+                    ? '✦ Regenerate document'
+                    : '✦ Generate document'}
             </button>
           </div>
+
+          {/*
+            An applied plan change said this draft no longer holds. It is a flag and nothing else:
+            the document is not rewritten, not unapproved and not deleted — an approved document is
+            something the PM signed, and what happens to it is their decision, not the agent's.
+            Regenerating clears the flag; so does deleting it from the dashboard library.
+          */}
+          {draft?.staleReason && (
+            <div className="stale-banner">
+              <span>!</span>
+              <div>
+                <strong>
+                  Out of date since the plan changed
+                  {draft.staleSince ? ` on ${new Date(draft.staleSince).toLocaleDateString()}` : ''}
+                </strong>
+                <p>{draft.staleReason}</p>
+                {draft.status === 'APPROVED' && (
+                  <p>
+                    <b>This version is approved and still in the baseline.</b> Regenerating it writes
+                    v{draft.version + 1} and returns it to review, so you approve the new one
+                    yourself. You can also delete it from the dashboard’s document list — nothing has
+                    been done to it for you.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
 
           {draft && draft.status !== 'NOT_GENERATED' ? (
             <section className="panel generated-preview">

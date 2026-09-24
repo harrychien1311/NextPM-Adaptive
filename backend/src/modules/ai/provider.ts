@@ -1,4 +1,5 @@
 import { env } from '../../config/env';
+import { serviceUnavailable } from '../../lib/http-error';
 import { tableSchema } from '../../data/table-documents';
 import { DEFAULT_GOVERNANCE_MODELS } from '../../data/governance-models';
 
@@ -342,7 +343,7 @@ async function callAnthropicJson<T>(params: { system: string; prompt: string; la
   });
 
   if (!response.ok) {
-    throw new Error(`Anthropic API error ${response.status}: ${await response.text()}`);
+    throw serviceUnavailable(`Anthropic API error ${response.status}: ${await response.text()}`);
   }
 
   const data = (await response.json()) as AnthropicResponse;
@@ -359,13 +360,16 @@ async function callAnthropicJson<T>(params: { system: string; prompt: string; la
 
   // Check why generation stopped before parsing. A truncated or declined response is still HTTP
   // 200, and parsing it first turns a diagnosable cause into "Unterminated string in JSON".
+  // These are all "the model gave us nothing usable", never a fault in this server. Thrown as HTTP
+  // errors so the reason survives to the screen: the calls with no mock fallback let them through,
+  // and the error handler replaces any plain Error with "Unexpected server error" in production.
   if (data.stop_reason === 'max_tokens') {
-    throw new Error(
+    throw serviceUnavailable(
       `Anthropic response was truncated at the ${MAX_OUTPUT_TOKENS}-token ceiling, so the JSON is incomplete.`,
     );
   }
   if (data.stop_reason === 'refusal') {
-    throw new Error(
+    throw serviceUnavailable(
       `Anthropic declined this request (${data.stop_details?.category ?? 'unspecified'}): ${
         data.stop_details?.explanation ?? 'no explanation given'
       }`,
@@ -380,12 +384,14 @@ async function callAnthropicJson<T>(params: { system: string; prompt: string; la
     .replace(/```json|```/g, '')
     .trim();
 
-  if (!text) throw new Error(`Anthropic returned no text content (stop_reason: ${data.stop_reason ?? 'unknown'})`);
+  if (!text) {
+    throw serviceUnavailable(`Anthropic returned no text content (stop_reason: ${data.stop_reason ?? 'unknown'})`);
+  }
 
   try {
     return JSON.parse(text) as T;
   } catch (error) {
-    throw new Error(
+    throw serviceUnavailable(
       `Anthropic returned text that is not valid JSON (${(error as Error).message}). First 200 chars: ${text.slice(0, 200)}`,
     );
   }
@@ -1523,8 +1529,8 @@ function buildPlanningAnalysisPrompt(context: PlanningAnalysisContext): string {
  */
 export async function analyzePlanningNeeds(context: PlanningAnalysisContext): Promise<PlanningAnalysisOutput> {
   if (env.ai.provider !== 'anthropic' || !env.ai.anthropicKey) {
-    throw new Error(
-      'Planning analysis needs a model: set AI_PROVIDER=anthropic and ANTHROPIC_API_KEY. It has no offline fallback, because an invented analysis is worse than none.',
+    throw serviceUnavailable(
+      'Planning analysis needs a model, and this server is running on the deterministic mock: set AI_PROVIDER=anthropic and ANTHROPIC_API_KEY. There is no offline fallback here on purpose, because an invented analysis is worse than none.',
     );
   }
 
@@ -1567,6 +1573,280 @@ export async function analyzePlanningNeeds(context: PlanningAnalysisContext): Pr
       result.customer?.name?.trim() && result.customer.evidence?.trim()
         ? { name: result.customer.name.trim(), evidence: result.customer.evidence.trim() }
         : null,
+    provider: 'anthropic',
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Skill 1c — "Analyze the change"
+//
+// The delta call behind Change plan mode. It answers a different question from `analyzePlanningNeeds`
+// and therefore has a different prompt: not "what is this project", but "against the analysis you
+// already have, what moved, and what in the existing plan is now wrong".
+//
+// **The model returns only the delta; the server merges it** (`lib/merge-snapshot.ts`). That is what
+// makes this cheap: a full re-analysis writes ~11k output tokens, of which the overwhelming majority
+// is a restatement of what did not change. Output is the expensive half — roughly five times input —
+// so cutting it is the only optimisation here that matters. It also means every panel downstream
+// keeps receiving an ordinary `AiApproachSuggestion` and none of them needs to know this mode exists.
+// ---------------------------------------------------------------------------
+
+/** One block of the previous overview that the change has moved. */
+export interface OverviewChange {
+  key: string;
+  label: string;
+  /** What the previous analysis said, so the PM can see the movement rather than only the result. */
+  previous: string;
+  summary: string;
+  points: string[];
+}
+
+/** A generated document the change has made out of date. */
+export interface AffectedDocument {
+  /** Copied exactly from the list of this project's generated documents. */
+  documentName: string;
+  /** Why *this* document is now wrong — specific, not "the plan changed". */
+  reason: string;
+  severity: 'HIGH' | 'MEDIUM' | 'LOW';
+}
+
+export interface PlanChangeImpact {
+  summary: string;
+  /** Empty when the change turned out not to move the picture of the project. */
+  changedOverview: OverviewChange[];
+  newGaps: PlanningGap[];
+  /**
+   * Indices into the numbered list of previous gaps the prompt was given — never titles. A gap
+   * title is free text and matching it back by string silently drops the ones whose wording drifted.
+   */
+  closedGaps: number[];
+  newFindings: AnalysisFinding[];
+  approach: {
+    /** False only when the evidence genuinely no longer supports the model in force. */
+    stillFits: boolean;
+    score: number;
+    note: string;
+    /** A model to consider instead. A suggestion only — the PM re-decides on Planning Review. */
+    suggested: string | null;
+  };
+  affectedDocuments: AffectedDocument[];
+  provider: AiProvider;
+}
+
+export interface PlanChangeContext {
+  projectName: string;
+  projectType: string;
+  approach: string;
+  /** What the PM wrote. At least one of this and `changedDocuments` is always present. */
+  note: string | null;
+  /**
+   * Every document this change brings, each with the version it replaces where it replaces one.
+   * A change is rarely a single file.
+   */
+  changedDocuments: {
+    label: string;
+    text: string;
+    replaces: { label: string; text: string } | null;
+  }[];
+  /**
+   * The project's other current documents, unchanged by this change.
+   *
+   * They are here because `newFindings` asks for contradictions between the new material and what
+   * was already on file — and without them the model cannot see what is already on file, so it was
+   * being asked for something it had no way to produce. A whole project's corpus is a few thousand
+   * tokens, so this costs cents and makes the answer real.
+   */
+  otherDocuments: { label: string; text: string }[];
+  previous: {
+    summary: string;
+    overview: OverviewSection[];
+    gaps: PlanningGap[];
+    findings: AnalysisFinding[];
+  };
+  /** Documents already generated for this project, by name — the only ones that can be affected. */
+  generatedDocuments: string[];
+  catalogDocuments: string[];
+}
+
+const PLAN_CHANGE_SYSTEM_PROMPT = `You are the NextPM planning agent. This project already has an analysis and a confirmed governance
+model. The PM is telling you something has changed. Your job is NOT to analyse the project again —
+it is to say precisely what has moved since the analysis you are shown, and what in the existing
+plan is now wrong.
+
+Report only differences. If a part of the picture is unchanged, leave it out entirely; an empty
+array is a good answer and is much more useful than a restatement. A change you cannot point at
+evidence for did not happen.
+
+"changedOverview" — only blocks whose substance has moved. Reuse the block's existing "key". Put
+what the previous analysis said in "previous" and the new reading in "summary", so the PM sees the
+movement and not just the result.
+
+"closedGaps" — the NUMBERS of previously listed gaps the change has closed, from the numbered list
+you are given. Use the numbers, never the titles. A gap is closed only when the change actually
+settles it, not when it becomes less urgent.
+
+"newGaps" — gaps the change has opened. Same rules as before: point at a hole, name the catalog
+document that would close it copied EXACTLY from the list, or null.
+
+"newFindings" — new contradictions the change creates. Two places to look, and both matter:
+between a new document and the version it replaces, where the two disagree about a date, a number
+or a commitment; and between a new document and the material ALREADY ON FILE, which the change was
+not written against and may now contradict. Quote both sides. Do not re-raise a contradiction the
+previous analysis already listed.
+
+"approach" — does the governance model in force still fit what the project has become? Set
+"stillFits" false only when the evidence genuinely no longer supports it, and name an alternative in
+"suggested". You are advising: the PM re-decides this themselves, so an honest "still fits" is the
+expected answer and a gratuitous switch wastes their time.
+
+"affectedDocuments" — the heart of this call. For each ALREADY GENERATED document, in the list you
+are given, that the change makes wrong, say specifically WHY it is wrong: which section, date,
+number or commitment no longer holds. "The plan changed" is not a reason. Copy the document name
+exactly. A document the change does not touch must not appear.
+
+Language: write everything in English whatever language the documents are in. Proper nouns keep the
+spelling their document uses. Evidence carries "english", the verbatim "original" where the source
+is not English, and "source" naming the file exactly.
+
+Return strict JSON and nothing else:
+{ "summary": string (one sentence: what changed, in the PM's terms),
+  "changedOverview": [{ "key": string, "label": string, "previous": string, "summary": string, "points": string[] }],
+  "newGaps": [{ "title": string, "why": string, "documentName": string|null, "severity": "HIGH"|"MEDIUM"|"LOW" }],
+  "closedGaps": number[],
+  "newFindings": [{ "title": string, "detail": string,
+                    "evidence": [{ "english": string, "original": string, "source": string }] }],
+  "approach": { "stillFits": boolean, "score": number, "note": string, "suggested": string|null },
+  "affectedDocuments": [{ "documentName": string, "reason": string, "severity": "HIGH"|"MEDIUM"|"LOW" }] }`;
+
+function buildPlanChangePrompt(context: PlanChangeContext): string {
+  const overview = context.previous.overview
+    .map((block) => `- [${block.key}] ${block.label}: ${block.summary}`)
+    .join('\n');
+  // Numbered, because `closedGaps` refers to these positions. One-based: it reads naturally in a
+  // prompt and the server subtracts one when merging.
+  const gaps = context.previous.gaps
+    .map((gap, index) => `${index + 1}. ${gap.title} — ${gap.why}${gap.documentName ? ` [${gap.documentName}]` : ''}`)
+    .join('\n');
+  const findings = context.previous.findings.map((finding) => `- ${finding.title}: ${finding.detail}`).join('\n');
+
+  return [
+    `Project: ${context.projectName} · type ${context.projectType}`,
+    `Governance model in force: ${context.approach}`,
+    '',
+    '=== THE ANALYSIS AS IT STANDS ===',
+    context.previous.summary,
+    '',
+    'Overview:',
+    overview || '- none recorded',
+    '',
+    'Open planning gaps (refer to these by NUMBER in "closedGaps"):',
+    gaps || '- none recorded',
+    '',
+    'Findings already raised:',
+    findings || '- none',
+    '',
+    'Documents already generated for this project (only these can be affected):',
+    context.generatedDocuments.map((name) => `- ${name}`).join('\n') || '- none generated yet',
+    '',
+    'Catalog documents this project can produce (use these names verbatim in newGaps):',
+    context.catalogDocuments.map((name) => `- ${name}`).join('\n') || '- none',
+    '',
+    '=== WHAT HAS CHANGED ===',
+    context.note ? `The PM writes:\n${context.note}` : 'The PM has not written a note; the change is in the documents below.',
+    '',
+    context.changedDocuments.length
+      ? context.changedDocuments
+          .map((document) =>
+            [
+              `--- ${document.label}${document.replaces ? ` (a new version of "${document.replaces.label}")` : ' (new document)'} ---`,
+              document.text,
+            ].join('\n'),
+          )
+          .join('\n\n')
+      : '- no document uploaded; the note above is the whole change',
+    '',
+    // Kept in their own block rather than beside each new version: they are NOT current, and a
+    // model reading them as current would report the project's own history back as a contradiction.
+    context.changedDocuments.some((document) => document.replaces)
+      ? [
+          '=== REPLACED VERSIONS (for comparison only — these are NOT current) ===',
+          'Compare each new version against the one it replaces and report what actually differs.',
+          'Do not re-describe what both versions already said.',
+          '',
+          context.changedDocuments
+            .filter((document) => document.replaces)
+            .map((document) => `--- ${document.replaces!.label} (replaced by ${document.label}) ---\n${document.replaces!.text}`)
+            .join('\n\n'),
+        ].join('\n')
+      : '=== REPLACED VERSIONS ===\n- nothing was replaced; every document above is new',
+    '',
+    context.otherDocuments.length
+      ? [
+          '=== ALREADY ON FILE (current, unchanged by this change) ===',
+          'Use these to judge whether the change contradicts what the project already holds.',
+          '',
+          context.otherDocuments.map((document) => `--- ${document.label} ---\n${document.text}`).join('\n\n'),
+        ].join('\n')
+      : '=== ALREADY ON FILE ===\n- nothing else is on file',
+  ].join('\n');
+}
+
+/**
+ * No mock fallback, for the same reason as `analyzePlanningNeeds` and one more besides: this call's
+ * output flags documents the PM has already approved. An invented delta would put "out of date" on a
+ * signed baseline, which is worse than saying nothing at all.
+ */
+export async function analyzePlanChange(context: PlanChangeContext): Promise<PlanChangeImpact> {
+  if (env.ai.provider !== 'anthropic' || !env.ai.anthropicKey) {
+    throw serviceUnavailable(
+      'Change analysis needs a model, and this server is running on the deterministic mock: set AI_PROVIDER=anthropic and ANTHROPIC_API_KEY. There is no offline fallback here on purpose, because an invented impact would flag documents the PM has already approved.',
+    );
+  }
+
+  const result = await callAnthropicJson<Omit<PlanChangeImpact, 'provider'>>({
+    system: PLAN_CHANGE_SYSTEM_PROMPT,
+    prompt: buildPlanChangePrompt(context),
+    label: 'skill1c:plan-change',
+  });
+
+  const gapCount = context.previous.gaps.length;
+  const generated = new Set(context.generatedDocuments.map((name) => name.trim().toLowerCase()));
+
+  return {
+    summary: String(result.summary ?? ''),
+    changedOverview: (result.changedOverview ?? []).map((block) => ({
+      key: String(block.key ?? ''),
+      label: String(block.label ?? ''),
+      previous: String(block.previous ?? ''),
+      summary: String(block.summary ?? ''),
+      points: (block.points ?? []).map(String),
+    })),
+    newGaps: result.newGaps ?? [],
+    // Out-of-range indices are dropped rather than trusted: a stray number would otherwise close a
+    // gap the model never meant to name, and nothing downstream could tell that had happened.
+    closedGaps: [...new Set((result.closedGaps ?? []).map(Number))].filter(
+      (index) => Number.isInteger(index) && index >= 1 && index <= gapCount,
+    ),
+    newFindings: (result.newFindings ?? []).map((finding) => ({
+      title: String(finding.title ?? ''),
+      detail: String(finding.detail ?? ''),
+      evidence: normalizeEvidence(finding.evidence),
+    })),
+    approach: {
+      stillFits: result.approach?.stillFits !== false,
+      score: Number(result.approach?.score ?? 0),
+      note: String(result.approach?.note ?? ''),
+      suggested: result.approach?.suggested?.trim() ? result.approach.suggested.trim() : null,
+    },
+    // Only documents that actually exist. The flag drives an amber banner on a real document and a
+    // PM action pointing at it, so a name the model invented would produce a dead end.
+    affectedDocuments: (result.affectedDocuments ?? [])
+      .map((entry) => ({
+        documentName: String(entry.documentName ?? '').trim(),
+        reason: String(entry.reason ?? '').trim(),
+        severity: entry.severity === 'HIGH' || entry.severity === 'LOW' ? entry.severity : ('MEDIUM' as const),
+      }))
+      .filter((entry) => entry.documentName && entry.reason && generated.has(entry.documentName.toLowerCase())),
     provider: 'anthropic',
   };
 }
