@@ -11,14 +11,17 @@ import { contentDisposition, decodeUploadFileName } from '../../lib/file-names';
 import { requireRole } from '../../middleware/auth';
 import {
   addChecklist,
+  addReference,
   addTemplate,
   checklistItems,
   createCustomer,
   customerFile,
   deleteChecklist,
   deleteCustomer,
+  deleteReference,
   deleteTemplate,
   listCustomers,
+  listDocumentTypes,
   resolveCustomer,
   setLogo,
   translateChecklist,
@@ -49,8 +52,12 @@ function uploader(allowed: string[]) {
   });
 }
 
+/** An approved example or a lessons-learned record may be any readable document, PDF included. */
+const REFERENCE_TYPES = [...DOCUMENT_TYPES, '.pdf', '.txt', '.md'];
+
 const uploadDocument = uploader(DOCUMENT_TYPES);
 const uploadImage = uploader(IMAGE_TYPES);
+const uploadReference = uploader(REFERENCE_TYPES);
 
 export const customerRouter = Router();
 
@@ -65,6 +72,14 @@ customerRouter.get(
   '/',
   asyncHandler(async (_req, res) => {
     res.json({ customers: await listCustomers() });
+  }),
+);
+
+/** The document names a template can be uploaded for — the catalog's own spellings. */
+customerRouter.get(
+  '/document-types',
+  asyncHandler(async (_req, res) => {
+    res.json({ documentTypes: await listDocumentTypes() });
   }),
 );
 
@@ -195,6 +210,40 @@ customerRouter.delete(
   }),
 );
 
+/** A document for the library's Approved Examples or Lessons Learned tab. */
+customerRouter.post(
+  '/:customerId/references',
+  requireLibraryWriter,
+  uploadReference.single('file'),
+  asyncHandler(async (req, res) => {
+    if (!req.file) throw new Error('No file uploaded');
+    const body = parse(
+      z.object({ kind: z.enum(['APPROVED_EXAMPLE', 'LESSON_LEARNED']), title: z.string().max(200).optional() }),
+      req.body ?? {},
+    );
+    res.status(201).json(
+      await addReference({
+        customerId: req.params.customerId,
+        kind: body.kind,
+        title: body.title,
+        fileName: decodeUploadFileName(req.file.originalname),
+        mimeType: req.file.mimetype,
+        sizeBytes: req.file.size,
+        storageKey: req.file.filename,
+        actorId: req.user!.id,
+      }),
+    );
+  }),
+);
+
+customerRouter.delete(
+  '/references/:referenceId',
+  requireLibraryWriter,
+  asyncHandler(async (req, res) => {
+    res.json(await deleteReference(req.params.referenceId));
+  }),
+);
+
 customerRouter.post(
   '/:customerId/logo',
   requireLibraryWriter,
@@ -213,10 +262,10 @@ customerRouter.post(
 );
 
 /** Serves the stored original — the uploader checks the parse against the real file. */
-const FILE_KINDS = { checklists: 'checklist', templates: 'template', logo: 'logo' } as const;
+const FILE_KINDS = { checklists: 'checklist', templates: 'template', logo: 'logo', references: 'reference' } as const;
 
 customerRouter.get(
-  '/:kind(checklists|templates|logo)/:id/file',
+  '/:kind(checklists|templates|logo|references)/:id/file',
   asyncHandler(async (req, res) => {
     const kind = FILE_KINDS[req.params.kind as keyof typeof FILE_KINDS];
     const file = await customerFile(kind, req.params.id);

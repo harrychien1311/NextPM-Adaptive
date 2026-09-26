@@ -187,6 +187,61 @@ model User {
   @@map("users")
 }
 
+/// One run of the Planning Assessment rule catalog against a project.
+///
+/// An immutable snapshot, for the same reason `AiApproachSuggestion` is one: it records what the
+/// rules said at a moment, with the catalog version that said it. A PM who confirms a governance
+/// model on Monday must still be able to see what the assessment reported on Monday, not what it
+/// would report today against a catalog that has since gained rules.
+///
+/// `results` holds one entry per evaluated rule — `{ruleId, status, severity, message, evidence,
+/// resolvedBy}` — including the ones that passed. Storing only failures would make "did anyone
+/// check this?" and "was this checked and found fine?" the same answer, which is the question an
+/// auditor asks first.
+model AssessmentRun {
+  id        String   @id @default(uuid())
+  projectId String
+  results   Json
+  /// Share of applicable, answerable MISSING_DOCUMENT rules that passed, weighted by severity.
+  /// This is the FPT standard score on the dashboard.
+  fptScore  Int      @default(0)
+  /// How many rules the model could not resolve. Printed on screen: a score computed over a
+  /// catalog half of which returned UNKNOWN is a score nobody should act on without knowing that.
+  unknowns  Int      @default(0)
+  blockers  Int      @default(0)
+  /// `anthropic` or `mock` — the same provenance rule the recommendation carries.
+  aiProvider String  @default("mock")
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
+  @@map("assessment_runs")
+}
+
+/// The PM's own verdict on one Planning Assessment rule — a tick in the Standards popup.
+///
+/// Outranks the model and survives every re-run, the same rule as the customer checklist's PM
+/// verdicts: whether a document requirement is met is sometimes something only the PM knows (the
+/// CM plan is a wiki page, the security review happened in a meeting). Stored only where the PM's
+/// answer differs from what the assessment would otherwise say, so clearing a tick that matches the
+/// model leaves nothing behind.
+model AssessmentOverride {
+  id        String   @id @default(uuid())
+  projectId String
+  ruleId    String
+  /// True = the PM says it is met; false = the PM says it is not, whatever the model found.
+  met       Boolean
+  byId      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, ruleId])
+  @@map("assessment_overrides")
+}
+
 // ---------------------------------------------------------------- hierarchy
 
 model Program {
@@ -245,6 +300,8 @@ model Project {
   customFields     ProjectCustomField[]
   references       ReferenceFile[]
   aiSuggestions    AiApproachSuggestion[]
+  assessmentRuns   AssessmentRun[]
+  assessmentOverrides AssessmentOverride[]
   decisions        ApproachDecision[]
   documents        PlanningDocument[]
   actionItems      ActionItem[]
@@ -459,6 +516,14 @@ model DocumentDefinition {
   conditionKey String? // e.g. "budgetControlScope=PM owns"
   description  String?
   order        Int              @default(0)
+  /// True for a document the Planning Assessment added because a project was found to be missing
+  /// it and the standard catalog holds nothing that covers it (a Configuration Management Plan, a
+  /// Test Strategy, an AI Data Management Plan). Shared per project type like any definition — it
+  /// is only a name and a domain; the content lives in each project's PlanningDocument — but it is
+  /// not part of the standard pack: `syncDocumentsWithPack` does not provision it for every project,
+  /// `catalogForProject` shows it only to projects that have a row for it, and the catalog prune in
+  /// `seed-catalog.ts` never removes it.
+  extended     Boolean          @default(false)
 
   templates DocumentTemplate[]
   documents PlanningDocument[]
@@ -559,6 +624,11 @@ model ActionItem {
   /// offered to the PM, and overloading it with a navigation target means one of the two silently
   /// breaks the next time either is changed.
   targetDocument String?
+  /// The Planning Assessment rule this action came from (`MI-008`, `MD-005`...). Null for actions
+  /// written by the older planning-gap analysis or created by hand. It is what lets the assessment
+  /// rebuild its own actions on a re-run, and show a rule as "resolved by the PM" once the action
+  /// behind it is closed.
+  ruleId        String?
   suggestions   String[]         @default([])
   status        ActionStatus     @default(OPEN)
   resolvedValue String?
@@ -766,8 +836,40 @@ model Customer {
 
   checklists CustomerChecklist[]
   templates  CustomerTemplate[]
+  references CustomerReference[]
 
   @@map("customers")
+}
+
+/// What a reference document in an account library is kept as.
+enum CustomerReferenceKind {
+  /// A planning document an earlier project had approved — an example of what "good" looks like.
+  APPROVED_EXAMPLE
+  /// A lessons-learned record from an earlier project of this account.
+  LESSON_LEARNED
+}
+
+/// A document uploaded to an account library's Approved Examples or Lessons Learned tab. Stored
+/// with its extracted text so later features can read it; nothing in generation reads these yet.
+model CustomerReference {
+  id           String                @id @default(uuid())
+  customerId   String
+  kind         CustomerReferenceKind
+  /// What the uploader called it — defaults to the file name.
+  title        String
+  sourceFile   String
+  storageKey   String
+  mimeType     String
+  sizeBytes    Int
+  /// `{ rawText, textAvailable }`, the same shape as `ReferenceFile.extraction`.
+  extraction   Json?
+  uploadedById String?
+  uploadedAt   DateTime              @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId, kind])
+  @@map("customer_references")
 }
 
 /// One uploaded checklist file (LGCNS's .xlsx intake checklist, SKAX's .docx operational
@@ -913,6 +1015,10 @@ model CustomerTemplate {
   active       Boolean  @default(true)
   /// What the parser found to fill: [{ token, occurrences, locations, splitAcrossRuns }].
   placeholders Json
+  /// The template's own structure, in order — Word headings, slide titles or sheet names. Used when
+  /// the template has too few blanks to fill in place: the drafted document then follows this
+  /// outline instead. Null on rows uploaded before it existed; read from the file on demand then.
+  outline      Json?
   parseNote    String?
   uploadedAt   DateTime @default(now())
 

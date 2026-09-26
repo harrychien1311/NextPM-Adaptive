@@ -298,11 +298,9 @@ export async function detachReferenceFromChanges(projectId: string, referenceId:
     where: { changeId: { in: ids }, supersedesReferenceId: referenceId },
     data: { supersedesReferenceId: null },
   });
-  // Nothing replaces a file that is gone.
-  await prisma.referenceFile.updateMany({
-    where: { projectId, supersededById: referenceId },
-    data: { supersededById: null },
-  });
+  // The files this upload replaced are not touched here: `removeReference`, which runs next, finds
+  // them by `supersededById` and makes them current again. Clearing the pointer here first is what
+  // used to strand them — marked replaced by a file that no longer existed.
 
   const analysed = open.filter((change) => change.status === PlanChangeStatus.ANALYZED).map((change) => change.id);
   if (analysed.length) {
@@ -612,13 +610,13 @@ export async function applyPlanChange(projectId: string, changeId: string, actor
    * Until this point the claim only shapes the comparison; a change the PM discards must leave the
    * project exactly as it found it.
    */
-  const replacedIds = listedDocuments
-    .map((document) => document.supersedesReferenceId)
-    .filter((id): id is string => Boolean(id));
-  if (replacedIds.length) {
+  // Pointed at the replacement as well as timestamped: deleting that replacement later is what
+  // brings the replaced version back (`removeReference`), and it finds it by this pointer.
+  for (const document of listedDocuments) {
+    if (!document.supersedesReferenceId) continue;
     await prisma.referenceFile.updateMany({
-      where: { id: { in: replacedIds }, projectId, supersededAt: null },
-      data: { supersededAt: new Date() },
+      where: { id: document.supersedesReferenceId, projectId, supersededAt: null },
+      data: { supersededAt: new Date(), supersededById: document.referenceId },
     });
   }
 

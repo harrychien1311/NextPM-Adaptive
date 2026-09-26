@@ -106,8 +106,12 @@ export function DocumentPreview({
         </div>
         <div>
           {onDownload && (
-            <button className="secondary" onClick={onDownload}>
-              Download .{(document.exportFormat ?? 'DOCX').toLowerCase()}
+            <button
+              className="secondary"
+              onClick={onDownload}
+              title={`Downloads as .${(document.exportFormat ?? 'DOCX').toLowerCase()} — the type of the template it follows`}
+            >
+              Download
             </button>
           )}
           <button className="secondary" onClick={onClose}>
@@ -266,7 +270,7 @@ function DeckNotice({ document, onDownload }: { document: PreviewDocument; onDow
       </p>
       {onDownload && (
         <button className="primary" onClick={onDownload}>
-          Download .pptx
+          Download
         </button>
       )}
     </article>

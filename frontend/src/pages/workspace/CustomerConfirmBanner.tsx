@@ -92,12 +92,12 @@ export function CustomerConfirmBanner({
       <p className={`customer-confirm-match${suggestion.matchedKey ? '' : ' unknown'}`}>
         {suggestion.matchedKey ? (
           <>
-            Matches <b>{suggestion.matchedName}</b> in the customer library — their checklist and templates are ready.
+            Matches the <b>{suggestion.matchedName}</b> account library — its checklist and templates are ready.
           </>
         ) : (
           <>
-            No customer in the library matches this name yet, so confirming it will not unlock a checklist or a
-            template. Add them in the Customer library, or add this spelling as an alias of an existing customer.
+            No account library matches this name yet, so confirming it will not unlock a checklist or a template. Add
+            one in Account Libraries, or add this spelling as an alias of an existing library.
           </>
         )}
       </p>

@@ -41,7 +41,10 @@ function catalogKeys(): Set<string> {
  */
 async function prune(force: boolean) {
   const keep = catalogKeys();
+  // Documents the Planning Assessment added are not in `document-catalog.ts` by design, so they are
+  // never "stale" — pruning them would delete a project's missing-document drafts.
   let all = await prisma.documentDefinition.findMany({
+    where: { extended: false },
     include: { _count: { select: { documents: true } } },
   });
   let stale = all.filter((d) => !keep.has(`${d.projectType}|${d.domain}|${d.name}`));
@@ -73,7 +76,10 @@ async function prune(force: boolean) {
   if (moved) console.log(`\nmoved ${moved} generated document(s) onto their definition's new domain`);
 
   // Re-read: the moves changed what is stale.
-  all = await prisma.documentDefinition.findMany({ include: { _count: { select: { documents: true } } } });
+  all = await prisma.documentDefinition.findMany({
+    where: { extended: false },
+    include: { _count: { select: { documents: true } } },
+  });
   stale = all.filter((d) => !keep.has(`${d.projectType}|${d.domain}|${d.name}`));
 
   if (!stale.length) {

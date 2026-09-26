@@ -35,7 +35,9 @@ export function readGaps(value: unknown): DocumentGap[] {
       if (typeof entry === 'string') return { token: `{{gap:${index + 1}}}`, question: entry, answer: null };
       if (entry && typeof entry === 'object' && 'question' in entry) {
         const gap = entry as DocumentGap;
-        return { token: gap.token, question: gap.question, answer: gap.answer ?? null };
+        // `ruleId` kept: it ties a question to the Missing Information finding it asks about, and
+        // dropping it on read would quietly break that link the first time the gaps are re-saved.
+        return { token: gap.token, question: gap.question, answer: gap.answer ?? null, ruleId: gap.ruleId ?? null };
       }
       return null;
     })

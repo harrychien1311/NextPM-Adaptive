@@ -1,56 +1,85 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { planChangeApi, programApi, projectApi } from '../api/endpoints';
 import type { ProgramGroup, ProjectCard, ProjectStatus, ProjectType } from '../api/types';
 import { useAuth } from '../store/auth';
 import { useToast } from '../components/Toast';
 import { Backdrop, ModalShell } from '../components/Modal';
-import { SignOutIcon } from '../components/icons';
+import { AccountShell } from '../components/AccountShell';
 import { ApiError } from '../api/client';
 
-const STATUS_META: Record<string, { className: string; label: string }> = {
-  ACTIVE: { className: 'active-status', label: '● Active' },
-  DRAFT: { className: 'draft-status', label: '○ Draft' },
-  // "On Hold" everywhere — the filter said "Hold", this badge said "On hold" and the status
-  // dropdown said "On hold", so one state had three spellings on one screen.
-  HOLD: { className: 'hold-status', label: 'Ⅱ On Hold' },
-  CLOSED: { className: 'closed-status', label: '✓ Closed' },
+// "On Hold" everywhere — the filter once said "Hold", the badge "On hold" and the status dropdown
+// "On hold", so one state had three spellings on one screen.
+const STATUS_META: Record<string, { label: string }> = {
+  ACTIVE: { label: 'Active' },
+  DRAFT: { label: 'Draft' },
+  HOLD: { label: 'On Hold' },
+  CLOSED: { label: 'Closed' },
 };
 
-/** Spelled out rather than derived from the filter key, so "hold" cannot become "Hold" again. */
-const STATUS_FILTER_LABEL: Record<'all' | 'active' | 'draft' | 'hold' | 'closed', string> = {
-  all: 'All',
-  active: 'Active',
-  draft: 'Draft',
-  hold: 'On Hold',
-  closed: 'Closed',
+const TYPE_LABEL: Record<ProjectType, string> = { SI: 'SI', SM: 'SM', PRODUCT: 'Product' };
+const HEALTH_LABEL: Record<string, { label: string }> = {
+  good: { label: 'On track' },
+  watch: { label: 'Watch' },
+  risk: { label: 'At risk' },
+  none: { label: '' },
 };
 
-const TYPE_LABEL: Record<ProjectType, string> = { SI: 'SI', SM: 'SM', PRODUCT: 'PRODUCT' };
-const HEALTH_LABEL: Record<string, { className: string; label: string }> = {
-  good: { className: 'health-good', label: '● On track' },
-  watch: { className: 'health-watch', label: '● Watch' },
-  risk: { className: 'health-watch', label: '● At risk' },
-  none: { className: '', label: '' },
-};
+/** The Approach filter's value for projects with no confirmed model yet. */
+const NO_APPROACH = '__none';
+
+/** The distinct customers of a program's projects, as its Customer cell. */
+const customersOf = (group: ProgramGroup) =>
+  [...new Set(group.projects.map((project) => project.customer?.trim()).filter(Boolean))].join(', ');
+
+/** Readiness as a bar coloured by threshold: under 40 red, under 60 amber, otherwise green. */
+function ReadinessBar({ value }: { value: number }) {
+  const tone = value < 40 ? 'low' : value < 60 ? 'mid' : 'high';
+  return (
+    <div className="pc-readiness">
+      <i>
+        <em className={tone} style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
+      </i>
+      <span>{value}%</span>
+    </div>
+  );
+}
+
+/** The search term marked where it occurs, so a match on the customer is visible as one. */
+function Highlight({ text, query }: { text: string; query: string }) {
+  if (!query) return <>{text}</>;
+  const at = text.toLowerCase().indexOf(query);
+  if (at < 0) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, at)}
+      <mark>{text.slice(at, at + query.length)}</mark>
+      {text.slice(at + query.length)}
+    </>
+  );
+}
 
 /**
- * The delivery landing screen. Every signed-in delivery account sees the same board; access is
- * enforced per project card through `canOpen`, which the API computes from ownership/membership.
+ * The delivery landing screen — Program Center · Program Overview. Every signed-in delivery account
+ * sees the same board; access is enforced per row through `canOpen`, which the API computes from
+ * ownership/membership. Programs are rows with their projects nested under them, standalone
+ * projects follow, and one filter bar narrows the lot.
  */
 export function ProgramOverviewPage() {
-  const { user, logout } = useAuth();
+  const { logout } = useAuth();
   const navigate = useNavigate();
   const notify = useToast();
   const queryClient = useQueryClient();
 
   const overview = useQuery({ queryKey: ['overview'], queryFn: programApi.overview });
 
-  const [programFilter, setProgramFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [typeFilter, setTypeFilter] = useState('all');
+  const [programFilter, setProgramFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
+  const [approachFilter, setApproachFilter] = useState('');
   const [search, setSearch] = useState('');
+  /** Programs the PM folded away. Ignored while filtering, so a match is never hidden in one. */
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [openModal, setOpenModal] = useState<null | 'project' | 'program'>(null);
   const [editProgram, setEditProgram] = useState<ProgramGroup | null>(null);
   const [editProject, setEditProject] = useState<ProjectCard | null>(null);
@@ -68,18 +97,45 @@ export function ProgramOverviewPage() {
     if (summary.myProjects === 0) setOpenModal('project');
   }, [summary]);
 
-  const visible = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    const matches = (project: ProjectCard) =>
-      (statusFilter === 'all' || project.status.toLowerCase() === statusFilter) &&
-      (typeFilter === 'all' || project.type === typeFilter) &&
-      (!query || project.name.toLowerCase().includes(query));
+  const query = search.trim().toLowerCase();
+  const filtering = Boolean(query || programFilter || typeFilter || approachFilter);
+  const allProjects = useMemo(() => groups.flatMap((group) => group.projects), [groups]);
 
+  /**
+   * Search reads the project, its program and its customer. A program whose own name or customers
+   * match keeps all its projects — searching "Telecom" should show the Telecom program, not an
+   * empty row. Standalone projects live in the `standalone` group and are filtered like any other.
+   */
+  const visible = useMemo(() => {
+    const matchesFilters = (project: ProjectCard) =>
+      (!typeFilter || project.type === typeFilter) &&
+      (!approachFilter || (project.approach ?? NO_APPROACH) === approachFilter);
     return groups
-      .filter((group) => programFilter === 'all' || group.key === programFilter)
-      .map((group) => ({ ...group, projects: group.projects.filter(matches) }))
-      .filter((group) => group.projects.length > 0 || programFilter === group.key);
-  }, [groups, programFilter, statusFilter, typeFilter, search]);
+      .filter((group) => !programFilter || group.key === programFilter)
+      .map((group) => {
+        const programHit =
+          Boolean(query) && group.key !== 'standalone' && `${group.name} ${customersOf(group)}`.toLowerCase().includes(query);
+        const projects = group.projects.filter(
+          (project) =>
+            matchesFilters(project) &&
+            (!query || programHit || `${project.name} ${project.customer ?? ''}`.toLowerCase().includes(query)),
+        );
+        return { ...group, projects };
+      })
+      .filter((group) => group.projects.length > 0 || (!filtering && group.key !== 'standalone'));
+  }, [groups, programFilter, typeFilter, approachFilter, query, filtering]);
+
+  const shown = visible.reduce((sum, group) => sum + group.projects.length, 0);
+  const approachOptions = useMemo(
+    () => [...new Set(allProjects.map((project) => project.approach ?? NO_APPROACH))].sort(),
+    [allProjects],
+  );
+  const clearFilters = () => {
+    setSearch('');
+    setProgramFilter('');
+    setTypeFilter('');
+    setApproachFilter('');
+  };
 
   const createProject = useMutation({
     mutationFn: (body: { name: string; type: ProjectType; programId: string | null; customer: string; targetStart: string }) =>
@@ -115,16 +171,15 @@ export function ProgramOverviewPage() {
   const refreshOverview = () => queryClient.invalidateQueries({ queryKey: ['overview'] });
 
   /**
-   * "Change plan" from a project card.
+   * "Update plan" from a project row.
    *
-   * Opens the change first, then goes to Project Input. The mode is decided by data — a `PlanChange`
-   * in DRAFT or ANALYZED — so navigating without opening one would land the PM on the ordinary input
-   * screen and leave them to find the button again. `startPlanChange` hands back the change already
-   * open if there is one, so pressing this twice is harmless.
+   * Opens the change first, then goes to Update Planning (step 4), where a change is recorded.
+   * `startPlanChange` hands back the change already open if there is one, so pressing this twice is
+   * harmless.
    */
   const startChange = useMutation({
     mutationFn: (projectId: string) => planChangeApi.start(projectId),
-    onSuccess: (_change, projectId) => navigate(`/projects/${projectId}?view=input`),
+    onSuccess: (_change, projectId) => navigate(`/projects/${projectId}?view=update`),
     onError: fail('Could not start a plan change'),
   });
 
@@ -135,8 +190,8 @@ export function ProgramOverviewPage() {
       refreshOverview();
       notify({ title: 'Program updated', detail: program.name });
       setEditProgram(null);
-      // The sidebar filter is keyed by slug, and renaming a program changes its slug.
-      setProgramFilter('all');
+      // The program filter is keyed by slug, and renaming a program changes its slug.
+      setProgramFilter('');
     },
     onError: fail('Could not update program'),
   });
@@ -152,7 +207,7 @@ export function ProgramOverviewPage() {
           : 'It had no projects.',
       });
       setEditProgram(null);
-      setProgramFilter('all');
+      setProgramFilter('');
     },
     onError: fail('Could not delete program'),
   });
@@ -206,342 +261,252 @@ export function ProgramOverviewPage() {
 
   return (
     <>
-      <section className="portfolio-screen">
-        <header className="portfolio-top">
-          <div className="brand portfolio-brand">
-            <div className="brand-mark">N</div>
-            <div>
-              <strong>NEXTFIT AI</strong>
-              <span>Adaptive Planning Agent</span>
-            </div>
+      <AccountShell crumb="PROGRAM CENTER" title="Program Overview">
+        <div className="page-head dash-head">
+          <div>
+            <h1 className="dash-title">
+              <span>Program Center</span>
+              <em>·</em>
+              <b>Program Overview</b>
+            </h1>
+            <p className="page-subline">
+              {capabilities.canOpenAll
+                ? 'Programs and standalone projects with their current planning readiness'
+                : 'Programs and standalone projects with their current planning readiness — you can open the workspaces you own or were granted'}
+            </p>
           </div>
-          <div className="portfolio-level">
-            <span>PROGRAM CENTER</span>
-            <b>Programs &amp; Projects</b>
-          </div>
-          <div className="portfolio-profile">
-            <div className="avatar">{user?.initials}</div>
-            <div>
-              <strong>{user?.name}</strong>
-              <span>{ROLE_LABEL[user?.role ?? 'PROJECT_OWNER']}</span>
-            </div>
-            {/* Last child, so sign out is the top-right corner — the same place on every screen. */}
-            <button className="icon-button signout-button" onClick={logout} title="Sign out" aria-label="Sign out">
-              <SignOutIcon />
-            </button>
-          </div>
-        </header>
-
-        <div className="portfolio-layout">
-          <aside className="portfolio-sidebar">
-            <button
-              className={`portfolio-nav${programFilter === 'all' ? ' active' : ''}`}
-              onClick={() => setProgramFilter('all')}
-            >
-              <span>▦</span>
-              <div>
-                <b>Overview</b>
-                <em>
-                  {summary.programs} programs · {summary.statusCounts.all} projects
-                </em>
-              </div>
-            </button>
-
-            <small>PROGRAMS</small>
-            {groups
-              .filter((group) => group.key !== 'standalone')
-              .map((group) => (
-                <button
-                  key={group.key}
-                  className={`portfolio-nav${programFilter === group.key ? ' active' : ''}`}
-                  onClick={() => setProgramFilter(group.key)}
-                >
-                  <i className={`program-dot ${group.colorKey}-dot`} />
-                  <div>
-                    <b>{group.name}</b>
-                    <em>{group.projects.length} projects</em>
-                  </div>
-                  <strong>{group.readiness === null ? '—' : `${group.readiness}%`}</strong>
-                </button>
-              ))}
-
-            <small>NO PROGRAM</small>
-            <button
-              className={`portfolio-nav${programFilter === 'standalone' ? ' active' : ''}`}
-              onClick={() => setProgramFilter('standalone')}
-            >
-              <span>◇</span>
-              <div>
-                <b>Standalone projects</b>
-                <em>{groups.find((group) => group.key === 'standalone')?.projects.length ?? 0} projects</em>
-              </div>
-            </button>
+          <div className="dashboard-actions">
             {capabilities.canCreateProgram && (
-              <button className="create-program" onClick={() => setOpenModal('program')}>
-                ＋ Create program
+              <button className="secondary" onClick={() => setOpenModal('program')}>
+                + Create program
               </button>
             )}
-          </aside>
-
-          <main className="portfolio-main">
-            <div className="portfolio-breadcrumb">
-              <span>Programs</span>
-              <b>›</b>
-              <strong>
-                {programFilter === 'all'
-                  ? 'All programs & projects'
-                  : groups.find((group) => group.key === programFilter)?.name}
-              </strong>
-            </div>
-
-            <div className="portfolio-title">
-              <div>
-                <p>PROGRAM OVERVIEW</p>
-                <h1>Programs and project workspaces</h1>
-                <span>
-                  {capabilities.canOpenAll
-                    ? 'Roll up delivery health by program, then open any project workspace for planning decisions.'
-                    : 'You can open the project workspaces you own or were granted — the rest stay read-only here.'}
-                </span>
-              </div>
-              <div className="portfolio-create-actions">
-                {/* The per-customer checklists and templates every project here is measured against. */}
-                <Link className="secondary button-link" to="/customers">
-                  Customer library
-                </Link>
-                {capabilities.canCreateProgram && (
-                  <button className="secondary" onClick={() => setOpenModal('program')}>
-                    + Program
-                  </button>
-                )}
-                <button className="primary" onClick={() => setOpenModal('project')}>
-                  + Project
-                </button>
-              </div>
-            </div>
-
-            <div className="hierarchy-strip">
-              <div className="current">
-                <span>1</span>
-                <p>
-                  <b>Program / Group</b>
-                  <small>Related projects &amp; roll-up health</small>
-                </p>
-              </div>
-              <i>›</i>
-              <div>
-                <span>2</span>
-                <p>
-                  <b>Project Workspace</b>
-                  <small>Input, governance model, planning outputs</small>
-                </p>
-              </div>
-            </div>
-
-            <div className="portfolio-summary">
-              <article>
-                <span>PROGRAMS</span>
-                <strong>{summary.programs}</strong>
-                <small>{summary.activePrograms} on track</small>
-              </article>
-              <article>
-                <span>ACTIVE PROJECTS</span>
-                <strong>{summary.activeProjects}</strong>
-                <small>
-                  SI {summary.byType.SI} · SM {summary.byType.SM} · Product {summary.byType.PRODUCT}
-                </small>
-              </article>
-              <article>
-                <span>MY WORKSPACES</span>
-                <strong>{summary.myProjects}</strong>
-                <small>{summary.needsAttention} need attention</small>
-              </article>
-              <article>
-                <span>DELIVERY READINESS</span>
-                <strong>{summary.deliveryReadiness}%</strong>
-                <small>Active project average</small>
-              </article>
-            </div>
-
-            <div className="portfolio-toolbar">
-              <div className="project-filters">
-                {(['all', 'active', 'draft', 'hold', 'closed'] as const).map((status) => (
-                  <button
-                    key={status}
-                    className={statusFilter === status ? 'active' : ''}
-                    onClick={() => setStatusFilter(status)}
-                  >
-                    {/* Capitalising the key gave "Hold" while the badge beside it said "On hold" —
-                        one status, two names, a metre apart. */}
-                    {STATUS_FILTER_LABEL[status]} <b>{summary.statusCounts[status]}</b>
-                  </button>
-                ))}
-              </div>
-              <div>
-                <input
-                  placeholder="Search projects…"
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                />
-                <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
-                  <option value="all">All project types</option>
-                  <option value="SI">SI</option>
-                  <option value="SM">SM</option>
-                  <option value="PRODUCT">Product</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="program-list">
-              {visible.map((group) => (
-                <section className="program-group" key={group.key}>
-                  <header>
-                    <div>
-                      {group.key === 'standalone' ? (
-                        <span className="standalone-mark">◇</span>
-                      ) : (
-                        <i className={`program-dot ${group.colorKey}-dot`} />
-                      )}
-                      <div>
-                        <small>{group.key === 'standalone' ? 'NO PROGRAM' : 'PROGRAM'}</small>
-                        <h2>{group.name}</h2>
-                        <p>{group.description}</p>
-                      </div>
-                    </div>
-                    <div className="program-rollup">
-                      <span>
-                        <b>{group.projects.length}</b> projects
-                      </span>
-                      {group.readiness !== null && (
-                        <span>
-                          <b>{group.readiness}%</b> readiness
-                        </span>
-                      )}
-                      {group.health !== 'none' && (
-                        <span className={HEALTH_LABEL[group.health].className}>{HEALTH_LABEL[group.health].label}</span>
-                      )}
-                      {group.key !== 'standalone' && capabilities.canCreateProgram && (
-                        <button onClick={() => setEditProgram(group)}>Edit</button>
-                      )}
-                      {group.key !== 'standalone' && (
-                        <button onClick={() => setProgramFilter(group.key)}>Program view →</button>
-                      )}
-                    </div>
-                  </header>
-                  <div className="program-projects">
-                    {group.projects.length === 0 && (
-                      <div className="program-empty">
-                        No project workspace yet. Use + Project to add the first one.
-                      </div>
-                    )}
-                    {group.projects.map((project) => (
-                      <article
-                        className={`project-card${project.status === 'CLOSED' || project.status === 'HOLD' || !project.canOpen ? ' muted-card' : ''}`}
-                        key={project.id}
-                      >
-                        <div className="project-card-top">
-                          <span className={`project-type ${project.type.toLowerCase()}`}>{TYPE_LABEL[project.type]}</span>
-                          <span className={`project-status ${STATUS_META[project.status].className}`}>
-                            {STATUS_META[project.status].label}
-                          </span>
-                          {!project.canOpen && <span className="locked-chip" title="You have not been granted this project">🔒</span>}
-                        </div>
-                        <h2>{project.name}</h2>
-                        <p>{project.summary}</p>
-                        <div className="project-readiness">
-                          <span>
-                            {project.status === 'DRAFT' ? 'Input completeness' : 'Planning readiness'}{' '}
-                            <b>{project.status === 'DRAFT' ? project.inputReadiness : project.readiness}%</b>
-                          </span>
-                          <i>
-                            <em
-                              style={{
-                                width: `${project.status === 'DRAFT' ? project.inputReadiness : project.readiness}%`,
-                              }}
-                            />
-                          </i>
-                        </div>
-                        <div className="project-meta">
-                          <span>
-                            <b>{project.approach ? titleCase(project.approach) : 'Not selected'}</b>{' '}
-                            {project.approach ? 'approach' : ''}
-                          </span>
-                          <span>
-                            <b>{project.openDecisions}</b> decisions
-                          </span>
-                          <span>
-                            <b>{project.targetLabel ?? '—'}</b>
-                          </span>
-                        </div>
-                        <div className="project-footer">
-                          <div className="avatar-stack">
-                            {project.members.map((member) => (
-                              <i key={member.id} title={member.name}>
-                                {member.initials}
-                              </i>
-                            ))}
-                          </div>
-                          {/*
-                            One weight for every action on a card. They were a mix of filled and
-                            outlined, and the outline read as "not really available" next to the
-                            filled one — Edit and Change plan are ordinary actions, not lesser ones.
-                            The only exception is the locked state below, which must not look like
-                            something that can be pressed.
-                          */}
-                          <div className="card-actions">
-                            {project.canEdit && (
-                              <button className="primary" onClick={() => setEditProject(project)} title="Rename, re-file or change status">
-                                Edit
-                              </button>
-                            )}
-                            {/*
-                              Straight into change mode, not just to the workspace: opening the
-                              change here is what puts Project Input into it, so the PM lands on the
-                              panel they came for instead of having to find the button again.
-
-                              Hidden unless the project has a confirmed governance model — before
-                              that there is no plan to change and the server refuses — and unless
-                              the viewer can write.
-                            */}
-                            {project.canChangePlan && (
-                              <button
-                                className="primary"
-                                disabled={startChange.isPending}
-                                title="Record something that has changed since this plan was confirmed"
-                                onClick={() => startChange.mutate(project.id)}
-                              >
-                                {startChange.isPending && startChange.variables === project.id
-                                  ? 'Opening…'
-                                  : '⇄ Change plan'}
-                              </button>
-                            )}
-                            {project.canOpen ? (
-                              <button
-                                className="primary"
-                                onClick={() => navigate(`/projects/${project.id}`)}
-                              >
-                                {project.status === 'DRAFT'
-                                  ? 'Continue setup →'
-                                  : project.status === 'CLOSED'
-                                    ? 'View archive →'
-                                    : 'Open workspace →'}
-                              </button>
-                            ) : (
-                              <button className="secondary" disabled title="Ask the project owner to add you to this project">
-                                🔒 No access
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                </section>
-              ))}
-            </div>
-          </main>
+            <button className="primary" onClick={() => setOpenModal('project')}>
+              + Add project
+            </button>
+          </div>
         </div>
-      </section>
+
+        <div className="kpi-strip">
+          <article className="panel kpi">
+            <span className="kpi-label">Programs</span>
+            <span className="kpi-value">{summary.programs}</span>
+          </article>
+          <article className="panel kpi">
+            <span className="kpi-label">Projects</span>
+            <span className="kpi-value">{allProjects.length}</span>
+          </article>
+          <article className="panel kpi">
+            <span className="kpi-label">Average planning readiness</span>
+            <span className="kpi-value">{summary.deliveryReadiness}%</span>
+          </article>
+          <article className="panel kpi">
+            <span className="kpi-label">Projects with open gaps</span>
+            <span className="kpi-value">{allProjects.filter((project) => project.openGaps > 0).length}</span>
+          </article>
+        </div>
+
+        <article className="panel program-table-panel">
+          <div className="panel-head">
+            <div>
+              <h2>Programs &amp; projects</h2>
+            </div>
+          </div>
+
+          <div className="pc-filter" role="search" aria-label="Filter projects">
+            <label className="pc-field pc-search">
+              <span>Search</span>
+              <input
+                type="search"
+                placeholder="Project, program or customer"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </label>
+            <label className="pc-field">
+              <span>Program</span>
+              <select value={programFilter} onChange={(event) => setProgramFilter(event.target.value)}>
+                <option value="">All programs</option>
+                {groups
+                  .filter((group) => group.key !== 'standalone')
+                  .map((group) => (
+                    <option key={group.key} value={group.key}>
+                      {group.name}
+                    </option>
+                  ))}
+                <option value="standalone">Standalone projects</option>
+              </select>
+            </label>
+            <label className="pc-field">
+              <span>Project type</span>
+              <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
+                <option value="">All types</option>
+                <option value="SI">SI</option>
+                <option value="SM">SM</option>
+                <option value="PRODUCT">Product</option>
+              </select>
+            </label>
+            <label className="pc-field">
+              <span>Approach</span>
+              <select value={approachFilter} onChange={(event) => setApproachFilter(event.target.value)}>
+                <option value="">All approaches</option>
+                {approachOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option === NO_APPROACH ? 'Not selected' : titleCase(option)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="pc-meta">
+              <span aria-live="polite">{filtering ? `${shown} of ${allProjects.length} projects` : `${allProjects.length} projects`}</span>
+              {filtering && (
+                <button className="link-button" onClick={clearFilters}>
+                  Clear filters
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="pc-table-wrap">
+            <table className="pc-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Type</th>
+                  <th>Customer</th>
+                  <th>Approach</th>
+                  <th>Planning readiness</th>
+                  <th>Status</th>
+                  <th>Open gaps</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {shown === 0 && filtering && (
+                  <tr>
+                    <td className="pc-empty" colSpan={8}>
+                      <b>No projects match these filters</b>
+                      Change the search or filters, or{' '}
+                      <button className="link-button" onClick={clearFilters}>
+                        clear all filters
+                      </button>
+                      .
+                    </td>
+                  </tr>
+                )}
+                {visible.map((group) => {
+                  const isProgram = group.key !== 'standalone';
+                  const open = filtering || !collapsed[group.key];
+                  const approaches = [...new Set(group.projects.map((project) => project.approach).filter(Boolean))];
+                  return (
+                    <Fragment key={group.key}>
+                      {isProgram && (
+                        <tr className="pc-program">
+                          <td>
+                            <button
+                              className="pc-toggle"
+                              aria-expanded={open}
+                              disabled={filtering}
+                              title={filtering ? 'Expanded while filtering' : open ? 'Collapse' : 'Expand'}
+                              onClick={() => setCollapsed((state) => ({ ...state, [group.key]: !state[group.key] }))}
+                            >
+                              {open ? '▾' : '▸'}
+                            </button>
+                            <Highlight text={group.name} query={query} />
+                          </td>
+                          <td>Program</td>
+                          <td>
+                            <Highlight text={customersOf(group) || '—'} query={query} />
+                          </td>
+                          <td>{approaches.length > 1 ? 'Mixed' : approaches[0] ? titleCase(approaches[0]) : '—'}</td>
+                          <td>{group.readiness === null ? '—' : <ReadinessBar value={group.readiness} />}</td>
+                          <td>
+                            {group.health !== 'none' && (
+                              <span className={`pc-chip health-${group.health}`}>{HEALTH_LABEL[group.health].label}</span>
+                            )}
+                          </td>
+                          <td className="num">{group.projects.reduce((sum, project) => sum + project.openGaps, 0)}</td>
+                          <td>
+                            <div className="pc-actions">
+                              {capabilities.canCreateProgram && (
+                                <button className="pc-btn" onClick={() => setEditProgram(group)}>
+                                  Edit
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      {isProgram && open && group.projects.length === 0 && (
+                        <tr className="pc-project">
+                          <td colSpan={8} className="pc-none">
+                            No project workspace yet. Use + Add project to add the first one.
+                          </td>
+                        </tr>
+                      )}
+                      {open &&
+                        group.projects.map((project) => (
+                          <tr
+                            key={project.id}
+                            className={`${isProgram ? 'pc-project' : ''}${!project.canOpen ? ' pc-locked' : ''}`}
+                          >
+                            <td>
+                              {isProgram && <span className="pc-branch">↳ </span>}
+                              <Highlight text={project.name} query={query} />
+                              {!isProgram && <span className="pc-chip standalone">Standalone</span>}
+                            </td>
+                            <td>{TYPE_LABEL[project.type]}</td>
+                            <td>
+                              <Highlight text={project.customer || '—'} query={query} />
+                            </td>
+                            <td>{project.approach ? titleCase(project.approach) : 'Not selected'}</td>
+                            <td>
+                              <ReadinessBar value={project.readiness} />
+                            </td>
+                            <td>
+                              <span className={`pc-chip status-${project.status.toLowerCase()}`}>
+                                {STATUS_META[project.status].label}
+                              </span>
+                            </td>
+                            <td className="num">{project.openGaps}</td>
+                            <td>
+                              <div className="pc-actions">
+                                {project.canEdit && (
+                                  <button className="pc-btn blue" onClick={() => setEditProject(project)}>
+                                    Edit
+                                  </button>
+                                )}
+                                {project.canChangePlan && (
+                                  <button
+                                    className="pc-btn blue"
+                                    disabled={startChange.isPending}
+                                    title="Record something that has changed since this plan was confirmed"
+                                    onClick={() => startChange.mutate(project.id)}
+                                  >
+                                    {startChange.isPending && startChange.variables === project.id ? 'Opening…' : 'Update plan'}
+                                  </button>
+                                )}
+                                {project.canOpen ? (
+                                  <button className="pc-btn blue" onClick={() => navigate(`/projects/${project.id}`)}>
+                                    Open workspace
+                                  </button>
+                                ) : (
+                                  <button className="pc-btn" disabled title="Ask the project owner to add you to this project">
+                                    🔒 No access
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </article>
+      </AccountShell>
 
       <Backdrop
         open={openModal !== null || editProgram !== null || editProject !== null}
@@ -813,13 +778,12 @@ function EditProjectModal({
   );
 }
 
-const ROLE_LABEL: Record<string, string> = {
-  ADMIN: 'Administrator',
-  PROGRAM_OWNER: 'Program owner',
-  PROJECT_OWNER: 'Project owner',
-};
-
-const titleCase = (value: string) => value[0] + value.slice(1).toLowerCase();
+const titleCase = (value: string) =>
+  value
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((word) => word[0] + word.slice(1).toLowerCase())
+    .join(' ');
 
 function CreateProjectModal({
   open,

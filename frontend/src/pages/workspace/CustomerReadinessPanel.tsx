@@ -135,8 +135,8 @@ export function CustomerReadinessPanel({ projectId }: { projectId: string }) {
         <p className="customer-empty">
           {data?.reason ?? 'No customer checklist applies to this project.'}{' '}
           {data && 'typedCustomer' in data && data.typedCustomer
-            ? 'Add that spelling as an alias in the Customer library, or upload their checklist there.'
-            : 'Set the project’s Customer field to match a customer in the library.'}
+            ? 'Add that spelling as an alias in Account Libraries, or upload their checklist there.'
+            : 'Set the project’s Customer field to match an account library.'}
         </p>
       </section>
     );

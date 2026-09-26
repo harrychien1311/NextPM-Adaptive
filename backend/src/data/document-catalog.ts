@@ -33,6 +33,36 @@ export const KICKOFF_DECK = 'Kickoff Deck';
  */
 export const PROJECT_PLAN = 'Project Plan';
 
+/**
+ * The four planning work products of Process_Software Project Management v5.0, in the order
+ * Planning Documents lists them. Every catalog document belongs to exactly one.
+ */
+export const WORK_PRODUCTS = ['Project Plan', 'Project Charter', 'Project Schedule', 'Project Estimation'] as const;
+export type WorkProduct = (typeof WORK_PRODUCTS)[number];
+
+/**
+ * Which work product a catalog document is part of.
+ *
+ * Planning Documents groups by these, not by the eight management domains: they are the units the
+ * FPT process names and a planning review is conducted against, and a PM looking for "the schedule"
+ * should not have to know that a release calendar was filed under SCHEDULE while a WBS was filed
+ * under SCOPE. Most of the mapping follows the domain; the exceptions are named, because the Charter
+ * and the Organization Chart are the charter's own content, and a WBS is what an estimate is built
+ * from.
+ *
+ * Decided here, on the server, and sent with each catalog entry — the same rule as the export
+ * format: the client labels, it never re-derives.
+ */
+export function workProductFor(name: string, domain: ManagementDomain): WorkProduct {
+  if (/^project charter$|organi[sz]ation chart/i.test(name)) return 'Project Charter';
+  // Estimation and schedule are recognised by name as well as domain, because documents the
+  // Planning Assessment adds carry whatever domain their rule gave them — an "External Estimation"
+  // belongs with the estimates whichever way it was filed.
+  if (/\bwbs\b|estimat|cost|budget/i.test(name) || domain === 'FINANCE') return 'Project Estimation';
+  if (/schedule|milestone|calendar|timeline/i.test(name) || domain === 'SCHEDULE') return 'Project Schedule';
+  return 'Project Plan';
+}
+
 /** Domain document catalog per project type — mirrors `projectRules[type].domains`. */
 export const DOCUMENT_CATALOG: Record<ProjectType, Record<ManagementDomain, CatalogEntry[]>> = {
   SI: {

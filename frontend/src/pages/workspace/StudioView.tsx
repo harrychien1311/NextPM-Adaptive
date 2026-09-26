@@ -6,22 +6,16 @@ import { Backdrop, ModalShell } from '../../components/Modal';
 import { DocumentPreview, OrgChartFigure, SheetGrid, isChartDocument } from './DocumentPreview';
 import { useReadOnlyGuard } from '../../hooks/useProjectWrite';
 import { ApiError } from '../../api/client';
-import type { CatalogEntry, DocumentGap, ManagementDomain } from '../../api/types';
+import type { CatalogEntry, DocumentGap, WorkProduct } from '../../api/types';
 
-const DOMAIN_TABS: { domain: ManagementDomain; label: string; glyph: string; tone: string }[] = [
-  { domain: 'GOVERNANCE', label: 'Governance', glyph: 'G', tone: 'navy' },
-  { domain: 'SCOPE', label: 'Scope', glyph: 'S', tone: 'cyan' },
-  { domain: 'SCHEDULE', label: 'Schedule', glyph: 'T', tone: 'violet' },
-  { domain: 'FINANCE', label: 'Finance', glyph: 'F', tone: 'green-bg' },
-  { domain: 'STAKEHOLDERS', label: 'Stakeholders', glyph: 'H', tone: 'orange' },
-  { domain: 'RESOURCES', label: 'Resources', glyph: 'R', tone: 'rose' },
-  { domain: 'RISK', label: 'Risk', glyph: '!', tone: 'red-bg' },
-  // No PROJECT_PLAN tab: generating that workbook was retired (see `PROJECT_PLAN` in
-  // data/document-catalog.ts). The enum value stays in the schema so old rows still read.
-  // Its own tab: the kickoff deck is the one output built from the customer's own file, and it is
-  // what a PM looks for by name — it should not be hunted for among the stakeholder documents.
-  { domain: 'KICKOFF', label: 'Kickoff', glyph: '▶', tone: 'cyan' },
-];
+/**
+ * The four planning work products of Process_Software Project Management v5.0, in the order the
+ * list shows them. They replaced the eight management-domain tabs: these are the units the FPT
+ * process names and a planning review is held against, and a PM looking for the schedule should
+ * not need to know that a release calendar was filed under SCHEDULE and a WBS under SCOPE. Which
+ * group a document is in is the server's decision (`workProduct` on each catalog entry).
+ */
+const WORK_PRODUCT_ORDER: WorkProduct[] = ['Project Plan', 'Project Charter', 'Project Schedule', 'Project Estimation'];
 
 /** Capturing + global so `split` keeps the tokens as their own array entries. */
 const GAP_SPLIT = /(\{\{gap:\d+\}\})/g;
@@ -56,7 +50,6 @@ export function StudioView({
   const notify = useToast();
   const queryClient = useQueryClient();
 
-  const [domain, setDomain] = useState<ManagementDomain>('GOVERNANCE');
   const [definitionId, setDefinitionId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [editSections, setEditSections] = useState<{ title: string; content: string }[]>([]);
@@ -81,14 +74,16 @@ export function StudioView({
   const { canWrite, guard, lockClass, lockedProps } = useReadOnlyGuard(projectId);
 
   /**
-   * After an analysis, the Studio shows what that analysis said is missing — not all twenty-odd
-   * catalog documents. The point of the gap list is that *these* are the ones this project needs,
-   * and burying them among the rest throws that away.
+   * Planning Documents shows what the Planning Assessment found missing — the documents that close
+   * a failed Missing Document rule — not all twenty-odd catalog documents. The assessment decided
+   * which documents apply to this project and which the input already provides; showing the rest
+   * would undo exactly that judgement. (Before a project has been assessed, the older planning
+   * analysis's gap list is the source.)
    *
-   * `inPlanningGap === null` on every entry means no analysis has tied a gap to a document, and the
-   * whole catalog is shown: hiding everything because the model named nothing would leave the PM
-   * unable to generate anything at all. The toggle is always there, because "show me the rest" is
-   * a reasonable thing to want and a filter with no escape is a trap.
+   * `inPlanningGap === null` on every entry means nothing has named a document yet, and the whole
+   * catalog is shown: hiding everything would leave the PM unable to generate anything at all. The
+   * toggle stays, because "show me the rest" is a reasonable thing to want and a filter with no
+   * escape is a trap.
    */
   const [gapsOnly, setGapsOnly] = useState(true);
   const hasGapFilter = (data?.catalog ?? []).some((entry) => entry.inPlanningGap !== null);
@@ -106,27 +101,25 @@ export function StudioView({
     [data, gapsOnly, hasGapFilter],
   );
 
-  const countByDomain = useMemo(
+  /**
+   * The list, grouped by work product. A group with nothing in it is left out — a heading over an
+   * empty list is a dead end with a zero on it.
+   */
+  const groups = useMemo(
     () =>
-      shown.reduce<Record<string, number>>((counts, entry) => {
-        counts[entry.domain] = (counts[entry.domain] ?? 0) + 1;
-        return counts;
-      }, {}),
+      WORK_PRODUCT_ORDER.map((workProduct) => ({
+        workProduct,
+        entries: shown.filter((entry) => entry.workProduct === workProduct),
+      })).filter((group) => group.entries.length > 0),
     [shown],
   );
-
-  // A domain with nothing in it is not a tab worth showing — it is a dead end with a zero on it.
-  const visibleTabs = DOMAIN_TABS.filter((tab) => (countByDomain[tab.domain] ?? 0) > 0);
-  // Hiding the tab the PM is standing on would leave them on an empty panel with nothing
-  // highlighted, so the selection follows the list rather than the other way round.
-  const activeDomain = visibleTabs.some((tab) => tab.domain === domain) ? domain : visibleTabs[0]?.domain ?? domain;
 
   /**
    * Open the document the caller named, instead of whatever this screen would have selected.
    *
-   * Without this, `Open` on a PM action only switched the view, and the Studio then fell back to
-   * its own defaults — domain `GOVERNANCE`, first document in it — so every action on the list,
-   * whatever it was about, arrived at the same document.
+   * Without this, *View* on a PM action only switched the view, and the screen then fell back to
+   * its own default — the first document in the list — so every action on the list, whatever it
+   * was about, arrived at the same document.
    *
    * Two things it has to get right. It matches on the **catalog's** name, which is what the server
    * stores in `targetDocument` for exactly this reason. And it drops the gap filter when that filter
@@ -144,17 +137,13 @@ export function StudioView({
     const target = data.catalog.find((entry) => entry.name.trim().toLowerCase() === wanted);
     if (!target) return;
     appliedFocus.current = focusDocument;
-    setDomain(target.domain);
     setDefinitionId(target.definitionId);
     if (hasGapFilter && target.inPlanningGap !== true) setGapsOnly(false);
   }, [focusDocument, data, hasGapFilter]);
 
-  const domainDocs = useMemo(
-    () => shown.filter((entry) => entry.domain === activeDomain),
-    [shown, activeDomain],
-  );
-  const selected: CatalogEntry | undefined =
-    domainDocs.find((entry) => entry.definitionId === definitionId) ?? domainDocs[0];
+  // Hiding the document the PM had selected (by toggling the filter) falls back to the first one
+  // shown, so the canvas never renders a document that is not in the list beside it.
+  const selected: CatalogEntry | undefined = shown.find((entry) => entry.definitionId === definitionId) ?? shown[0];
   const draft = selected?.document;
 
   const fit = useQuery({
@@ -286,7 +275,7 @@ export function StudioView({
     <section className="view active">
       <div className="page-head compact">
         <div>
-          <p>PLANNING FLOW 3 · GENERATE &amp; APPROVE</p>
+          <p>PLANNING FLOW 3 · PLANNING DOCUMENTS</p>
           <h1>Pick a document and let the AI write it.</h1>
           <span>
             The AI chooses the structure from the project type and the confirmed governance model. It never invents a
@@ -322,7 +311,7 @@ export function StudioView({
         <div className="gap-filter-bar">
           <span>
             {gapsOnly
-              ? 'Showing only the documents the planning analysis says are missing, plus the kickoff deck.'
+              ? 'Showing only the documents the Planning Assessment found missing for this project.'
               : 'Showing every document in the catalog.'}
           </span>
           <button className="text-button" onClick={() => setGapsOnly((only) => !only)}>
@@ -331,62 +320,58 @@ export function StudioView({
         </div>
       )}
 
-      <div className="domain-tabs">
-        {visibleTabs.map((tab) => (
-          <button
-            key={tab.domain}
-            className={`${activeDomain === tab.domain ? 'active' : ''}${lockClass}`}
-            {...lockedProps}
-            onClick={guard(() => {
-              setDomain(tab.domain);
-              setDefinitionId(null);
-            })}
-          >
-            <span className={`domain-glyph ${tab.tone}`}>{tab.glyph}</span>
-            {/* The count of what this tab will actually show, not of what the catalog holds. */}
-            {tab.label} <b>{countByDomain[tab.domain] ?? 0}</b>
-          </button>
-        ))}
-      </div>
-
       <div className="template-workspace">
         <aside className="panel document-catalog">
           <div className="catalog-head">
             <div>
-              <h2>{DOMAIN_TABS.find((tab) => tab.domain === activeDomain)?.label} documents</h2>
-              <p>Recommended for this project</p>
+              <h2>Document list</h2>
+              <p>
+                {groups.length} group{groups.length === 1 ? '' : 's'} · {shown.length} document{shown.length === 1 ? '' : 's'}
+              </p>
             </div>
           </div>
-          <div>
-            {domainDocs.map((entry) => (
-              <button
-                key={entry.definitionId}
-                className={`catalog-item${selected?.definitionId === entry.definitionId ? ' active' : ''}${lockClass}`}
-                {...lockedProps}
-                onClick={guard(() => setDefinitionId(entry.definitionId))}
-              >
-                <span>
-                  <b>{entry.name}</b>
-                  <small>
-                    {entry.requirement === 'REQUIRED' ? 'Required' : 'Conditional'} ·{' '}
-                    {entry.document ? statusLabel(entry.document.status) : 'Not generated'}
-                  </small>
-                </span>
-                <i>›</i>
-              </button>
-            ))}
-          </div>
-          <div className="catalog-note">
-            <span>◇</span>
-            <p>Conditional documents appear only when matching project rules are triggered.</p>
-          </div>
+          {/*
+            One list in the four Process v5.0 work products, the way the mockup lays it out, rather
+            than eight domain tabs each holding two or three documents. The group count is approved
+            of shown, so it reads as progress through that work product.
+          */}
+          {shown.length === 0 && (
+            <div className="program-empty">The assessment found no document missing. Show all documents to generate one anyway.</div>
+          )}
+          {groups.map((group) => (
+            <div className="work-product-group" key={group.workProduct}>
+              <div className="work-product-head">
+                <span>{group.workProduct}</span>
+                <b>
+                  {group.entries.filter((entry) => entry.document?.status === 'APPROVED').length}/{group.entries.length}
+                </b>
+              </div>
+              {group.entries.map((entry) => (
+                <button
+                  key={entry.definitionId}
+                  className={`catalog-item${selected?.definitionId === entry.definitionId ? ' active' : ''}${lockClass}`}
+                  {...lockedProps}
+                  onClick={guard(() => setDefinitionId(entry.definitionId))}
+                >
+                  <span>
+                    <b>{entry.name}</b>
+                    <small>
+                      {entry.requirement === 'REQUIRED' ? 'Required' : 'Conditional'} ·{' '}
+                      {entry.document ? statusLabel(entry.document.status) : 'Not generated'}
+                    </small>
+                  </span>
+                  <i>›</i>
+                </button>
+              ))}
+            </div>
+          ))}
         </aside>
 
         <main className="template-main">
           <div className="template-heading">
             <div>
               <span className="doc-kicker">
-                {domain} · {selected?.requirement}
+                {selected?.workProduct} · {selected?.requirement === 'REQUIRED' ? 'required' : 'conditional'}
               </span>
               <h2>{selected?.name}</h2>
               {/*
@@ -394,19 +379,27 @@ export function StudioView({
                 file, not by drafting prose — so say so plainly, and count blanks rather than
                 sections, because that is what the PM will be working through.
               */}
-              {selected?.customerTemplate?.usableForFill ? (
+              {selected?.customerTemplate?.mode === 'FILL' ? (
                 <p>
                   {draft && draft.status !== 'NOT_GENERATED'
                     ? `Version ${draft.version} · ${draft.sections.length} of the template’s blanks filled from this project’s data.`
                     : selected.customerTemplate.house
-                      ? `Not generated yet. Generating fills the standard ${selected.customerTemplate.fileType} template in place — the one every project uses, whoever the customer — and anything the project data cannot answer becomes a question for you below.`
+                      ? `Not generated yet. Generating fills the FPT standard ${selected.customerTemplate.fileType} template in place — the one used when the customer has none of their own — and anything the project data cannot answer becomes a question for you below.`
                       : `Not generated yet. Generating fills ${selected.customerTemplate.customerName}’s own ${selected.customerTemplate.fileType} template in place — their layout and branding are kept, and anything the project data cannot answer becomes a question for you below.`}
+                </p>
+              ) : selected?.customerTemplate?.mode === 'OUTLINE' ? (
+                <p>
+                  {draft && draft.status !== 'NOT_GENERATED'
+                    ? `Version ${draft.version} · ${draft.sections.length} sections, following the ${selected.customerTemplate.house ? 'FPT standard' : `${selected.customerTemplate.customerName}`} template’s structure.`
+                    : `Not generated yet. The AI drafts it from this project’s verified inputs, following the ${
+                        selected.customerTemplate.house ? 'FPT standard' : `${selected.customerTemplate.customerName}`
+                      } ${selected.customerTemplate.fileType} template’s structure, and it downloads as a ${selected.customerTemplate.fileType} file.`}
                 </p>
               ) : (
                 <p>
                   {draft && draft.status !== 'NOT_GENERATED'
                     ? `Version ${draft.version} · ${draft.sections.length} sections written by the AI.`
-                    : 'Not generated yet. The AI will decide the structure from this project’s verified inputs.'}
+                    : 'Not generated yet. Neither the customer nor the FPT standard has a template for this document, so the AI will decide the structure from this project’s verified inputs.'}
                 </p>
               )}
               {/*
@@ -420,7 +413,7 @@ export function StudioView({
                     <>
                       No customer template matched <b>{workspace.data.customer}</b>, so this builds a neutral deck
                       carrying that customer’s logo. Add the spelling as an alias, or upload their kickoff template,
-                      in the Customer library.
+                      in Account Libraries.
                     </>
                   ) : (
                     <>
@@ -431,17 +424,29 @@ export function StudioView({
                 </p>
               )}
               {selected?.customerTemplate && (
-                <p className={`template-source${selected.customerTemplate.usableForFill ? '' : ' warn'}`}>
+                <p className="template-source">
                   {selected.customerTemplate.house
-                    ? 'Standard template (all customers)'
+                    ? 'FPT standard template (no customer template for this document)'
                     : `${selected.customerTemplate.customerName} template`}
-                  : <b>{selected.customerTemplate.sourceFile}</b> · {selected.customerTemplate.placeholders.length}{' '}
-                  blank{selected.customerTemplate.placeholders.length === 1 ? '' : 's'}
-                  {/*
-                    An outline template is not a defect in the app, it is a fact about the file —
-                    so say what will happen instead of silently doing something else.
-                  */}
-                  {!selected.customerTemplate.usableForFill && <> — {selected.customerTemplate.fillNote}</>}
+                  : <b>{selected.customerTemplate.sourceFile}</b> ·{' '}
+                  {selected.customerTemplate.mode === 'FILL' ? (
+                    <>
+                      {selected.customerTemplate.placeholders.length} blank
+                      {selected.customerTemplate.placeholders.length === 1 ? '' : 's'} filled in place
+                    </>
+                  ) : (
+                    /*
+                      An outline template is not a defect in the app, it is a fact about the file —
+                      so say what happens with it instead of silently doing something else.
+                    */
+                    <>
+                      structure followed
+                      {selected.customerTemplate.outlineCount
+                        ? ` (${selected.customerTemplate.outlineCount} heading${selected.customerTemplate.outlineCount === 1 ? '' : 's'})`
+                        : ''}{' '}
+                      — {selected.customerTemplate.fillNote}
+                    </>
+                  )}
                 </p>
               )}
             </div>
@@ -551,7 +556,11 @@ export function StudioView({
                           )
                         }
                       >
-                        Download .{(selected?.exportFormat ?? 'DOCX').toLowerCase()}
+                        {/*
+                          Just "Download": the file type follows the template this document was
+                          made from — Word, PowerPoint or Excel — and the server names the file.
+                        */}
+                        Download
                       </button>
                       <button
                         className={`primary${lockClass}`}

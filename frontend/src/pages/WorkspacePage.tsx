@@ -5,10 +5,13 @@ import { planChangeApi, projectApi } from '../api/endpoints';
 import { useAuth } from '../store/auth';
 import { DashboardView } from './workspace/DashboardView';
 import { InputView } from './workspace/InputView';
-// The view keeps the `approach` route key so existing links and state survive the rename.
-import { PlanningReviewView } from './workspace/PlanningReviewView';
-import { PlanChangeView } from './workspace/PlanChangeView';
+// The view keeps the `approach` route key so existing links and saved state survive the rename to
+// Planning Assessment — the same reason `ApproachView` kept its filename when it became a screen
+// about governance models.
+import { PlanningAssessmentView } from './workspace/PlanningAssessmentView';
+import { UpdatePlanningView } from './workspace/UpdatePlanningView';
 import { PlanHistoryView } from './workspace/PlanHistoryView';
+import { PmActionsView } from './workspace/PmActionsView';
 import { StudioView } from './workspace/StudioView';
 import { AgentDrawer } from './workspace/AgentDrawer';
 import { FloatingAgentButton } from './workspace/FloatingAgentButton';
@@ -16,11 +19,15 @@ import { TeamModal } from './workspace/TeamModal';
 import { SignOutIcon } from '../components/icons';
 
 /**
- * `history` is the Plan history screen. It is a view but deliberately **not** a nav item: it is not
- * a step in the planning flow, it is the record of one, so it is entered from the dashboard and
- * goes back there.
+ * The planning flow is five steps: Project Input, Planning Assessment, Planning Documents, then —
+ * once the PM has confirmed the assessment — Update Planning (`update`) and Plan History
+ * (`history`). The last two stay out of the sidebar until then: before a plan is confirmed there is
+ * nothing to change and no history to read.
+ *
+ * `actions` is the full PM Actions list, reached from the dashboard's "View all" — a view, not a
+ * step in the flow.
  */
-export type WorkspaceView = 'dashboard' | 'input' | 'approach' | 'studio' | 'history';
+export type WorkspaceView = 'dashboard' | 'input' | 'approach' | 'studio' | 'update' | 'history' | 'actions';
 
 /**
  * Switching view, optionally naming the document to land on.
@@ -33,7 +40,7 @@ export type WorkspaceView = 'dashboard' | 'input' | 'approach' | 'studio' | 'his
 export type NavigateToView = (view: WorkspaceView, focusDocument?: string | null) => void;
 
 /** The values `?view=` accepts, so a hand-edited URL cannot put the workspace in a state that isn't one. */
-const WORKSPACE_VIEWS: WorkspaceView[] = ['dashboard', 'input', 'approach', 'studio', 'history'];
+const WORKSPACE_VIEWS: WorkspaceView[] = ['dashboard', 'input', 'approach', 'studio', 'update', 'history', 'actions'];
 
 export function WorkspacePage({ projectId }: { projectId: string }) {
   const navigate = useNavigate();
@@ -68,11 +75,7 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
     queryFn: () => projectApi.workspace(projectId),
   });
 
-  /**
-   * The change the PM currently has open, if any. Held here rather than inside a view because two
-   * screens read it — Project Input to know which button to offer, and `approach` to know whether it
-   * is showing Planning Review or Change impact.
-   */
+  /** The change the PM currently has open, if any — the sidebar marks step 4 while there is one. */
   const planChange = useQuery({
     queryKey: ['plan-change', projectId],
     queryFn: () => planChangeApi.current(projectId),
@@ -156,20 +159,37 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
               <button className={`nav-item${view === 'input' ? ' active' : ''}`} onClick={() => setView('input')}>
                 <span className="step-node">1</span>
                 <span>Project Input</span>
-                <b>{project.inputReadiness}%</b>
               </button>
               <button className={`nav-item${view === 'approach' ? ' active' : ''}`} onClick={() => setView('approach')}>
                 <span className="step-node">2</span>
-                <span>Planning Review</span>
+                <span>Planning Assessment</span>
                 {project.approach ? <b>✓</b> : <i>!</i>}
               </button>
               <button className={`nav-item${view === 'studio' ? ' active' : ''}`} onClick={() => setView('studio')}>
                 <span className="step-node">3</span>
-                <span>Planning Studio</span>
+                <span>Planning Documents</span>
                 <b>
                   {project.documentsGenerated}/{project.documentsTotal || 0}
                 </b>
               </button>
+              {/*
+                Steps 4 and 5 appear once the PM has confirmed the Planning Assessment. Before that
+                there is no plan to change and no history of one, and two steps that lead nowhere would
+                only invite the PM to click into an empty screen.
+              */}
+              {project.approach && (
+                <>
+                  <button className={`nav-item${view === 'update' ? ' active' : ''}`} onClick={() => setView('update')}>
+                    <span className="step-node">4</span>
+                    <span>Update Planning</span>
+                    {planChange.data?.change && <i title="A change is being recorded">●</i>}
+                  </button>
+                  <button className={`nav-item${view === 'history' ? ' active' : ''}`} onClick={() => setView('history')}>
+                    <span className="step-node">5</span>
+                    <span>Plan History</span>
+                  </button>
+                </>
+              )}
             </div>
           </nav>
 
@@ -222,9 +242,6 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
               </span>
             </div>
             <div className="top-actions">
-              <button className="icon-button" aria-label="Notifications">
-                ◔<i />
-              </button>
               {project.documentsInReview > 0 && (
                 <button className="primary small" onClick={() => setView('studio')}>
                   Review {project.documentsInReview} draft{project.documentsInReview > 1 ? 's' : ''}
@@ -254,19 +271,16 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
 
           {view === 'dashboard' && <DashboardView projectId={projectId} onNavigate={goToView} />}
           {view === 'input' && <InputView projectId={projectId} onNavigate={goToView} />}
-          {/*
-            One route, two screens, chosen by data rather than by a flag: an analysed plan change
-            turns Planning Review into Change impact. A refresh or an old bookmark therefore lands
-            in the right place, and applying the change hands the route straight back.
-          */}
-          {view === 'approach' &&
-            (planChange.data?.change?.status === 'ANALYZED' ? (
-              <PlanChangeView projectId={projectId} change={planChange.data.change} onNavigate={goToView} />
-            ) : (
-              <PlanningReviewView projectId={projectId} onNavigate={goToView} />
-            ))}
+          {view === 'approach' && <PlanningAssessmentView projectId={projectId} onNavigate={goToView} />}
           {view === 'studio' && <StudioView projectId={projectId} focusDocument={focusDocument} />}
+          {/*
+            Update Planning holds the whole change — record, analyse, then the impact to apply or
+            dismiss — and picks which from the change's own status, so a refresh lands on the right
+            step. It used to be split between Project Input and the assessment route.
+          */}
+          {view === 'update' && <UpdatePlanningView projectId={projectId} onNavigate={goToView} />}
           {view === 'history' && <PlanHistoryView projectId={projectId} onNavigate={goToView} />}
+          {view === 'actions' && <PmActionsView projectId={projectId} onNavigate={goToView} />}
         </main>
       </div>
 

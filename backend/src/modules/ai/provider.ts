@@ -27,6 +27,90 @@ export interface GenerationContext {
   verifiedInputs: { label: string; value: string }[];
   /** Why this governance model was recommended/confirmed — for grounding, not proof. */
   reasons: string[];
+  /**
+   * Facts the Planning Assessment found missing from the project input (unresolved Missing
+   * Information findings). Without these the draft could only notice a gap it happened to trip
+   * over; with them, every fact the assessment already knows is missing reaches the PM as a
+   * question. `forThisDocument` marks the ones the assessment said belong in this document — those
+   * must be asked, and the server adds any the model leaves out.
+   */
+  knownGaps?: KnownGap[];
+  /**
+   * The structure of the customer's (or the FPT house) template for this document, when that
+   * template has too few blanks to be filled in place. The draft follows it — same sections, same
+   * order — and is exported in the template's own file type. Absent: the model chooses the structure.
+   */
+  templateOutline?: TemplateOutline;
+}
+
+export interface TemplateOutline {
+  customerName: string;
+  sourceFile: string;
+  fileType: 'DOCX' | 'XLSX' | 'PPTX';
+  /** Level 1 = a section (a Word heading, a slide, a sheet); 2-3 = a sub-heading within it. */
+  entries: { level: number; text: string }[];
+}
+
+/**
+ * The template-structure block. It overrides any structure guidance elsewhere in the prompt: the
+ * customer's template is the statement of how *their* document is laid out.
+ */
+function templateOutlineBlock(outline: TemplateOutline | undefined): string[] {
+  if (!outline?.entries.length) return [];
+  const unit = outline.fileType === 'PPTX' ? 'slide' : outline.fileType === 'XLSX' ? 'sheet' : 'section';
+  return [
+    '',
+    `TEMPLATE TO FOLLOW — ${outline.customerName}'s ${outline.fileType} template "${outline.sourceFile}".`,
+    `This document must follow that template's structure. It takes precedence over any other structure guidance here.`,
+    `- Return one section per top-level entry below (each is one ${unit}), in this order, and no others.`,
+    '- Use the entry as the section title. If it is not in English, translate it to English and keep the',
+    '  original after it in parentheses, e.g. "Project Overview (사업 개요)".',
+    '- Indented entries are sub-headings of the entry above: cover each one inside that section, in order,',
+    '  as a short line or paragraph that starts with the sub-heading.',
+    '- The template gives only the structure. Its content is not about this project: every fact still comes',
+    '  from the verified inputs, and what they do not answer is a {{gap:N}} token, never an invented value.',
+    'Template structure:',
+    ...outline.entries.map((entry) => `${'  '.repeat(Math.max(0, entry.level - 1))}- ${entry.text}`),
+  ];
+}
+
+export interface KnownGap {
+  ruleId: string;
+  /** What is missing, as the assessment reports it: "Contract type is missing". */
+  missing: string;
+  /** What exactly the PM needs to supply, in the assessment's words for this project. */
+  ask: string;
+  forThisDocument: boolean;
+}
+
+/**
+ * The known-gaps block every drafting prompt carries. Kept in one place so the prose writer, the
+ * governance writer and the template filler cannot come to treat the same finding differently.
+ */
+function knownGapsBlock(knownGaps: KnownGap[] | undefined): string[] {
+  if (!knownGaps?.length) return [];
+  const mine = knownGaps.filter((gap) => gap.forThisDocument);
+  const others = knownGaps.filter((gap) => !gap.forThisDocument);
+  const line = (gap: KnownGap) => `- [${gap.ruleId}] ${gap.missing} — ${gap.ask}`;
+  return [
+    '',
+    'KNOWN MISSING INFORMATION — the Planning Assessment found these facts are NOT in the project input.',
+    'They are unknown: never fill one in from general knowledge or from what similar projects do.',
+    ...(mine.length
+      ? [
+          'These belong in THIS document. Every one MUST appear as a {{gap:N}} token in the text, with a',
+          'matching entry in "gaps" that asks the PM for it and carries its "ruleId":',
+          ...mine.map(line),
+        ]
+      : []),
+    ...(others.length
+      ? [
+          'These may be needed here too. Wherever this document would state one of them, use a {{gap:N}}',
+          'token and a question carrying its "ruleId", exactly as above:',
+          ...others.map(line),
+        ]
+      : []),
+  ];
 }
 
 export interface GeneratedSection {
@@ -45,6 +129,11 @@ export interface DocumentGap {
   token: string;
   question: string;
   answer?: string | null;
+  /**
+   * The Missing Information rule this question asks about, when it asks about one. What lets the
+   * server check every known gap was asked, and lets the PM's answer resolve that finding.
+   */
+  ruleId?: string | null;
 }
 
 export interface GenerationOutput {
@@ -461,7 +550,7 @@ ${TABLE_DOCUMENT_RULES}
 
 Return strict JSON and nothing else:
 { "sections": [{ "title": string, "content": string }],
-  "gaps": [{ "token": "{{gap:1}}", "question": string }],
+  "gaps": [{ "token": "{{gap:1}}", "question": string, "ruleId"?: string }],
   "unresolved": string[], "raciTable"?: [...], "table"?: { "columns": [...], "rows": [[...]] } }
 "unresolved" is a short plain-English list of what was left blank, for the audit trail.`;
 
@@ -491,7 +580,29 @@ function buildPrompt(context: GenerationContext): string {
     '',
     'Why this governance model was chosen:',
     reasons || '- none recorded',
+    ...templateOutlineBlock(context.templateOutline),
+    ...knownGapsBlock(context.knownGaps),
   ].join('\n');
+}
+
+/**
+ * The mock's version of following a template: one section per top-level outline entry, each
+ * naming its sub-headings and leaving the content to the PM — the same "never guess" contract as
+ * the model, in the template's shape.
+ */
+function mockSectionsFromOutline(
+  outline: TemplateOutline,
+  gap: (question: string, label: string) => string,
+): GeneratedSection[] {
+  const sections: GeneratedSection[] = [];
+  for (const entry of outline.entries) {
+    if (entry.level === 1 || !sections.length) {
+      sections.push({ title: entry.text, content: `${entry.text}: ${gap(`What should "${entry.text}" say for this project?`, entry.text)}` });
+    } else {
+      sections[sections.length - 1].content += `\n${entry.text}: ${gap(`What should "${entry.text}" say for this project?`, entry.text)}`;
+    }
+  }
+  return sections;
 }
 
 /**
@@ -548,6 +659,24 @@ function mockGenerate(context: GenerationContext): GovernanceArtifactOutput {
       ),
     );
     return { sections: [], gaps, unresolved, table: { columns: schema.columns, rows }, provider: 'mock' };
+  }
+
+  // Following a template: its sections replace the mock's own four.
+  if (context.templateOutline?.entries.length && !/raci/i.test(context.documentName)) {
+    const outlineGaps: DocumentGap[] = [];
+    const outlineUnresolved: string[] = [];
+    const outlineGap = (question: string, label: string) => {
+      const token = `{{gap:${outlineGaps.length + 1}}}`;
+      outlineGaps.push({ token, question });
+      outlineUnresolved.push(label);
+      return token;
+    };
+    return {
+      sections: mockSectionsFromOutline(context.templateOutline, outlineGap),
+      gaps: outlineGaps,
+      unresolved: outlineUnresolved,
+      provider: 'mock',
+    };
   }
 
   // A RACI document exports as a spreadsheet, so the mock owes it rows as well as prose.
@@ -621,7 +750,7 @@ ${TABLE_DOCUMENT_RULES}
 
 Return strict JSON and nothing else:
 { "sections": [{ "title": string, "content": string }],
-  "gaps": [{ "token": "{{gap:1}}", "question": string }],
+  "gaps": [{ "token": "{{gap:1}}", "question": string, "ruleId"?: string }],
   "unresolved": string[], "raciTable"?: [...], "riskRegister"?: [...], "orgChart"?: {...},
   "table"?: { "columns": [...], "rows": [[...]] } }`;
 
@@ -640,6 +769,8 @@ function buildGovernanceArtifactPrompt(context: GovernanceArtifactContext): stri
     '',
     'Why this governance model was chosen:',
     reasons || '- none recorded',
+    ...templateOutlineBlock(context.templateOutline),
+    ...knownGapsBlock(context.knownGaps),
   ].join('\n');
 }
 
@@ -867,6 +998,8 @@ export interface TemplateFillContext {
   relatedDocuments: { name: string; excerpt: string }[];
   /** The blanks in the customer's file, with where each appears so the model can read intent. */
   placeholders: { token: string; occurrences: number; locations: string[] }[];
+  /** Facts the Planning Assessment found missing — a placeholder that needs one becomes a gap. */
+  knownGaps?: KnownGap[];
 }
 
 export interface TemplateFillOutput {
@@ -916,7 +1049,7 @@ Never turn a paragraph of guidance into a gap: that deletes advice and replaces 
 
 Return strict JSON and nothing else:
 { "values": [{ "token": string, "value": string }],
-  "gaps": [{ "token": "{{gap:1}}", "question": string }],
+  "gaps": [{ "token": "{{gap:1}}", "question": string, "ruleId"?: string }],
   "unresolved": string[] }
 Each placeholder you were given appears at most once in "values" — once if it is a blank to fill,
 not at all if it is the template's own guidance. "gaps" describes the {{gap:N}} tokens you put
@@ -949,6 +1082,7 @@ function buildTemplateFillPrompt(context: TemplateFillContext): string {
     '',
     `Placeholders to fill (${context.placeholders.length}):`,
     placeholders,
+    ...knownGapsBlock(context.knownGaps),
   ].join('\n');
 }
 
@@ -2051,6 +2185,277 @@ export async function recommendGovernanceModel(
     }
   }
   return mockRecommendGovernanceModel(context);
+}
+
+// ---------------------------------------------------------------------------
+// Skill 4 — the Planning Assessment rule engine's judgement half
+// ---------------------------------------------------------------------------
+
+export interface RuleJudgementRequest {
+  ruleId: string;
+  category: string;
+  question: string;
+  /** Null when the rule applies to every project; otherwise the condition to test first. */
+  appliesWhen: string | null;
+  /** What the PM is told if it fails — passed so the model knows what it is deciding. */
+  message: string;
+  /** For a Missing Document rule: what would satisfy it — a file, or an equivalent section. */
+  acceptableAs?: string[];
+}
+
+export interface RuleJudgement {
+  ruleId: string;
+  status: 'PASS' | 'FAIL' | 'UNKNOWN' | 'NOT_APPLICABLE';
+  /** One sentence in English saying what was found. */
+  finding: string;
+  /** Quoted lines that justify it. A CONFLICT needs two; anything else may have none. */
+  evidence: EvidenceItem[];
+  /**
+   * For a FAIL: what exactly to add, in the PM's terms ("State the acceptance test for each
+   * operational work item"). Null otherwise.
+   */
+  action: string | null;
+  /**
+   * For a FAIL: the catalog document the missing content belongs in — exactly as the catalog spells
+   * it — or null when it is not something this app generates (a customer's contract is uploaded,
+   * not drafted). Validated against the catalog by the caller; a name it does not hold is dropped.
+   */
+  targetDocument: string | null;
+  /** For a rule with `appliesWhen`: why it does or does not apply to this project. */
+  applicability: string | null;
+}
+
+export interface RuleJudgementContext {
+  projectName: string;
+  projectType: string;
+  governanceModel: string | null;
+  /** The workspace owner, who is the project manager in this app. */
+  projectManager: string | null;
+  /** The PM's own answers, already verified. */
+  inputs: { label: string; value: string }[];
+  /** Every uploaded document, as extracted text. */
+  documents: { label: string; text: string }[];
+  /**
+   * Planning documents already drafted in this project, with their status. Empty for Missing
+   * Information and Missing Documents on purpose: those judge the *project input*, and a draft this
+   * application wrote is not evidence that the project supplied anything.
+   */
+  planningDocuments: { name: string; status: string }[];
+  /** The documents this project type can generate, so a failed rule can name where its fix goes. */
+  catalogDocuments: string[];
+  rules: RuleJudgementRequest[];
+}
+
+/**
+ * Evaluates Planning Assessment rules against the project input — every rule in the catalog, one
+ * category per call. For a failed Missing Information or Missing Document rule it also says what
+ * exactly to add and which catalog document it belongs in, which is what the PM action center shows.
+ *
+ * **`UNKNOWN` is required, not tolerated.** The single most damaging thing this call could do is
+ * guess: a rule reported as FAIL on no evidence sends the PM to write a document that already
+ * exists, and a rule reported as PASS on no evidence hides a genuine hole behind a green tick. The
+ * prompt therefore makes UNKNOWN the correct answer whenever the documents are silent, and the
+ * screen shows the unknown count beside every score so a number computed over a half-answered
+ * catalog is never read as a full one.
+ *
+ * **`NOT_APPLICABLE` carries the `appliesWhen` condition.** Most conditions in the source checklist
+ * ("translation applicable", "SCDM", "has infrastructure") are judgements about the material rather
+ * than flags anyone sets, so applicability is decided here, in the same read, instead of by a
+ * separate gate that would need the same facts.
+ *
+ * **No mock fallback.** A keyword heuristic dressed as a governance assessment would put invented
+ * blockers in front of the PM and count them into the readiness score the dashboard prints. It
+ * throws, and the screen says so — the same rule as `analyzePlanningNeeds`.
+ */
+const RULE_JUDGEMENT_SYSTEM_PROMPT = `You are a project-management quality reviewer applying a fixed governance checklist to one
+project. You are given the project's data and the full text of its documents, then a numbered list
+of checks. You answer each check.
+
+For every rule return exactly one status:
+
+- "PASS" — the project input positively satisfies the check.
+- "FAIL" — the check applies to this project and the project input does not satisfy it.
+- "NOT_APPLICABLE" — the rule carries an "appliesWhen" condition and that condition is not true of
+  this project. Use this freely: most of these conditions describe situations many projects are
+  simply not in. A rule with NO appliesWhen applies to every project and can never be
+  NOT_APPLICABLE.
+- "UNKNOWN" — you cannot tell from what you were given.
+
+The project input is the PM's recorded answers plus the text of every uploaded document. Judge
+against that. Planning documents this application drafted are NOT project input: when they are
+listed, use them only for risk and conflict checks, never as proof that information or a document
+was supplied.
+
+Missing Information checks ask whether a FACT is stated. A form value such as "TBD", "pending" or
+"to be confirmed" does not state it. The same fact stated in any uploaded document counts, even if
+the form is empty.
+
+Missing Document checks ask whether a DOCUMENT exists in the input — as its own file, or as an
+equivalent section inside another uploaded document. "acceptable as" lists what would satisfy it.
+Be exact about applicability: first decide whether the rule applies (every project, or only when its
+appliesWhen condition is true — an AI project, a supplier-controlled delivery, translation scope),
+then whether the input provides it. Mark FAIL only when it applies AND is absent.
+
+For every FAIL, also return:
+- "action": one sentence telling the PM exactly what to add — the specific content, not a
+  restatement of the rule. "State the acceptance test for each operational work item and who signs
+  it off" rather than "Add acceptance criteria".
+- "targetDocument": the planning document that content belongs in, copied EXACTLY from the list of
+  documents this project can generate. Use null when it is not something that list holds — a
+  customer contract, a security review record — in which case the action should say to upload it.
+
+For every rule with an appliesWhen, return "applicability": one sentence saying why the condition is
+or is not true of this project. Omit it for rules without one.
+
+**UNKNOWN means you cannot assess the check — it never means "the input does not mention it".**
+For Missing Information and Missing Documents, absence from the input IS the finding: a fact the
+input does not state is missing information, and a document the input does not contain is a missing
+document. Answer those FAIL. UNKNOWN items are hidden from the PM, so marking an unstated fact
+UNKNOWN hides exactly the gap this check exists to report. Never answer PASS because something
+seems likely or is normal practice; answer PASS only when you can point at the text.
+
+How to decide, per category:
+- MISSING_INFORMATION: PASS when the input states the fact. FAIL when it does not — whether nothing
+  in the input mentions it, or it appears only as "TBD", "pending" or a placeholder. Use UNKNOWN only
+  when the check depends on something you cannot establish: a rule whose appliesWhen condition you
+  cannot determine, or a check about items that do not appear at all (the owner of each critical
+  dependency, when no dependencies are listed — the missing dependency list is its own FAIL).
+- MISSING_DOCUMENT, a rule that applies to every project: FAIL when the input does not contain the
+  document or an equivalent section; its absence is itself the finding.
+- MISSING_DOCUMENT, a conditional rule: first establish from the input whether the condition holds.
+  NOT_APPLICABLE when it clearly does not, UNKNOWN when the input cannot tell you, and FAIL when the
+  condition holds and the document is absent.
+- PLANNING_RISK and CONFLICT: silence is not a finding. FAIL only when the material positively shows
+  the trigger or the contradiction — a register with empty owner columns, two figures that disagree.
+
+Evidence:
+- Every FAIL and every PASS should carry at least one quoted line where one exists. UNKNOWN and
+  NOT_APPLICABLE carry none.
+- A CONFLICT rule asks whether two things disagree. It can only be FAIL when you can quote BOTH
+  sides. One quote is an assertion, not a conflict — if you have only one, the answer is UNKNOWN.
+- Absence is never a conflict. A missing document does not contradict anything.
+
+Language — the interface is English whatever the documents are in:
+- Write every "finding" in English, one sentence, saying what you actually found.
+- Evidence carries both languages: "english" is your rendering, "original" is the sentence copied
+  VERBATIM from the source in its own language (omit it when the source is already English), and
+  "source" names the document file exactly as it was given to you.
+- Proper nouns — people, companies, systems, products, places — keep the spelling their document
+  uses. Never transliterate one.
+
+Return strict JSON and nothing else:
+{ "results": [ { "ruleId": string, "status": "PASS"|"FAIL"|"UNKNOWN"|"NOT_APPLICABLE",
+  "finding": string,
+  "evidence": [{ "english": string, "original": string, "source": string }],
+  "action": string | null, "targetDocument": string | null, "applicability": string | null } ] }
+
+Return one entry for every rule you were given, in the order given.`;
+
+function buildRuleJudgementPrompt(context: RuleJudgementContext): string {
+  const documents = context.documents.length
+    ? context.documents.map((doc) => `### ${doc.label}\n${doc.text}`).join('\n\n')
+    : '(no documents have been uploaded to this project)';
+
+  return [
+    `# Project\n${context.projectName} · type ${context.projectType}${
+      context.governanceModel ? ` · governance model ${context.governanceModel}` : ''
+    }${context.projectManager ? `\nProject manager (workspace owner): ${context.projectManager}` : ''}`,
+    `# Project input — what the PM recorded\n${
+      context.inputs.length ? context.inputs.map((i) => `- ${i.label}: ${i.value}`).join('\n') : '(nothing recorded yet)'
+    }`,
+    `# Project input — uploaded document text\n${documents}`,
+    // Only sent for risk and conflict checks. For missing information and missing documents the
+    // section is left out entirely, rather than sent empty, so a draft cannot be mistaken for input.
+    ...(context.planningDocuments.length
+      ? [
+          `# Planning documents drafted by this application (NOT project input)\n${context.planningDocuments
+            .map((doc) => `- ${doc.name} — ${doc.status}`)
+            .join('\n')}`,
+        ]
+      : []),
+    `# Documents this project can generate (use these exact names for "targetDocument")\n${context.catalogDocuments
+      .map((name) => `- ${name}`)
+      .join('\n')}`,
+    `# Checks to answer (${context.rules.length})`,
+    context.rules
+      .map(
+        (rule) =>
+          `- ruleId ${rule.ruleId} [${rule.category}]${
+            rule.appliesWhen ? `\n  appliesWhen: ${rule.appliesWhen}` : '\n  applies to: every project'
+          }\n  question: ${rule.question}${
+            rule.acceptableAs?.length ? `\n  acceptable as: ${rule.acceptableAs.join('; ')}` : ''
+          }\n  reported as: ${rule.message}`,
+      )
+      .join('\n'),
+  ].join('\n\n');
+}
+
+export async function judgeAssessmentRules(context: RuleJudgementContext): Promise<RuleJudgement[]> {
+  if (env.ai.provider !== 'anthropic' || !env.ai.anthropicKey) {
+    throw serviceUnavailable(
+      'The Planning Assessment needs a model — a keyword heuristic cannot judge governance rules, and ' +
+        'inventing blockers would be worse than reporting none. Set AI_PROVIDER=anthropic and ANTHROPIC_API_KEY.',
+    );
+  }
+
+  const result = await callAnthropicJson<{ results?: unknown[] }>({
+    system: RULE_JUDGEMENT_SYSTEM_PROMPT,
+    prompt: buildRuleJudgementPrompt(context),
+    label: `skill4:assessment-rules(${context.rules.length})`,
+  });
+
+  const requested = new Map(context.rules.map((rule) => [rule.ruleId, rule]));
+  const catalog = new Map(context.catalogDocuments.map((name) => [name.trim().toLowerCase(), name]));
+  const seen = new Set<string>();
+  const text = (value: unknown) => {
+    const trimmed = typeof value === 'string' ? value.trim() : '';
+    return trimmed || null;
+  };
+
+  return (Array.isArray(result.results) ? result.results : [])
+    .map((entry) => {
+      const row = entry as Record<string, unknown>;
+      const ruleId = String(row.ruleId ?? '').trim();
+      const rule = requested.get(ruleId);
+      // A rule id this batch did not ask about is the model inventing a check. Dropped rather than
+      // rendered: the catalog is the authority on which rules exist.
+      if (!rule || seen.has(ruleId)) return null;
+      seen.add(ruleId);
+
+      const raw = String(row.status ?? '').toUpperCase();
+      // An unrecognised status is not a pass. Treating a malformed answer as satisfied is the one
+      // failure mode that hides itself.
+      const valid = (['PASS', 'FAIL', 'UNKNOWN', 'NOT_APPLICABLE'] as const).find((option) => option === raw);
+      let status: RuleJudgement['status'] = valid ?? 'UNKNOWN';
+      let evidence = normalizeEvidence(row.evidence);
+
+      // Enforced here rather than trusted from the prompt: a conflict needs both sides quoted, so
+      // one backed by a single quote is demoted rather than shown to the PM as a finding.
+      if (status === 'FAIL' && ruleId.startsWith('CF-') && evidence.length < 2) {
+        status = 'UNKNOWN';
+        evidence = [];
+      }
+
+      // A rule with no condition applies to every project. "Not applicable" there would quietly
+      // excuse a project from a Charter or a Schedule, so it is not accepted as an answer.
+      if (status === 'NOT_APPLICABLE' && !rule.appliesWhen) status = 'UNKNOWN';
+
+      // Only the catalog's own spelling of a name the catalog holds. A document the model invented
+      // or misspelled would send the PM to a Planning Documents entry that does not exist.
+      const named = text(row.targetDocument);
+      const targetDocument = status === 'FAIL' && named ? catalog.get(named.toLowerCase()) ?? null : null;
+
+      return {
+        ruleId,
+        status,
+        finding: text(row.finding) ?? '',
+        evidence,
+        action: status === 'FAIL' ? text(row.action) : null,
+        targetDocument,
+        applicability: rule.appliesWhen ? text(row.applicability) : null,
+      };
+    })
+    .filter((row): row is RuleJudgement => row !== null);
 }
 
 // ---------------------------------------------------------------------------

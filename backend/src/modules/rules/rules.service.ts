@@ -367,14 +367,37 @@ export async function decideApproach(params: {
     data: { status: 'ACTIVE' },
   });
 
+  /**
+   * Which Planning Assessment the PM was looking at when they confirmed. The confirm on that screen
+   * is what turns the assessment into the facts the documents are generated from, so the record of
+   * the decision names the snapshot it accepted — otherwise "what did the PM agree to" could only be
+   * answered by guessing from timestamps, and a later re-run would make the guess wrong.
+   */
+  const assessment = await prisma.assessmentRun.findFirst({
+    where: { projectId },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true, fptScore: true, blockers: true },
+  });
+
   await logEvent({
     projectId,
     actorId: decidedById,
     actorType: 'PM',
     type: outcome === DecisionOutcome.CONFIRMED ? 'APPROACH_CONFIRMED' : 'APPROACH_OVERRIDDEN',
     title: `${approach} governance model ${outcome === DecisionOutcome.CONFIRMED ? 'confirmed' : 'overridden'}`,
-    detail: rationale ?? `Generation contract locked with ${pack.required.length} required outputs`,
-    payload: { decisionId: decision.id, approach },
+    detail:
+      rationale ??
+      `Generation contract locked with ${pack.required.length} required outputs${
+        assessment ? ` · assessment confirmed at FPT standard ${assessment.fptScore}%` : ''
+      }`,
+    payload: {
+      decisionId: decision.id,
+      approach,
+      assessmentRunId: assessment?.id ?? null,
+      // Recorded because confirming with blockers open is allowed — the PM may decide to proceed —
+      // and the trail should show that they knew.
+      openBlockers: assessment?.blockers ?? null,
+    },
   });
 
   return decision;

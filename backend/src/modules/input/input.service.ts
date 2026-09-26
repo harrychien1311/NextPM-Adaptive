@@ -5,6 +5,7 @@ import { prisma } from '../../lib/prisma';
 import { badRequest, notFound } from '../../lib/http-error';
 import { env } from '../../config/env';
 import { REFERENCE_GROUPS } from '../../data/input-schemas';
+import { TICK_CLOSE_REASON } from '../../data/assessment-rules';
 import { extractTextFromFile } from '../../lib/extract-text';
 import { matchOptionsInText } from '../../lib/option-match';
 import { computeInputReadiness } from '../../lib/readiness';
@@ -524,6 +525,15 @@ export async function syncPlanningActions(projectId: string, gaps: PlanningGap[]
   const project = await prisma.project.findUnique({ where: { id: projectId }, select: { type: true } });
   if (!project) throw notFound('Project not found');
 
+  /**
+   * Once a project has been through the Planning Assessment, the assessment owns the action center:
+   * each failed Missing Information / Missing Document rule is an action with a specific
+   * instruction and a target document (`syncAssessmentActions`). Writing the analysis's gaps on top
+   * would list the same hole twice under two wordings, and a later analysis run would wipe the
+   * assessment's actions. The gaps still drive the action center for a project never assessed.
+   */
+  if ((await prisma.assessmentRun.count({ where: { projectId } })) > 0) return 0;
+
   const definitions = await prisma.documentDefinition.findMany({
     where: { projectType: project.type },
     select: { name: true, domain: true },
@@ -584,7 +594,16 @@ export async function reopenActionsForDocument(projectId: string, documentName: 
   return count;
 }
 
-/** Resolves a PM action item and writes the chosen value back into the input profile. */
+/**
+ * Marks a PM action resolved — the PM saying "this is handled" — and writes the answer back into
+ * the input profile where the title names a field.
+ *
+ * **Resolving does not take the action off the list.** It turns green and stays, and only *Close*
+ * removes it (`closeAction`). Two steps because they are two claims: "I have dealt with this" and
+ * "I no longer need to see it". An action is also resolved automatically when its document is
+ * confirmed in Planning Documents — that is derived on read in `dashboard()`, not written here.
+ * The status stays OPEN until closed; `resolvedAt` is what records the resolution.
+ */
 export async function resolveAction(params: { projectId: string; actionId: string; value: string; actorId: string }) {
   const action = await prisma.actionItem.findFirst({ where: { id: params.actionId, projectId: params.projectId } });
   if (!action) throw notFound('Action item not found');
@@ -614,7 +633,7 @@ export async function resolveAction(params: { projectId: string; actionId: strin
 
   const updated = await prisma.actionItem.update({
     where: { id: params.actionId },
-    data: { status: 'RESOLVED', resolvedValue: params.value, resolvedAt: new Date() },
+    data: { resolvedValue: params.value, resolvedAt: new Date() },
   });
 
   await logEvent({
@@ -622,10 +641,59 @@ export async function resolveAction(params: { projectId: string; actionId: strin
     actorId: params.actorId,
     type: 'ACTION_RESOLVED',
     title: action.title,
-    detail: `PM selected: ${params.value}`,
+    detail: `PM resolved: ${params.value}`,
   });
 
   await recomputeDomainReadiness(params.projectId);
+  return updated;
+}
+
+/**
+ * Takes a resolved action off the PM's list.
+ *
+ * Refused unless it is resolved — by the PM pressing Resolve, or by its document having been
+ * confirmed in Planning Documents. Closing something unresolved would make an outstanding item
+ * disappear with nothing recorded about how it was handled, which is how a gap resurfaces a month
+ * later with nobody able to say what was decided. When the document settled it, that is what the
+ * closure records.
+ */
+export async function closeAction(params: { projectId: string; actionId: string; actorId: string }) {
+  const action = await prisma.actionItem.findFirst({ where: { id: params.actionId, projectId: params.projectId } });
+  if (!action) throw notFound('Action item not found');
+  if (action.status !== 'OPEN') return action;
+
+  const document = action.targetDocument
+    ? await prisma.planningDocument.findFirst({
+        where: { projectId: params.projectId, name: action.targetDocument, status: 'APPROVED' },
+        select: { name: true },
+      })
+    : null;
+  // The third way an action is resolved: the PM ticked its rule as met in the Standards popup.
+  const ticked = action.ruleId
+    ? await prisma.assessmentOverride.findFirst({ where: { projectId: params.projectId, ruleId: action.ruleId, met: true } })
+    : null;
+  if (!action.resolvedAt && !document && !ticked) {
+    throw badRequest('Resolve this action first — close only takes a resolved action off the list');
+  }
+
+  const updated = await prisma.actionItem.update({
+    where: { id: action.id },
+    data: {
+      status: 'RESOLVED',
+      resolvedValue:
+        action.resolvedValue ??
+        (document ? `${document.name} confirmed by the PM in Planning Documents` : TICK_CLOSE_REASON),
+      resolvedAt: action.resolvedAt ?? new Date(),
+    },
+  });
+
+  await logEvent({
+    projectId: params.projectId,
+    actorId: params.actorId,
+    type: 'ACTION_CLOSED',
+    title: action.title,
+    detail: updated.resolvedValue,
+  });
   return updated;
 }
 
@@ -819,6 +887,7 @@ export async function removeReference(projectId: string, id: string, actorId?: s
   const file = await prisma.referenceFile.findFirst({ where: { id, projectId } });
   if (!file) throw notFound('Reference file not found');
   await prisma.referenceFile.delete({ where: { id } });
+  const restored = await restoreReplacedBy(projectId, file);
 
   /**
    * Delete the bytes too. This used to drop only the row, so every removed upload left its file
@@ -837,12 +906,67 @@ export async function removeReference(projectId: string, id: string, actorId?: s
       actorType: 'PM',
       type: 'REFERENCE_DELETED',
       title: `${file.fileName} removed`,
-      detail: `The uploaded ${file.group} file and the text extracted from it were deleted.`,
-      payload: { referenceId: id, group: file.group },
+      detail: `The uploaded ${file.group} file and the text extracted from it were deleted.${
+        restored.length ? ` ${restored.map((entry) => entry.fileName).join(', ')} is current again.` : ''
+      }`,
+      payload: { referenceId: id, group: file.group, restored: restored.map((entry) => entry.id) },
     });
   }
 
-  return { removed: true, fileName: file.fileName };
+  return { removed: true, fileName: file.fileName, restored: restored.map((entry) => entry.fileName) };
+}
+
+/**
+ * Deleting an upload that replaced another brings the replaced version back.
+ *
+ * A replaced file is excluded from every analysis, so leaving it marked replaced by a file that no
+ * longer exists takes it out of the project for good while it still sits in the uploads list —
+ * which is how Swing Order ended up with every assessment reading no document at all. Three cases:
+ *
+ * - The deleted file was **current**: whatever it replaced becomes current again.
+ * - The deleted file was **itself replaced** (the middle of a chain): what it replaced stays
+ *   replaced, now by the file that replaced it, so the chain is not broken.
+ * - A **description** was deleted and the slot is left empty with no pointer to follow: the most
+ *   recent earlier description comes back. Rows replaced before `supersededById` existed carry no
+ *   pointer, and the slot holds one document, so the latest earlier one is the only sensible
+ *   reading. Other groups hold several files, so there is nothing to infer there.
+ */
+async function restoreReplacedBy(projectId: string, deleted: { id: string; group: ReferenceGroup; supersededAt: Date | null; supersededById: string | null }) {
+  if (deleted.supersededAt) {
+    if (deleted.supersededById) {
+      await prisma.referenceFile.updateMany({
+        where: { projectId, supersededById: deleted.id },
+        data: { supersededById: deleted.supersededById },
+      });
+    }
+    return [];
+  }
+
+  const restored = await prisma.referenceFile.findMany({
+    where: { projectId, supersededById: deleted.id },
+    select: { id: true, fileName: true },
+  });
+  if (restored.length) {
+    await prisma.referenceFile.updateMany({
+      where: { id: { in: restored.map((entry) => entry.id) } },
+      data: { supersededAt: null, supersededById: null },
+    });
+    return restored;
+  }
+
+  if (deleted.group !== DESCRIPTION_GROUP) return [];
+  const slotTaken = await prisma.referenceFile.count({
+    where: { projectId, group: DESCRIPTION_GROUP, supersededAt: null },
+  });
+  if (slotTaken) return [];
+  const latest = await prisma.referenceFile.findFirst({
+    where: { projectId, group: DESCRIPTION_GROUP, supersededAt: { not: null } },
+    orderBy: { uploadedAt: 'desc' },
+    select: { id: true, fileName: true },
+  });
+  if (!latest) return [];
+  await prisma.referenceFile.update({ where: { id: latest.id }, data: { supersededAt: null, supersededById: null } });
+  return [latest];
 }
 
 /**

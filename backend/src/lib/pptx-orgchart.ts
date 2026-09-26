@@ -183,7 +183,7 @@ export function orgChartSlideXml(
       shape(id++, 'Empty', { x: MARGIN, y: SLIDE_H / 2 - NODE_H, cx: SLIDE_W - MARGIN * 2, cy: NODE_H * 2 }, [
         lineXml('This chart has no structure yet.', { size: 1400, bold: true, color: DOC_COLORS.navy }),
         lineXml(
-          'Press “Generate document” in the Planning Studio. A chart generated before this document ' +
+          'Press “Generate document” in Planning Documents. A chart generated before this document ' +
             'became a drawn chart holds prose instead, and needs generating again.',
           { size: 1100, color: DOC_COLORS.muted },
         ),

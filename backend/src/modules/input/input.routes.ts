@@ -18,6 +18,7 @@ import {
   removeCustomField,
   removeReference,
   resolveAction,
+  closeAction,
   resolveCustomerSuggestion,
   saveValues,
   verifyInputs,
@@ -148,6 +149,15 @@ inputRouter.post(
         actorId: req.user!.id,
       }),
     );
+  }),
+);
+
+/** Takes a resolved action off the list. Refused while it is still unresolved. */
+inputRouter.post(
+  '/:projectId/actions/:actionId/close',
+  requireProjectRole(...PROJECT_WRITE_ROLES),
+  asyncHandler(async (req, res) => {
+    res.json(await closeAction({ projectId: req.params.projectId, actionId: req.params.actionId, actorId: req.user!.id }));
   }),
 );
 

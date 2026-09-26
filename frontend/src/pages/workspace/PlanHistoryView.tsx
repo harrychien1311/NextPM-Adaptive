@@ -52,7 +52,7 @@ export function PlanHistoryView({
     <section className="view active">
       <div className="page-head">
         <div>
-          <p>PLAN HISTORY</p>
+          <p>PLANNING FLOW 5 · PLAN HISTORY</p>
           <h1>How this plan has moved</h1>
           <span>
             {changes.length === 0
@@ -60,8 +60,9 @@ export function PlanHistoryView({
               : `${changes.length} change${changes.length === 1 ? '' : 's'} recorded`}
           </span>
         </div>
-        <button className="secondary" onClick={() => onNavigate('dashboard')}>
-          ← Back to dashboard
+        {/* A step in the flow now, reached from the sidebar — so the way on is to record the next change. */}
+        <button className="secondary" onClick={() => onNavigate('update')}>
+          ⇄ Record a plan change
         </button>
       </div>
 
@@ -208,7 +209,7 @@ function HistoryRow({
                 <p className="doc-note">
                   {change.status === 'DISMISSED'
                     ? 'This change was set aside — none of the above was applied, and the plan carried on unchanged.'
-                    : 'Nothing above has been applied yet. The plan, the gaps and every document are still as they were; apply it on Planning Review to make any of it take effect.'}
+                    : 'Nothing above has been applied yet. The plan, the gaps and every document are still as they were; apply it on Planning Assessment to make any of it take effect.'}
                 </p>
               )}
             </>

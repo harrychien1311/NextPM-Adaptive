@@ -5,9 +5,13 @@ import type {
   AgentSession,
   ApproachResponse,
   Approach,
+  AssessmentPayload,
+  AssessmentResponse,
   ChecklistDetail,
   ChecklistReadiness,
   ChecklistStatus,
+  CustomerReferenceKind,
+  CustomerReferenceSummary,
   CustomerSummary,
   DashboardResponse,
   DocumentExportFormat,
@@ -82,6 +86,21 @@ export const customersApi = {
     api.download(`/customers/checklists/${checklistId}/file`, fileName),
   downloadTemplate: (templateId: string, fileName: string) =>
     api.download(`/customers/templates/${templateId}/file`, fileName),
+
+  /** Every catalog document name — the choices for a template's document type. */
+  documentTypes: () => api.get<{ documentTypes: { name: string; projectTypes: string[] }[] }>('/customers/document-types'),
+
+  /** A document for the Approved Examples or Lessons Learned tab. */
+  uploadReference: (customerId: string, file: File, kind: CustomerReferenceKind, title?: string) => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('kind', kind);
+    if (title) form.append('title', title);
+    return api.upload<CustomerReferenceSummary>(`/customers/${customerId}/references`, form);
+  },
+  removeReference: (referenceId: string) => api.delete<{ deleted: boolean }>(`/customers/references/${referenceId}`),
+  downloadReference: (referenceId: string, fileName: string) =>
+    api.download(`/customers/references/${referenceId}/file`, fileName),
 };
 
 export const programApi = {
@@ -163,8 +182,12 @@ export const inputApi = {
   addCustomField: (projectId: string, body: { name: string; value?: string; useIn?: string }) =>
     api.post(`/projects/${projectId}/custom-fields`, body),
   removeCustomField: (projectId: string, id: string) => api.delete(`/projects/${projectId}/custom-fields/${id}`),
+  /** Marks an action resolved. It stays on the list, green, until it is closed. */
   resolveAction: (projectId: string, actionId: string, value: string) =>
     api.post(`/projects/${projectId}/actions/${actionId}/resolve`, { value }),
+  /** Takes a resolved action off the list. The server refuses an unresolved one. */
+  closeAction: (projectId: string, actionId: string) =>
+    api.post(`/projects/${projectId}/actions/${actionId}/close`, {}),
   uploadReference: (projectId: string, group: string, file: File) => {
     const form = new FormData();
     form.append('group', group);
@@ -176,7 +199,9 @@ export const inputApi = {
     form.append('file', file);
     return api.upload(`/projects/${projectId}/description`, form);
   },
-  removeReference: (projectId: string, id: string) => api.delete(`/projects/${projectId}/references/${id}`),
+  /** `restored` names any earlier version the deleted upload had replaced — it is current again. */
+  removeReference: (projectId: string, id: string) =>
+    api.delete<{ removed: boolean; fileName: string; restored: string[] }>(`/projects/${projectId}/references/${id}`),
   /** Metadata + the text extracted on upload, for the preview panel. */
   reference: (projectId: string, id: string) =>
     api.get<ReferenceDetail>(`/projects/${projectId}/references/${id}`),
@@ -338,6 +363,21 @@ export const documentsApi = {
    */
   download: (projectId: string, documentId: string, name: string, format: DocumentExportFormat = 'DOCX') =>
     api.download(`/projects/${projectId}/documents/${documentId}/export`, `${name}.${format.toLowerCase()}`),
+};
+
+/**
+ * The Planning Assessment — the FPT rule catalog applied to one project.
+ *
+ * `latest` reads the stored snapshot and is free. `run` re-evaluates the catalog, which costs model
+ * calls and writes a new snapshot, so it is a POST and is gated on write access.
+ */
+export const assessmentApi = {
+  latest: (projectId: string) => api.get<AssessmentResponse>(`/projects/${projectId}/assessment`),
+  run: (projectId: string) =>
+    api.post<{ assessment: AssessmentPayload }>(`/projects/${projectId}/assessment/run`, {}),
+  /** The PM ticks or unticks one rule. Outranks the model and survives re-runs. */
+  setRule: (projectId: string, ruleId: string, met: boolean) =>
+    api.put<{ assessment: AssessmentPayload }>(`/projects/${projectId}/assessment/rules/${ruleId}`, { met }),
 };
 
 /**

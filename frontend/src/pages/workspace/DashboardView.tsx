@@ -8,30 +8,22 @@ import { useReadOnlyGuard } from '../../hooks/useProjectWrite';
 import { DocumentPreview } from './DocumentPreview';
 import { UploadPreview } from './UploadPreview';
 import { CustomerReadinessPanel } from './CustomerReadinessPanel';
+import { PmActionList } from './PmActionList';
+import { StandardDetailModal } from './StandardDetailModal';
 import { Backdrop, ModalShell } from '../../components/Modal';
-import type { ActionItem, LibraryEntry } from '../../api/types';
+import type { LibraryEntry } from '../../api/types';
 import type { NavigateToView } from '../WorkspacePage';
 
-/** The same wording the Plan history screen uses, so one change reads the same in both places. */
-const HISTORY_LABEL: Record<string, string> = {
-  APPLIED: 'Applied',
-  DISMISSED: 'Dismissed',
-  ANALYZED: 'Awaiting you',
-  DRAFT: 'Draft',
-};
-const HISTORY_TONE: Record<string, string> = {
-  APPLIED: 'approved-status',
-  DISMISSED: 'blocked-status',
-  ANALYZED: 'review-status',
-  DRAFT: 'draft-status',
-};
-
-const TASK_STATE: Record<string, string> = {
-  DONE: 'done-state',
-  REVIEW: 'review-state',
-  BLOCKED: 'blocked-state',
-  TODO: 'review-state',
-};
+/**
+ * The planning control center.
+ *
+ * Top row: the three metric widgets with their rings — Planning readiness, Approach, Planning
+ * documents. Below: planning progress, the PM Actions (five, with a full screen behind "View all"),
+ * and the two-tier Standards. Everything else is opt-in through Customize and renders underneath.
+ *
+ * Plan history is not here any more: it is step 5 of the planning flow in the sidebar, once the plan
+ * is confirmed.
+ */
 
 const DOMAIN_LABEL: Record<string, string> = {
   GOVERNANCE: 'Governance',
@@ -46,47 +38,45 @@ const DOMAIN_LABEL: Record<string, string> = {
 };
 
 /**
- * How the Ready-to-Start percentage was built, in the PM's words. The server decides which applies
- * (`workspace.basis`); this only names it, so the ring and the explanation cannot disagree.
+ * How the readiness percentage was built, in the PM's words. The server decides which applies
+ * (`workspace.basis`); this only names it, so the figure and the explanation cannot disagree.
  */
 const READINESS_BASIS: Record<string, { label: string; help: string }> = {
+  CUSTOMER_AND_FPT: {
+    label: '60% customer standard + 40% FPT standard',
+    help: 'Weighted 60% on how far this project meets the standards its customer set, and 40% on the FPT standard — the expected planning documents the PM has confirmed.',
+  },
+  FPT_ONLY: {
+    label: 'FPT standard',
+    help: 'This project’s customer has no checklist in the library, so the score is the FPT standard alone: the share of expected planning documents the PM has confirmed.',
+  },
   CUSTOMER_AND_OUTPUTS: {
-    label: 'Customer standardization + approved planning outputs',
-    help: 'Weighted 60% on how far this project meets the standards its customer set, and 40% on the share of planning outputs the PM has approved.',
+    label: '60% customer standard + 40% approved documents',
+    help: 'The Planning Assessment has not been run, so the FPT half falls back to the share of documents approved. Run the assessment for the real figure.',
   },
-  CUSTOMER: {
-    label: 'Customer standardization',
-    help: 'How far this project meets the standards its customer set. Approved planning outputs join the score once the document pack exists.',
-  },
-  INPUT_AND_OUTPUTS: {
-    label: 'Verified inputs + approved planning outputs',
-    help: 'This customer has no checklist in the library, so the score falls back to verified inputs and approved planning outputs, evenly weighted. Upload their checklist to score against their own standards instead.',
-  },
-  INPUT: {
-    label: 'Verified inputs',
-    help: 'Nothing has been generated yet, so this is verified input coverage alone.',
+  NOT_ASSESSED: {
+    label: 'Approved documents only — not yet assessed',
+    help: 'Nothing has been assessed against the FPT standard yet. Run the Planning Assessment to score this project properly.',
   },
 };
 
-const WIDGET_LABELS: [string, string][] = [
-  ['readiness', 'Start readiness'],
-  ['approach', 'Management approach'],
-  ['outputs', 'Document progress'],
-  ['tasks', 'Planning tasks'],
-  ['decisions', 'PM decisions'],
-  ['history', 'Plan history'],
-  ['customer', 'Project readiness by customer standardization'],
-  ['library', 'Planning documents'],
-  ['activity', 'Agent activity'],
+const WIDGET_LABELS: [string, string, string][] = [
+  ['readiness', 'Planning readiness', 'Default'],
+  ['approach', 'Approach', 'Default'],
+  ['outputs', 'Planning documents', 'Default'],
+  ['tasks', 'Planning progress', 'Default'],
+  ['decisions', 'PM Actions', 'Default'],
+  ['standards', 'Standards (FPT → customer)', 'Default'],
+  ['customer', 'Customer standard detail', 'Optional'],
+  ['domains', 'Project information coverage', 'Optional'],
+  ['library', 'Document list', 'Optional'],
+  ['activity', 'Recent activity', 'Optional'],
 ];
 
-export function DashboardView({
-  projectId,
-  onNavigate,
-}: {
-  projectId: string;
-  onNavigate: NavigateToView;
-}) {
+/** How many PM actions the dashboard shows. The rest are one click away on their own screen. */
+const DASHBOARD_ACTIONS = 5;
+
+export function DashboardView({ projectId, onNavigate }: { projectId: string; onNavigate: NavigateToView }) {
   const notify = useToast();
   const queryClient = useQueryClient();
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -110,87 +100,52 @@ export function DashboardView({
   const [widgets, setWidgets] = useState<Record<string, boolean> | null>(null);
   const activeWidgets = widgets ?? data?.widgets ?? {};
 
-  /** The Planning documents row the PM clicked; decides which of the two previews opens. */
+  /** The document-list row the PM clicked; decides which of the two previews opens. */
   const [preview, setPreview] = useState<LibraryEntry | null>(null);
-
-  /**
-   * Resolving a PM action is the one write on an otherwise read-only screen, so it is the only
-   * control here that a viewer is locked out of. Navigation and preview stay open to them: those
-   * only read, and locking them would stop a view-only account doing the one thing it exists for.
-   */
-  const { canWrite, guard, lockClass, lockedProps } = useReadOnlyGuard(projectId);
-  /** The action whose answer box is open, and what the PM has typed into it. */
-  const [resolving, setResolving] = useState<string | null>(null);
-  const [answer, setAnswer] = useState('');
-  /**
-   * The action the PM is being asked to close, once its document has been confirmed. Closing is a
-   * one-click path, so it asks first — the list is the record of what is still outstanding, and
-   * removing a row from it by accident is not something the screen makes obvious afterwards.
-   */
-  const [closing, setClosing] = useState<ActionItem | null>(null);
-
-  /** The library row the PM is being asked to confirm deleting. */
+  /** Which standard's full list is open in the popup. */
+  const [standardOpen, setStandardOpen] = useState<'FPT' | 'CUSTOMER' | null>(null);
+  const { guard, lockClass, lockedProps } = useReadOnlyGuard(projectId);
   const [removing, setRemoving] = useState<LibraryEntry | null>(null);
 
   /**
-   * Deleting from the library, for both kinds of row.
-   *
-   * An upload loses its row, its extracted text and its bytes on disk. A generated document is
-   * reset to "not generated" — the catalog entry stays so it can be written again — which is what
-   * moves Document progress, and any PM action that was closed because that document was approved
-   * comes back open. The server does all of it; this only has to ask the right panels to reload.
+   * Deleting from the library, for both kinds of row. An upload loses its row, its extracted text
+   * and its bytes on disk; a generated document is reset to "not generated" so it can be written
+   * again, which moves Planning documents and reopens any PM action closed on its approval.
    */
   const removeEntry = useMutation({
-    mutationFn: (entry: LibraryEntry) =>
-      entry.kind === 'GENERATED'
-        ? documentsApi.remove(projectId, entry.id)
-        : inputApi.removeReference(projectId, entry.id),
-    onSuccess: (_result, entry) => {
-      queryClient.invalidateQueries({ queryKey: ['dashboard', projectId] });
-      queryClient.invalidateQueries({ queryKey: ['studio', projectId] });
-      queryClient.invalidateQueries({ queryKey: ['workspace', projectId] });
-      queryClient.invalidateQueries({ queryKey: ['input', projectId] });
+    mutationFn: async (entry: LibraryEntry): Promise<{ restored: string[] }> => {
+      if (entry.kind === 'GENERATED') {
+        await documentsApi.remove(projectId, entry.id);
+        return { restored: [] };
+      }
+      return inputApi.removeReference(projectId, entry.id);
+    },
+    onSuccess: (result, entry) => {
+      ['dashboard', 'studio', 'workspace', 'input', 'assessment'].forEach((key) =>
+        queryClient.invalidateQueries({ queryKey: [key, projectId] }),
+      );
       if (entry.kind === 'GENERATED') queryClient.invalidateQueries({ queryKey: ['checklist', projectId] });
-      // If the PM was previewing the thing they just deleted, close it rather than leave a panel
-      // open on something that no longer exists.
       setPreview((open) => (open && open.id === entry.id ? null : open));
       setRemoving(null);
       notify({
         title: entry.kind === 'GENERATED' ? 'Document deleted' : 'Upload deleted',
         detail:
           entry.kind === 'GENERATED'
-            ? `${entry.name} is back to not generated. Document progress and the PM action center have been updated.`
-            : `${entry.name} and the text extracted from it are gone.`,
+            ? `${entry.name} is back to not generated. Planning documents and PM Actions have been updated.`
+            : `${entry.name} and the text extracted from it are gone.${
+                result.restored.length ? ` ${result.restored.join(', ')}, which it had replaced, is current again.` : ''
+              }`,
       });
     },
     onError: (error) => notify({ title: 'Could not delete', detail: (error as Error).message }),
   });
 
-  const resolveAction = useMutation({
-    mutationFn: ({ actionId, value }: { actionId: string; value: string }) =>
-      inputApi.resolveAction(projectId, actionId, value),
-    onSuccess: () => {
-      // The server writes the answer into the input profile and recomputes domain readiness, so
-      // three panels move at once and all three are on screen.
-      queryClient.invalidateQueries({ queryKey: ['dashboard', projectId] });
-      queryClient.invalidateQueries({ queryKey: ['input', projectId] });
-      queryClient.invalidateQueries({ queryKey: ['workspace', projectId] });
-      setResolving(null);
-      setClosing(null);
-      setAnswer('');
-      notify({ title: 'Action resolved', detail: 'It is off the list and recorded in the audit trail.' });
-    },
-    onError: (error) => notify({ title: 'Could not resolve the action', detail: (error as Error).message }),
-  });
-
-  // Generated documents are fetched on demand — the dashboard payload carries only the listing.
   const previewDoc = useQuery({
     queryKey: ['document', projectId, preview?.id],
     queryFn: () => documentsApi.detail(projectId, preview!.id),
     enabled: preview?.kind === 'GENERATED',
   });
 
-  // Escape closes whichever preview is open, and the page behind must not scroll under it.
   useEffect(() => {
     if (!preview) return;
     const onKey = (event: KeyboardEvent) => event.key === 'Escape' && setPreview(null);
@@ -212,31 +167,48 @@ export function DashboardView({
     );
   }
 
-  const show = (key: string) => activeWidgets[key] !== false;
+  // Only what is switched on. The server sends every key with its default filled in, so a missing key
+  // is not a reason to show a block — optional ones stay off until the PM ticks them in Customize.
+  const show = (key: string) => activeWidgets[key] === true;
+  const basis = READINESS_BASIS[data.workspace.basis] ?? READINESS_BASIS.NOT_ASSESSED;
+  const counts = data.actionCounts;
+  const lastChange = data.activity[0]?.createdAt ?? data.assessment?.at ?? null;
+  /**
+   * Exactly one step is "now": the first one not yet done. Computed once so the "Step N of 5" label
+   * and the highlighted circle cannot disagree — they would the moment steps finish out of order.
+   */
+  const currentStep = data.tasks.items.findIndex((item) => item.state !== 'DONE');
 
   return (
     <section className="view active">
-      <div className="page-head">
+      <div className="page-head dash-head">
         <div>
-          <p>{data.workspace.type} PROJECT WORKSPACE</p>
-          <h1>One view. Every setup decision.</h1>
-          <span>
-            {data.workspace.approach
-              ? `Your ${titleCase(data.workspace.approach.approach)} approach is confirmed. ${data.startReadiness.note}.`
-              : 'No management approach confirmed yet. Verify the project input, then review the recommended approach.'}
-          </span>
+          <h1 className="dash-title">
+            <span>Project Dashboard</span>
+            <em>·</em>
+            <b>Planning Overview</b>
+          </h1>
         </div>
         <div className="dashboard-actions">
+          {/*
+            The newest audit event — the last moment anything in this project actually changed.
+            Omitted rather than defaulted to today when there is none.
+          */}
+          {lastChange && (
+            <span className="last-updated">
+              Last updated <b>{new Date(lastChange).toLocaleDateString()}</b>
+            </span>
+          )}
           <button
             className="secondary icon-only"
             onClick={() => refetch()}
-            title={isRefetching ? 'Refreshing…' : 'Refresh status'}
-            aria-label="Refresh status"
+            title={isRefetching ? 'Refreshing…' : 'Refresh'}
+            aria-label="Refresh"
           >
             ↻
           </button>
           <button
-            className="primary icon-only"
+            className="secondary icon-only"
             onClick={() => setDrawerOpen(true)}
             title="Customize dashboard"
             aria-label="Customize dashboard"
@@ -246,12 +218,13 @@ export function DashboardView({
         </div>
       </div>
 
+      {/* ---- the three metric widgets, with their rings ---------------------- */}
       <div className="metric-grid v2-metrics">
         {show('readiness') && (
           <article className="metric widget">
             <div className="metric-label">
-              <span>READY TO START</span>
-              <button className="help" title={READINESS_BASIS[data.workspace.basis].help}>
+              <span>PLANNING READINESS</span>
+              <button className="help" title={basis.help}>
                 ?
               </button>
             </div>
@@ -262,9 +235,9 @@ export function DashboardView({
                   {data.startReadiness.verdict.label}
                 </strong>
                 {/* A percentage with no stated basis is a number nobody can argue with or act on. */}
-                <small className="readiness-basis">{READINESS_BASIS[data.workspace.basis].label}</small>
+                <small className="readiness-basis">{basis.label}</small>
                 <p>{data.startReadiness.note}</p>
-                <button className="text-button" onClick={() => onNavigate('studio')}>
+                <button className="text-button" onClick={() => onNavigate('actions')}>
                   Review blockers →
                 </button>
               </div>
@@ -275,7 +248,7 @@ export function DashboardView({
         {show('approach') && (
           <article className="metric widget">
             <div className="metric-label">
-              <span>MANAGEMENT APPROACH</span>
+              <span>APPROACH</span>
               {data.workspace.approach && <span className="confirmed-pill">✓ PM confirmed</span>}
             </div>
             <div className="approach-summary">
@@ -291,11 +264,7 @@ export function DashboardView({
                       : 'Not selected'}
                 </strong>
                 <p>{data.workspace.approach?.rigor ?? 'Awaiting PM decision'}</p>
-                {/*
-                  "Fit score", the same name Planning Review uses for the same number. "Rule match"
-                  survived from the version that had a deterministic rule engine — there is none,
-                  and the figure is the weighted score over the nine criteria.
-                */}
+                {/* "Fit score" — the weighted total over the nine criteria, not how sure the model is. */}
                 {data.workspace.recommendation && <small>Fit score {data.workspace.recommendation.confidence}%</small>}
               </div>
             </div>
@@ -308,10 +277,7 @@ export function DashboardView({
         {show('outputs') && (
           <article className="metric widget">
             <div className="metric-label">
-              {/* "Planning outputs" named the same thing three widgets away from "Planning
-                  documents" (the file list) — this one is the pack's progress through generation
-                  and approval, so it says that. */}
-              <span>DOCUMENT PROGRESS</span>
+              <span>PLANNING DOCUMENTS</span>
               <span className="delta">
                 {data.outputs.generated} of {data.outputs.total} generated
               </span>
@@ -333,39 +299,38 @@ export function DashboardView({
                 </li>
               </ul>
             </div>
-            {/*
-              Every number above is answered in one place, and it was three clicks away through the
-              left nav. The neighbouring metrics already carry a way through to what they describe —
-              "View rationale →" on the approach — so this one had the gap.
-            */}
             <button className="text-button" onClick={() => onNavigate('studio')}>
-              Open Planning studio →
+              Open Planning Documents →
             </button>
           </article>
         )}
       </div>
 
-      <div className="dashboard-grid">
+      <div className="dash-cols">
         {show('tasks') && (
           <article className="panel widget">
             <div className="panel-head">
               <div>
-                <h2>Planning tasks</h2>
-                <p>Status of the project setup workflow</p>
+                <h2>Planning progress</h2>
               </div>
-              <span className="count-pill">
-                {data.tasks.complete}/{data.tasks.total} complete
+              <span className="sub-note">
+                {currentStep === -1 ? 'All steps complete' : `Step ${currentStep + 1} of ${data.tasks.total}`}
               </span>
             </div>
-            <div className="task-board">
-              {data.tasks.items.map((task) => (
-                <div key={task.id}>
-                  <span className={`task-state ${TASK_STATE[task.state]}`}>{task.state}</span>
-                  <strong>{task.title}</strong>
-                  <small>{task.detail}</small>
-                </div>
-              ))}
-            </div>
+            <ol className="progress-steps">
+              {data.tasks.items.map((task, index) => {
+                const state = task.state === 'DONE' ? 'done' : index === currentStep ? 'now' : '';
+                return (
+                  <li key={task.id} className={`progress-step ${state}`}>
+                    <span className="step-dot">{task.state === 'DONE' ? '✓' : index + 1}</span>
+                    <div>
+                      <strong>{task.title}</strong>
+                      <span>{task.detail}</span>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
           </article>
         )}
 
@@ -373,237 +338,182 @@ export function DashboardView({
           <article className="panel widget">
             <div className="panel-head">
               <div>
-                <h2>PM action center</h2>
-                <p>AI prepares; the PM decides</p>
+                <h2>PM Actions</h2>
+                <p>What to update, and why — AI prepares, the PM decides</p>
               </div>
-              <button className="ghost" onClick={() => onNavigate('studio')}>
-                View all
-              </button>
+              {data.actions.length > 0 && (
+                <button className="ghost" onClick={() => onNavigate('actions')}>
+                  View all {counts.total} →
+                </button>
+              )}
             </div>
-            {data.actions.length === 0 && (
-              <div className="program-empty">
-                No open PM decisions right now. The list is built from the planning gaps the last
-                analysis found, plus any document an applied plan change left out of date — run{' '}
-                <em>Analyze planning needs</em> on Project Input to fill it.
+            <PmActionList
+              compact
+              projectId={projectId}
+              actions={data.actions.slice(0, DASHBOARD_ACTIONS)}
+              onNavigate={onNavigate}
+              empty="No open PM actions. They are built from what the Planning Assessment finds missing, plus any document a plan change leaves out of date."
+            />
+            {data.actions.length > 0 && (
+              <div className="action-legend">
+                <span>
+                  <i className="req" />
+                  Required {counts.required}
+                </span>
+                <span>
+                  <i className="con" />
+                  Conditional {counts.conditional}
+                </span>
+                {counts.stale > 0 && (
+                  <span>
+                    <i className="upd" />
+                    Out of date {counts.stale}
+                  </span>
+                )}
+                {counts.resolved > 0 && (
+                  <span>
+                    <i className="ok" />
+                    Resolved {counts.resolved}
+                  </span>
+                )}
               </div>
             )}
-            {data.actions.map((action) => {
-              /**
-               * The PM has pressed *PM confirm* on the document this action asked for. That is the
-               * action answered, so the row says so and offers to close it — but it stays open
-               * until the PM says to close it, because approving a document and declaring the gap
-               * behind it closed are two different claims, and only one of them was made.
-               */
-              const answeredByDocument = action.targetDocumentStatus === 'APPROVED';
-              /**
-               * A document an applied plan change made out of date. It is derived from the flag on
-               * the document rather than stored, so there is nothing to resolve or close — it goes
-               * when the PM regenerates the document or deletes it. Only *Open* makes sense.
-               */
-              const stale = action.kind === 'STALE_DOCUMENT';
-              return (
-              <div
-                key={action.id}
-                className={`decision-item ${action.priority === 'REQUIRED' ? 'critical' : action.priority === 'CONDITIONAL' ? 'warning' : 'info'}${answeredByDocument ? ' is-answered' : ''}${stale ? ' is-stale' : ''}`}
-              >
-                <span>{stale ? '⇄' : answeredByDocument ? '✓' : action.priority === 'REQUIRED' ? '!' : action.priority === 'CONDITIONAL' ? '◇' : 'i'}</span>
-                <div>
-                  <small>
-                    {stale ? 'OUT OF DATE AFTER A PLAN CHANGE' : action.priority} ·{' '}
-                    {DOMAIN_LABEL[action.domain]?.toUpperCase()}
-                  </small>
-                  <strong>{action.title}</strong>
-                  <p>{action.description}</p>
-                  {answeredByDocument && (
-                    <span className="answered-pill">
-                      Resolved · <strong>{action.targetDocument}</strong> confirmed by the PM
-                    </span>
-                  )}
-                  {stale && (
-                    /* Says how it goes away, since there is no button here that removes it. */
-                    <span className="stale-pill">
-                      Clears when you regenerate <strong>{action.targetDocument}</strong> or delete it
-                    </span>
-                  )}
-                  {resolving === action.id && (
-                    <form
-                      className="action-answer"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        if (answer.trim()) resolveAction.mutate({ actionId: action.id, value: answer.trim() });
-                      }}
-                    >
-                      {/*
-                        The PM says how it was closed rather than just ticking it off: the answer is
-                        stored as `resolvedValue`, written into a matching input field where the
-                        title names one, and logged. "Done" with no record is how a planning gap
-                        comes back a month later with nobody able to say what was decided.
-                      */}
-                      <input
-                        autoFocus
-                        value={answer}
-                        onChange={(event) => setAnswer(event.target.value)}
-                        placeholder="How is this covered? e.g. “Escalation path agreed with the customer on 12 Sep”"
-                      />
-                      {action.suggestions.map((suggestion) => (
-                        <button
-                          key={suggestion}
-                          type="button"
-                          className="answer-chip"
-                          onClick={() => setAnswer(`Covered by ${suggestion}`)}
-                        >
-                          Covered by {suggestion}
-                        </button>
-                      ))}
-                      <div className="answer-actions">
-                        <button type="submit" className="primary small" disabled={!answer.trim() || resolveAction.isPending}>
-                          {resolveAction.isPending ? 'Saving…' : 'Save'}
-                        </button>
-                        <button type="button" className="ghost" onClick={() => setResolving(null)}>
-                          Cancel
+          </article>
+        )}
+
+        {show('standards') && (
+          <article className="panel widget">
+            <div className="panel-head">
+              <div>
+                <h2>Standards</h2>
+              </div>
+              <button className="ghost" onClick={() => onNavigate('approach')}>
+                Assessment →
+              </button>
+            </div>
+
+            {!data.standards ? (
+              <div className="program-empty">
+                Nothing has been assessed yet. Run the Planning Assessment to score this project against the FPT
+                standard.
+              </div>
+            ) : (
+              <>
+                {/*
+                  Precedence, and the numbers say so: the FPT baseline applies to every project, and
+                  the customer's own checklist is laid on top of it. That order is what the readiness
+                  formula weights 40/60.
+                */}
+                <div className="standard-row">
+                  <span className="standard-order">1</span>
+                  <div>
+                    <div className="standard-title">
+                      <strong>{data.standards.fpt.label}</strong>
+                      <button className="link-button" onClick={() => setStandardOpen('FPT')}>
+                        View detail
+                      </button>
+                    </div>
+                    <small>{data.standards.fpt.note}</small>
+                    <div className="standard-figure">
+                      <span>Expected documents confirmed</span>
+                      <b>{data.standards.fpt.score}%</b>
+                    </div>
+                    <div className="bar teal">
+                      <i style={{ width: `${data.standards.fpt.score}%` }} />
+                    </div>
+                  </div>
+                </div>
+
+                {data.standards.customer ? (
+                  <div className="standard-row">
+                    <span className="standard-order">2</span>
+                    <div>
+                      <div className="standard-title">
+                        <strong>{data.standards.customer.label}</strong>
+                        <button className="link-button" onClick={() => setStandardOpen('CUSTOMER')}>
+                          View detail
                         </button>
                       </div>
-                    </form>
-                  )}
-                </div>
-                <div className="decision-buttons">
-                  {/* Where the work actually happens — Input for a hole in the profile, the Studio
-                      for a missing document. The server picked which from the catalog, and named
-                      the document, so this lands on that document rather than on the Studio's
-                      default one. */}
-                  <button
-                    onClick={() => onNavigate(action.targetView, action.targetDocument)}
-                    title={action.targetDocument ? `Open ${action.targetDocument} in the Planning Studio` : undefined}
-                  >
-                    Open
-                  </button>
-                  {/* Nothing to resolve or close on a derived row — the flag is the whole of it. */}
-                  {stale ? null : answeredByDocument ? (
-                    <button
-                      className={`primary small${lockClass}`}
-                      {...lockedProps}
-                      onClick={guard(() => setClosing(action))}
-                    >
-                      Close action
-                    </button>
-                  ) : (
-                    <button
-                      className={lockClass.trim()}
-                      {...lockedProps}
-                      onClick={guard(() => {
-                        setResolving(resolving === action.id ? null : action.id);
-                        setAnswer('');
-                      })}
-                    >
-                      {canWrite && resolving === action.id ? 'Cancel' : 'Resolve'}
-                    </button>
-                  )}
-                </div>
-              </div>
-              );
-            })}
+                      <small>
+                        {data.standards.customer.note}
+                        {data.standards.customer.stale && ' · needs re-check'}
+                      </small>
+                      <div className="standard-figure">
+                        <span>Checklist items met</span>
+                        <b>{data.standards.customer.score}%</b>
+                      </div>
+                      <div className="bar">
+                        <i style={{ width: `${data.standards.customer.score}%` }} />
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  /* No second row reading 0% — there is nothing to measure against, not a failure. */
+                  <div className="standard-row muted">
+                    <span className="standard-order">2</span>
+                    <div>
+                      <strong>Customer standard</strong>
+                      <small>
+                        No checklist in the library for{' '}
+                        {data.workspace.customer ? <b>{data.workspace.customer}</b> : 'this project’s customer'} — the
+                        FPT standard is the whole score.
+                      </small>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </article>
         )}
       </div>
 
+      {/* ---- optional widgets, below the fold by design ---------------------- */}
       <div className="dashboard-grid lower">
-        {/*
-          Plan history replaced "Project information coverage" here.
-
-          That panel measured how full the intake form is — our own administration, not anything
-          about the project — which is the same reason it was kept out of the Ready-to-Start score.
-          What has moved since the plan was confirmed is a question a PM actually asks, and it had
-          nowhere on this screen to be asked.
-
-          Three entries, not the lot: this answers "has anything changed lately", and the full story
-          is one click away on its own screen.
-        */}
-        {show('history') && (
-          <article className="panel widget">
-            <div className="panel-head">
-              <div>
-                <h2>Plan history</h2>
-                <p>What has changed since the governance model was confirmed</p>
-              </div>
-              <button className="ghost" onClick={() => onNavigate('history')}>
-                View detail
-              </button>
-            </div>
-            {data.planChanges.length === 0 ? (
-              <div className="program-empty">
-                Nothing has changed since the plan was confirmed. Record a change on Project Input
-                when something does.
-              </div>
-            ) : (
-              <ul className="history-mini">
-                {data.planChanges.map((change) => (
-                  <li key={change.id}>
-                    <span className={`doc-status ${HISTORY_TONE[change.status] ?? 'draft-status'}`}>
-                      {HISTORY_LABEL[change.status] ?? change.status}
-                    </span>
-                    <div>
-                      <strong>{change.summary}</strong>
-                      <small>
-                        {new Date(change.at).toLocaleDateString()} · {change.by}
-                        {change.documents > 0 && ` · ${change.documents} document${change.documents === 1 ? '' : 's'}`}
-                        {/* Only worth saying for an applied change — nothing was flagged otherwise. */}
-                        {change.status === 'APPLIED' && change.affected > 0 && ` · ${change.affected} affected`}
-                      </small>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </article>
-        )}
-
-        {/* The readiness the customer would actually ask about, next to the one we ask ourselves. */}
         {show('customer') && (
           <article className="widget wide">
             <CustomerReadinessPanel projectId={projectId} />
           </article>
         )}
 
-        {show('library') && (
-          <article className="panel widget wide">
-            {/*
-              The list runs to every upload plus every generated document, which pushed the rest of
-              the dashboard off the screen. It is collapsed until asked for; the count stays visible
-              so nothing about the project is hidden, only its detail.
-            */}
+        {show('domains') && (
+          <article className="panel widget">
             <div className="panel-head">
               <div>
-                <h2>Planning documents</h2>
+                <h2>Project information coverage</h2>
+                <p>How much of the intake profile is filled and verified</p>
+              </div>
+              <span className="sub-note">Target 80%</span>
+            </div>
+            <ul className="mini-list">
+              {data.domains.map((domain) => (
+                <li key={domain.domain}>
+                  <span>{DOMAIN_LABEL[domain.domain] ?? domain.domain}</span>
+                  <b>{domain.score}%</b>
+                </li>
+              ))}
+            </ul>
+          </article>
+        )}
+
+        {show('library') && (
+          <article className="panel widget wide">
+            <div className="panel-head">
+              <div>
+                <h2>Document list</h2>
                 <p>Everything attached to this project — what you uploaded and what the AI wrote</p>
               </div>
               <span className="copilot-badge">{data.library.length} total</span>
-              {/* The way into Plan history is its own panel's "View detail" now — one door, in the
-                  place that shows what is behind it. */}
-              {/*
-                A labelled button rather than the ▾ chevron it replaces. The arrow was the only
-                control on this panel and gave no clue what was behind it — a count and a caret ask
-                the PM to guess whether it opens a list, a screen or a menu.
-              */}
-              <button
-                className="ghost"
-                aria-expanded={libraryOpen}
-                onClick={() => setLibraryOpen((open) => !open)}
-              >
+              <button className="ghost" aria-expanded={libraryOpen} onClick={() => setLibraryOpen((open) => !open)}>
                 {libraryOpen ? 'Hide detail' : 'View detail'}
               </button>
             </div>
             {!libraryOpen ? null : data.library.length === 0 ? (
               <div className="program-empty">
-                Nothing yet. Upload reference files on Project Input, or generate a document in the Planning Studio.
+                Nothing yet. Upload reference files on Project Input, or generate a document in Planning Documents.
               </div>
             ) : (
               <div className="doc-library">
                 {data.library.map((item) => (
-                  /*
-                    A row, not a button: it holds two independent actions now. Nesting the delete
-                    control inside a button is invalid HTML and clicking it would open the preview
-                    on the way through.
-                  */
                   <div className="library-row" key={`${item.kind}-${item.id}`}>
                     <button className="library-open" onClick={() => setPreview(item)} title="View document">
                       <span className={`library-icon ${item.kind === 'GENERATED' ? 'ai' : 'pm'}`}>
@@ -642,8 +552,8 @@ export function DashboardView({
           <article className="panel widget">
             <div className="panel-head">
               <div>
-                <h2>Agent &amp; approval activity</h2>
-                <p>Traceable rule, generation and PM actions</p>
+                <h2>Recent activity</h2>
+                <p>Traceable assessment, generation and PM actions</p>
               </div>
               <span className="copilot-badge">✦ {data.activity.length} recent</span>
             </div>
@@ -663,24 +573,29 @@ export function DashboardView({
         )}
       </div>
 
-      <div className={`dashboard-drawer${drawerOpen ? ' open' : ''}`}>
+      <div className={`dashboard-drawer customize-drawer${drawerOpen ? ' open' : ''}`}>
         <div className="drawer-head">
           <div>
             <strong>Customize dashboard</strong>
-            <span>Choose what appears in your one-view summary</span>
+            <span>The default set fits one screen; optional blocks are added below it</span>
           </div>
           <button onClick={() => setDrawerOpen(false)}>×</button>
         </div>
         <div className="dashboard-options">
-          {WIDGET_LABELS.map(([key, label]) => (
-            <label key={key}>
-              <input
-                type="checkbox"
-                checked={activeWidgets[key] !== false}
-                onChange={(event) => setWidgets({ ...activeWidgets, [key]: event.target.checked })}
-              />{' '}
-              {label}
-            </label>
+          {(['Default', 'Optional'] as const).map((group) => (
+            <div key={group}>
+              <div className="option-group">{group === 'Default' ? 'On one screen (default)' : 'Optional · shown below'}</div>
+              {WIDGET_LABELS.filter(([, , g]) => g === group).map(([key, label]) => (
+                <label key={key}>
+                  <input
+                    type="checkbox"
+                    checked={activeWidgets[key] === true}
+                    onChange={(event) => setWidgets({ ...activeWidgets, [key]: event.target.checked })}
+                  />{' '}
+                  {label}
+                </label>
+              ))}
+            </div>
           ))}
         </div>
         <button className="primary full" onClick={() => saveLayout.mutate(activeWidgets)} disabled={saveLayout.isPending}>
@@ -689,12 +604,7 @@ export function DashboardView({
       </div>
 
       {preview?.kind === 'UPLOAD' && (
-        <UploadPreview
-          projectId={projectId}
-          fileId={preview.id}
-          fileName={preview.name}
-          onClose={() => setPreview(null)}
-        />
+        <UploadPreview projectId={projectId} fileId={preview.id} fileName={preview.name} onClose={() => setPreview(null)} />
       )}
       {preview?.kind === 'GENERATED' && previewDoc.data && (
         <DocumentPreview
@@ -702,11 +612,11 @@ export function DashboardView({
           projectId={projectId}
           projectName={data.workspace.name}
           onClose={() => setPreview(null)}
-          onDownload={() =>
-            documentsApi.download(projectId, preview.id, preview.name, previewDoc.data.exportFormat)
-          }
+          onDownload={() => documentsApi.download(projectId, preview.id, preview.name, previewDoc.data.exportFormat)}
         />
       )}
+
+      <StandardDetailModal projectId={projectId} standard={standardOpen} onClose={() => setStandardOpen(null)} />
 
       <Backdrop open={Boolean(removing)} onClose={() => setRemoving(null)} />
       <ModalShell open={Boolean(removing)} className="decision-modal">
@@ -721,33 +631,30 @@ export function DashboardView({
           {removing?.kind === 'GENERATED' ? (
             <>
               <p>
-                The draft, its sections and its PM questions are deleted. The catalog entry stays, so
-                you can generate this document again from the Planning Studio.
+                The draft, its sections and its PM questions are deleted. The catalog entry stays, so you can generate
+                this document again from Planning Documents.
               </p>
               <p>
-                Document progress drops it from the generated count, the deletion is written to the
-                activity log, and any PM action closed because this document was confirmed goes back
-                to open.
+                Planning documents drops it from the approved count, the deletion is written to the activity log, and any
+                PM action closed because this document was confirmed goes back to open.
               </p>
               {removing?.status === 'APPROVED' && (
-                /* An approved document is a baseline somebody signed off. Deleting it is allowed —
-                   otherwise a mistaken approval could never be undone — but never quietly. */
                 <p className="doc-note">
-                  <b>This document is approved.</b> Deleting it removes it from the approved planning
-                  baseline and the customer readiness score. The content cannot be recovered; only
-                  the audit record of it survives.
+                  <b>This document is approved.</b> Deleting it removes it from the approved planning baseline, the FPT
+                  standard score and the customer readiness score. The content cannot be recovered; only the audit
+                  record of it survives.
                 </p>
               )}
             </>
           ) : (
             <>
               <p>
-                The file, the text extracted from it and the stored copy on disk are all deleted.
-                This cannot be undone — you would have to upload the file again.
+                The file, the text extracted from it and the stored copy on disk are all deleted. This cannot be undone —
+                you would have to upload the file again.
               </p>
               <p>
-                Anything already produced from it stays as it is: a past analysis is a snapshot and a
-                generated document keeps what it says.
+                Anything already produced from it stays as it is: a past assessment is a snapshot and a generated
+                document keeps what it says.
               </p>
             </>
           )}
@@ -756,55 +663,8 @@ export function DashboardView({
           <button className="secondary" onClick={() => setRemoving(null)}>
             Keep it
           </button>
-          <button
-            className="primary danger"
-            disabled={removeEntry.isPending}
-            onClick={() => removing && removeEntry.mutate(removing)}
-          >
+          <button className="primary danger" disabled={removeEntry.isPending} onClick={() => removing && removeEntry.mutate(removing)}>
             {removeEntry.isPending ? 'Deleting…' : 'Delete'}
-          </button>
-        </div>
-      </ModalShell>
-
-      <Backdrop open={Boolean(closing)} onClose={() => setClosing(null)} />
-      <ModalShell open={Boolean(closing)} className="decision-modal">
-        <div className="modal-head">
-          <div>
-            <small>CLOSE PM ACTION</small>
-            <h2>{closing?.title}</h2>
-          </div>
-          <button onClick={() => setClosing(null)}>×</button>
-        </div>
-        <div className="rationale">
-          <p>
-            <strong>{closing?.targetDocument}</strong> has been confirmed by the PM in the Planning
-            Studio, which is what this action asked for.
-          </p>
-          {/* Said plainly, because the two are not the same claim and the PM is the one who knows
-              whether the document actually settled the gap. */}
-          <p>
-            Closing records it as resolved and takes it off this list. The document stays approved
-            either way — if the gap is not really settled, leave the action open.
-          </p>
-        </div>
-        <div className="modal-actions">
-          <button className="secondary" onClick={() => setClosing(null)}>
-            Keep it open
-          </button>
-          <button
-            className="primary"
-            disabled={resolveAction.isPending}
-            onClick={() =>
-              closing &&
-              resolveAction.mutate({
-                actionId: closing.id,
-                // The record of *why* it was closed, which is what makes the audit line readable a
-                // month later: "PM selected: Closed — Change / Escalation Flow confirmed by the PM".
-                value: `Closed — ${closing.targetDocument} confirmed by the PM`,
-              })
-            }
-          >
-            {resolveAction.isPending ? 'Closing…' : 'Close action'}
           </button>
         </div>
       </ModalShell>

@@ -2967,6 +2967,1089 @@ article.approach-option.is-locked:hover {
   margin-top: 6px;
 }
 
+/* ==========================================================================
+ * Dashboard — the one-screen control center
+ *
+ * Four compact tiles over three columns. Everything that answers a fourth question is opt-in and
+ * renders in `.dashboard-grid.lower` underneath, so the default view fits without scrolling.
+ * ========================================================================== */
+
+.dash-head {
+  align-items: center;
+}
+/* One title line, `{Area} · {Page}` — the same pattern on every screen that takes this layout. */
+.dash-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+.dash-title em {
+  font-style: normal;
+  font-weight: 400;
+  color: #a6b2c1;
+}
+.dash-title b {
+  color: #3b4a63;
+  font-weight: 700;
+}
+.last-updated {
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+  margin-right: 4px;
+  align-self: center;
+}
+.last-updated b {
+  color: #3b4a63;
+  font-weight: 600;
+}
+
+.kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.kpi-strip .kpi {
+  padding: 10px 14px;
+  display: grid;
+  gap: 2px;
+  align-content: start;
+  box-shadow: none;
+}
+.kpi-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.66rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.kpi-value {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 1.35rem;
+  font-weight: 750;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+.kpi-value small {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+/* The fit percentage and the conditional count ride inline, not on a second line: a sub-line under
+   a tile is how the old strip ended up stating one number three times. */
+.kpi-fit {
+  font-style: normal;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.kpi-basis {
+  font-size: 0.66rem;
+  color: var(--muted);
+  line-height: 1.35;
+}
+.ok-tick {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #e3f5ec;
+  color: var(--green);
+  font-size: 0.68rem;
+  font-weight: 800;
+  align-self: center;
+}
+.tone-green {
+  color: var(--green);
+}
+.tone-amber {
+  color: var(--amber);
+}
+.tone-red,
+.kpi-value small.tone-red {
+  color: var(--red);
+}
+
+.dash-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.3fr) minmax(0, 0.95fr);
+  gap: 12px;
+  align-items: stretch;
+  margin-bottom: 12px;
+}
+.dash-cols > .panel {
+  box-shadow: none;
+}
+.sub-note {
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* ---- planning progress: one column, the state lives in the circle ---- */
+.progress-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+}
+.progress-step {
+  display: grid;
+  grid-template-columns: 26px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 9px 0;
+}
+.progress-step strong {
+  display: block;
+  font-size: 0.84rem;
+}
+.progress-step span:not(.step-dot) {
+  display: block;
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+.step-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border: 2px solid var(--line);
+  color: #98a4b5;
+  background: var(--white);
+}
+.progress-step.done .step-dot {
+  border-color: var(--green);
+  color: var(--green);
+  background: #e3f5ec;
+}
+.progress-step.done span:not(.step-dot) {
+  color: #98a4b5;
+}
+.progress-step.now .step-dot {
+  border-color: var(--blue);
+  color: var(--blue);
+  background: #e8efff;
+}
+.progress-step.now span:not(.step-dot) {
+  color: var(--blue);
+  font-weight: 600;
+}
+
+/* ---- PM Actions: two-line rows, severity is a dot ---- */
+.action-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+}
+.action-row {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 10px 0;
+  border-top: 1px solid #edf1f6;
+}
+.action-row:first-child {
+  border-top: 0;
+  padding-top: 2px;
+}
+.action-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 6px;
+}
+.action-dot.req,
+.action-legend i.req {
+  background: var(--red);
+}
+.action-dot.upd,
+.action-legend i.upd {
+  background: var(--blue);
+}
+.action-dot.con,
+.action-legend i.con {
+  background: var(--amber);
+}
+.action-dot.info {
+  background: #98a4b5;
+}
+/* `min-width: 0` is what lets the title ellipsis actually engage inside a grid track. */
+.action-body {
+  min-width: 0;
+}
+.action-body small {
+  display: block;
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+.action-body > strong {
+  display: block;
+  font-size: 0.84rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.action-buttons {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.action-buttons .small {
+  padding: 4px 10px;
+  font-size: 0.74rem;
+}
+.action-row.is-answered .action-body > strong {
+  color: var(--muted);
+}
+.action-legend {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.action-legend span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.action-legend i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+/* A text control. `.link-button` resets the prototype's button chrome so a "View" or "Show settled"
+   reads as a link and never as a second primary call to action. */
+.link-button {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--blue);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.link-button:hover {
+  text-decoration: underline;
+}
+
+/* ---- Standards: precedence 1 → 2, one count and one bar each ---- */
+.standard-row {
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid #edf1f6;
+}
+.standard-row:first-of-type {
+  border-top: 0;
+  padding-top: 2px;
+}
+.standard-row strong {
+  font-size: 0.84rem;
+}
+.standard-row small {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.standard-row.muted strong {
+  color: var(--muted);
+}
+.standard-order {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--navy);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+.standard-row.muted .standard-order {
+  background: #c3ccd8;
+}
+.standard-figure {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  color: #3b4a63;
+  margin-top: 6px;
+}
+.bar {
+  height: 6px;
+  border-radius: 999px;
+  background: #edf1f6;
+  overflow: hidden;
+  margin-top: 6px;
+}
+.bar i {
+  display: block;
+  height: 100%;
+  background: var(--blue);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+.bar.teal i {
+  background: var(--cyan);
+}
+
+.mini-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.mini-list li {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  padding: 5px 0;
+  border-top: 1px solid #edf1f6;
+}
+.mini-list li:first-child {
+  border-top: 0;
+}
+.option-group {
+  font-size: 0.66rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 12px 0 4px;
+}
+
+/*
+  Customize dashboard. The prototype's `.drawer-head` is a 34px | 1fr | auto grid built for a head
+  that opens with an `.agent-orb`; this one has none, so the title was squeezed into the 34px column.
+  And each option group is wrapped in its own div, so the labels inside it were inline boxes flowing
+  side by side rather than rows. Both are laid out explicitly here: title left, close right; one
+  full-width row per option, checkbox and text on one baseline.
+*/
+.customize-drawer {
+  display: flex;
+  flex-direction: column;
+}
+.customize-drawer .drawer-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+.customize-drawer .drawer-head span {
+  font-size: 0.72rem;
+  line-height: 1.4;
+  margin-top: 3px;
+}
+.customize-drawer .drawer-head button {
+  flex-shrink: 0;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.customize-drawer .dashboard-options {
+  flex: 1;
+  overflow-y: auto;
+  align-content: start;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+.customize-drawer .dashboard-options > div {
+  display: grid;
+  gap: 6px;
+}
+.customize-drawer .option-group {
+  margin: 10px 0 2px;
+}
+.customize-drawer .dashboard-options > div:first-child .option-group {
+  margin-top: 0;
+}
+.customize-drawer .dashboard-options label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  font-size: 0.8rem;
+  line-height: 1.3;
+  cursor: pointer;
+}
+.customize-drawer .dashboard-options input {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+@media (max-width: 1200px) {
+  .kpi-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .dash-cols {
+    grid-template-columns: 1fr 1fr;
+  }
+  .dash-cols > :last-child {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 860px) {
+  .kpi-strip,
+  .dash-cols {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ==========================================================================
+ * Planning Assessment — the FPT rule catalog, on six tabs
+ * ========================================================================== */
+
+.assessment-head-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.assessment-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 14px;
+}
+.assessment-tab {
+  border: 0;
+  background: none;
+  padding: 9px 13px;
+  font: inherit;
+  font-size: 0.84rem;
+  color: var(--muted);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+}
+.assessment-tab.active {
+  color: var(--ink);
+  border-bottom-color: var(--blue);
+  font-weight: 600;
+}
+/* The count is what needs attention — open plus not evaluated — never the catalog size. */
+.tab-count {
+  display: inline-block;
+  min-width: 18px;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #edf1f6;
+  color: #3b4a63;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-align: center;
+}
+.assessment-tab.active .tab-count {
+  background: #e8efff;
+  color: var(--blue);
+}
+
+.assessment-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.assessment-tiles .tile {
+  padding: 12px 14px;
+  display: grid;
+  gap: 3px;
+  box-shadow: none;
+}
+.tile-label {
+  font-size: 0.66rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tile-value {
+  font-size: 1.5rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+.tile-note {
+  font-size: 0.72rem;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.context-list,
+.summary-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.context-list li {
+  padding: 9px 0;
+  border-top: 1px solid #edf1f6;
+}
+.context-list li:first-child {
+  border-top: 0;
+}
+.context-list strong {
+  font-size: 0.84rem;
+}
+.context-list p {
+  margin: 2px 0 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.summary-row {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border: 0;
+  border-top: 1px solid #edf1f6;
+  background: none;
+  font: inherit;
+  font-size: 0.84rem;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+.summary-list li:first-child .summary-row {
+  border-top: 0;
+}
+.summary-row:hover {
+  color: var(--blue);
+}
+.summary-figures {
+  font-size: 0.78rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.summary-figures b {
+  color: var(--ink);
+}
+.summary-figures em {
+  font-style: normal;
+  margin-left: 4px;
+}
+/* Management approach: name, source, fit and the PM status, wrapping rather than overflowing. */
+.summary-figures.summary-approach {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 2px 0;
+  white-space: normal;
+  text-align: right;
+}
+.approach-status {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.approach-status.confirmed {
+  background: #e3f5ec;
+  color: var(--green);
+}
+.approach-status.pending {
+  background: #fff1d6;
+  color: #b26a00;
+}
+
+/* ---- one rule ---- */
+.rule-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.rule-row {
+  border-top: 1px solid #edf1f6;
+}
+.rule-row:first-child {
+  border-top: 0;
+}
+.rule-main {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 11px 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.rule-id {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.72rem;
+  color: var(--muted);
+  padding-top: 2px;
+}
+.rule-body {
+  min-width: 0;
+}
+.rule-body strong {
+  display: block;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+.rule-finding {
+  display: block;
+  font-size: 0.76rem;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.rule-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  align-items: center;
+  white-space: nowrap;
+}
+.sev-pill,
+.status-pill {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border-radius: 6px;
+  padding: 2px 7px;
+}
+.sev-blocker {
+  background: #fdeaea;
+  color: var(--red);
+}
+.sev-high {
+  background: #fff3df;
+  color: var(--amber);
+}
+.sev-medium {
+  background: #fff8e8;
+  color: #9a6a10;
+}
+.sev-low,
+.sev-info {
+  background: #f1f4f8;
+  color: var(--muted);
+}
+.status-pill.status-fail {
+  background: #fdeaea;
+  color: var(--red);
+}
+.status-pill.status-pass {
+  background: #e3f5ec;
+  color: var(--green);
+}
+/* Not evaluated is amber, not grey: it is the most actionable row on the screen — usually a
+   document missing from the upload set — and grey would read as "nothing to see". */
+.status-pill.status-unknown {
+  background: #fff3df;
+  color: var(--amber);
+}
+.status-pill.status-not_applicable,
+.status-pill.status-overridden {
+  background: #f1f4f8;
+  color: var(--muted);
+}
+.rule-row.status-pass .rule-body strong,
+.rule-row.status-not_applicable .rule-body strong {
+  font-weight: 500;
+  color: #3b4a63;
+}
+.rule-detail {
+  padding: 0 0 12px 74px;
+  display: grid;
+  gap: 8px;
+}
+.rule-detail p {
+  margin: 0;
+  font-size: 0.78rem;
+}
+.rule-action {
+  color: var(--ink);
+}
+.rule-applies {
+  color: var(--muted);
+}
+.rule-note {
+  margin-top: 4px !important;
+  font-size: 0.74rem;
+  color: var(--blue);
+}
+.rule-condition {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.7rem;
+  color: #6b7a90;
+  font-style: italic;
+}
+
+/* Missing Documents: "required for every project" and "only in specific situations", apart. */
+.rule-section + .rule-section {
+  margin-top: 14px;
+}
+.rule-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 0 6px;
+  border-bottom: 1px solid var(--line);
+}
+.rule-section-head strong {
+  font-size: 0.76rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #3b4a63;
+}
+.rule-section-head span {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+/* The fix, always visible under a missing item: which document, and exactly what to add. */
+.rule-fix {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: baseline;
+  margin: -2px 0 11px 74px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f5f8fc;
+  border-left: 3px solid var(--blue);
+}
+.rule-fix-where {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--blue);
+  white-space: nowrap;
+}
+.rule-fix p {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--ink);
+}
+.rule-resolved {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin: -2px 0 11px 74px;
+  font-size: 0.76rem;
+  color: var(--green);
+}
+.rule-resolved p {
+  margin: 0;
+}
+.rule-resolved em {
+  font-style: normal;
+  color: var(--muted);
+}
+.status-pill.status-resolved {
+  background: #e3f5ec;
+  color: var(--green);
+}
+.rule-row.status-resolved .rule-body strong {
+  font-weight: 500;
+  color: #3b4a63;
+}
+
+/* Missing Documents: where the document is — Not started → PM review → Approved, plus Out of date. */
+.status-pill.doc-stage-approved {
+  background: #e3f5ec;
+  color: var(--green);
+}
+.status-pill.doc-stage-review {
+  background: #e6effa;
+  color: #1f5fa9;
+}
+.status-pill.doc-stage-not-started {
+  background: #f1f4f8;
+  color: #6b7a90;
+}
+.status-pill.doc-stage-stale {
+  background: #fff1d6;
+  color: #b26a00;
+}
+
+/* PM actions: Resolve turns green on its own once the action is resolved, and stays in place. */
+.decision-buttons .resolve-done,
+.decision-buttons .resolve-done:hover {
+  background: #e3f5ec;
+  border-color: #b9e3cc;
+  color: var(--green);
+  font-weight: 700;
+  cursor: default;
+}
+.action-doc {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 0.74rem;
+  color: var(--blue);
+}
+.action-summary {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.action-summary span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.action-summary b {
+  color: var(--ink);
+}
+.action-summary i,
+.action-legend i.ok {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.action-summary i.req {
+  background: var(--red);
+}
+.action-summary i.con {
+  background: var(--amber);
+}
+.action-summary i.upd {
+  background: var(--blue);
+}
+.action-summary i.ok,
+.action-legend i.ok {
+  background: var(--green);
+}
+
+/* Dashboard PM Actions, compact: the category line and the title, one row each. */
+.decision-item.is-compact {
+  align-items: center;
+}
+.decision-item.is-compact strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.decision-item.is-compact > div:nth-child(2) {
+  min-width: 0;
+}
+
+/* Standards: a title row with its View detail link. */
+.standard-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+/* The Standards popup — every item of one standard, tickable. */
+.standard-modal {
+  width: min(760px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+}
+.standard-summary {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 16px;
+  align-items: center;
+  padding: 4px 0 14px;
+  border-bottom: 1px solid var(--line);
+}
+.standard-summary > div:first-child {
+  display: grid;
+}
+.standard-summary strong {
+  font-size: 1.6rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+.standard-summary span {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.standard-summary p {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #3b4a63;
+}
+.standard-buttons {
+  display: grid;
+  gap: 6px;
+}
+.standard-list {
+  overflow-y: auto;
+  padding-top: 8px;
+}
+.standard-section h4 {
+  display: flex;
+  justify-content: space-between;
+  margin: 14px 0 4px;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #3b4a63;
+}
+.standard-section h4 span {
+  color: var(--muted);
+  font-weight: 600;
+}
+.standard-section ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.standard-item {
+  border-top: 1px solid #edf1f6;
+}
+.standard-item label {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 9px 2px;
+  cursor: pointer;
+}
+.standard-item input {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  accent-color: var(--green);
+}
+.standard-text b {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.standard-item.is-met .standard-text b {
+  color: #3b4a63;
+  font-weight: 500;
+}
+.standard-text small {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-top: 2px;
+}
+@media (max-width: 720px) {
+  .standard-summary {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Planning Documents: one list in the four Process v5.0 work products. */
+.work-product-group {
+  display: grid;
+  gap: 2px;
+  padding-top: 10px;
+  margin-top: 10px;
+  border-top: 1px solid #edf1f6;
+}
+.work-product-group:first-of-type {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+.work-product-head {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 4px 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.work-product-head b {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 720px) {
+  .rule-fix,
+  .rule-resolved {
+    margin-left: 0;
+  }
+}
+
+/* ---- methodology fit ---- */
+.fit-warning {
+  display: grid;
+  gap: 4px;
+  background: #fff3df;
+  border-left: 3px solid var(--amber);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-size: 0.8rem;
+}
+.fit-warning strong {
+  color: #8a5a0a;
+}
+.fit-caveat {
+  margin: 12px 0 0;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+.confirm-warning {
+  background: #fff3df;
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: #8a5a0a;
+}
+
+@media (max-width: 1100px) {
+  .assessment-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 720px) {
+  .assessment-tiles {
+    grid-template-columns: 1fr;
+  }
+  .rule-main {
+    grid-template-columns: 1fr;
+  }
+  .rule-detail {
+    padding-left: 0;
+  }
+}
+
 /* "Either one" on the change panel: the star sits on both fields because the server accepts a note
    or a document, and the chip in the header says which of the two it is. */
 .mandatory-mark {
@@ -3044,4 +4127,471 @@ article.approach-option.is-locked:hover {
 .history-mini .doc-status {
   flex-shrink: 0;
   margin-top: 2px;
+}
+
+/* ==========================================================================
+ * Account shell — Program Overview and Account Libraries
+ *
+ * The workspace's sidebar and top bar, reused: same classes, so the two account screens read as
+ * one side of the app. Only what differs is here — the library tree and a two-column top bar.
+ * ========================================================================== */
+
+.account-topbar {
+  grid-template-columns: 1fr auto;
+}
+.account-crumb small {
+  display: block;
+  font-size: 0.64rem;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.account-crumb strong {
+  font-size: 0.95rem;
+}
+.account-content {
+  padding: 26px 32px 40px;
+  max-width: 1550px;
+  margin: 0 auto;
+}
+.account-shell nav .flow-label:first-child {
+  padding-top: 0;
+}
+.nav-sub {
+  display: grid;
+  gap: 2px;
+  margin: 2px 0 6px 18px;
+  padding-left: 10px;
+  border-left: 1px solid #36506f;
+}
+.nav-sub .nav-item {
+  grid-template-columns: 1fr;
+  padding: 7px 9px;
+  font-size: 0.8rem;
+}
+.nav-sub .nav-add {
+  color: #7fa3c4;
+}
+.page-subline {
+  margin: 4px 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/* ---- Program Overview ---- */
+.program-table-panel .panel-head {
+  margin-bottom: 12px;
+}
+.program-table-panel h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+.pc-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 12px;
+  margin-bottom: 12px;
+  background: #f7f9fc;
+  border: 1px solid #edf1f6;
+  border-radius: 10px;
+}
+.pc-field {
+  display: grid;
+  gap: 4px;
+  min-width: 150px;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.pc-field.pc-search {
+  flex: 1 1 260px;
+  min-width: 220px;
+}
+.pc-field input,
+.pc-field select {
+  height: 34px;
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: #fff;
+}
+.pc-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  padding-bottom: 8px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.pc-table-wrap {
+  overflow-x: auto;
+}
+.pc-table {
+  width: 100%;
+  min-width: 900px;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.pc-table th {
+  text-align: left;
+  font-size: 0.66rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 700;
+  padding: 8px 10px;
+}
+.pc-table td {
+  text-align: left;
+  vertical-align: middle;
+  padding: 10px;
+  border-top: 1px solid var(--line);
+}
+.pc-table td:first-child {
+  min-width: 180px;
+}
+.pc-table td:last-child,
+.pc-table th:last-child {
+  width: 1%;
+  padding-right: 12px;
+}
+.pc-table td.num {
+  font-variant-numeric: tabular-nums;
+}
+.pc-table mark {
+  background: #fff3df;
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+.pc-program td {
+  background: #f7f9fc;
+  font-weight: 600;
+}
+.pc-project td:first-child {
+  padding-left: 30px;
+}
+.pc-branch {
+  color: var(--muted);
+}
+.pc-locked td {
+  color: var(--muted);
+}
+.pc-toggle {
+  border: 0;
+  background: none;
+  width: 18px;
+  padding: 0;
+  margin-right: 4px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.pc-toggle:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.pc-empty {
+  text-align: center !important;
+  padding: 28px 12px !important;
+  color: var(--muted);
+}
+.pc-empty b {
+  display: block;
+  color: var(--ink);
+  font-size: 0.85rem;
+  margin-bottom: 4px;
+}
+.pc-none {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.pc-readiness {
+  display: grid;
+  gap: 3px;
+  width: 110px;
+}
+.pc-readiness i {
+  display: block;
+  height: 6px;
+  border-radius: 999px;
+  background: #edf1f6;
+  overflow: hidden;
+}
+.pc-readiness em {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+.pc-readiness em.low {
+  background: var(--red);
+}
+.pc-readiness em.mid {
+  background: var(--amber);
+}
+.pc-readiness em.high {
+  background: var(--green);
+}
+.pc-readiness span {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.pc-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  background: #e6effa;
+  color: var(--blue);
+}
+.pc-chip.status-active,
+.pc-chip.health-good {
+  background: #e3f5ec;
+  color: var(--green);
+}
+.pc-chip.status-draft,
+.pc-chip.health-watch {
+  background: #fff3df;
+  color: var(--amber);
+}
+.pc-chip.health-risk {
+  background: #fdeaea;
+  color: var(--red);
+}
+.pc-chip.status-hold,
+.pc-chip.status-closed {
+  background: #f1f4f8;
+  color: #6b7a90;
+}
+.pc-chip.standalone {
+  margin-left: 6px;
+}
+.pc-actions {
+  display: flex;
+  gap: 5px;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+}
+.pc-btn {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.pc-btn.blue {
+  background: var(--blue);
+  border-color: var(--blue);
+  color: #fff;
+  font-weight: 600;
+}
+.pc-btn.blue:hover {
+  filter: brightness(1.08);
+}
+.pc-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+/* ---- Account Libraries ---- */
+.lib-precedence {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+  font-size: 0.8rem;
+  color: #3b4a63;
+}
+.lib-precedence > span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 12px 4px 4px;
+}
+.lib-precedence i {
+  font-style: normal;
+  color: var(--muted);
+}
+.lib-order {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--navy);
+  color: #fff;
+  font-size: 0.7rem;
+  display: grid;
+  place-items: center;
+}
+.lib-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.lib-card {
+  padding: 14px 16px;
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  text-align: left;
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+  box-shadow: none;
+}
+.lib-card[aria-pressed='true'] {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px #e6effa;
+}
+.lib-card b {
+  font-size: 0.95rem;
+}
+.lib-card p {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.lib-count {
+  font-size: 1.5rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+.lib-count small {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+.lib-split {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.lib-chip {
+  width: max-content;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+.lib-chip.baseline {
+  background: #e6effa;
+  color: var(--blue);
+}
+.lib-chip.account {
+  background: #e3f5ec;
+  color: var(--green);
+}
+.lib-panel h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+.lib-panel .panel-head p {
+  margin: 3px 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.lib-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px 24px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: #f7f9fc;
+  border: 1px solid #edf1f6;
+  border-radius: 10px;
+}
+.lib-meta > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.lib-meta-label {
+  font-size: 0.66rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.lib-logo img {
+  max-height: 28px;
+  max-width: 120px;
+  object-fit: contain;
+}
+.lib-tabs {
+  margin-bottom: 12px;
+}
+.lib-tab-body {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+.lib-tab-body > ul {
+  width: 100%;
+}
+.lib-tab-body .customer-template-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+.lib-type-field {
+  display: grid;
+  gap: 4px;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.lib-type-field select,
+.lib-type-field input {
+  height: 34px;
+  min-width: 260px;
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: #fff;
+}
+
+@media (max-width: 1200px) {
+  .lib-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 860px) {
+  .account-content {
+    padding: 20px 16px 32px;
+  }
+  .lib-grid {
+    grid-template-columns: 1fr;
+  }
+  .pc-field,
+  .pc-field.pc-search {
+    min-width: 0;
+    flex: 1 1 100%;
+  }
+  .pc-meta {
+    margin-left: 0;
+  }
 }

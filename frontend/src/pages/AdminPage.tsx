@@ -138,8 +138,8 @@ export function AdminPage() {
             </div>
             <div className="portfolio-create-actions">
               {/* Configuration, not delivery data — see the route comment in App.tsx. */}
-              <Link className="secondary button-link" to="/customers">
-                Customer library
+              <Link className="secondary button-link" to="/libraries">
+                Account libraries
               </Link>
               <button className="primary" onClick={() => setCreateOpen(true)}>
                 + New account

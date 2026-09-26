@@ -78,6 +78,8 @@ export interface ProjectCard {
   programName: string;
   approach: Approach | null;
   openDecisions: number;
+  /** PM actions still outstanding — resolved, approved-document and ticked ones excluded. */
+  openGaps: number;
   members: { id: string; initials: string; name: string }[];
   /** False when the viewer may see the card but has not been granted the workspace. */
   canOpen: boolean;
@@ -192,6 +194,15 @@ export interface ActionItem {
    * on it, which is what marks this action ready to close — the server reports it, the PM closes it.
    */
   targetDocumentStatus: DocumentStatus | null;
+  /**
+   * Green and closable: the PM pressed Resolve, or the document it asked for is confirmed in
+   * Planning Documents. Decided by the server; the action stays on the list until it is closed.
+   */
+  resolved: boolean;
+  /** How the PM said it was resolved, when they did it by hand. */
+  resolvedValue: string | null;
+  /** The Planning Assessment rule behind it (`MD-005`…), or null for older gap-based actions. */
+  ruleId: string | null;
   suggestions: string[];
   blocksDocument: string | null;
 }
@@ -223,6 +234,87 @@ export interface ReferenceDetail {
   text: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// Planning Assessment — the rule catalog applied to one project
+// ---------------------------------------------------------------------------
+
+export type AssessmentCategory = 'MISSING_INFORMATION' | 'MISSING_DOCUMENT' | 'PLANNING_RISK' | 'CONFLICT';
+export type RuleSeverity = 'BLOCKER' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
+/** `UNKNOWN` is never collapsed into `FAIL` — see the note on the backend catalog. */
+export type RuleStatus = 'PASS' | 'FAIL' | 'UNKNOWN' | 'NOT_APPLICABLE' | 'OVERRIDDEN';
+
+export interface RuleRow {
+  ruleId: string;
+  name: string;
+  category: AssessmentCategory;
+  /** The effective status: a failure the PM has since resolved reads PASS here. */
+  status: RuleStatus;
+  /** What the model said at run time — FAIL for a row the PM has since resolved. */
+  assessedStatus: RuleStatus;
+  /** How the rule came to be met after the run: a confirmed document, a PM action, or a PM tick. */
+  resolution: { by: 'DOCUMENT' | 'ACTION' | 'PM'; detail: string; at: string | null } | null;
+  /** The PM's own tick in the Standards popup, where they disagreed with the assessment. */
+  pmVerdict: 'MET' | 'NOT_MET' | null;
+  severity: RuleSeverity;
+  /** What the PM is told when it fails — the catalog's wording, not the model's. */
+  message: string;
+  /** What was actually found, one sentence. */
+  finding: string;
+  recommendedAction: string;
+  /** For a failure: exactly what to add, in the model's words for this project. */
+  action: string | null;
+  /** For a failure: the Planning Documents entry the content belongs in, or null for an upload. */
+  targetDocument: string | null;
+  /** Where that document is in Planning Documents — shown as Not started / PM review / Approved. */
+  targetDocumentStatus: DocumentStatus | null;
+  /** Set when a plan change marked that document out of date — its reason. */
+  targetDocumentStale: string | null;
+  /** Null means the rule applies to every project. */
+  appliesWhen: string | null;
+  /** For a conditional rule: why it does or does not apply to this project. */
+  applicability: string | null;
+  mandatory: boolean;
+  weight: number;
+  evidence: EvidenceItem[];
+}
+
+export interface CategoryScore {
+  score: number;
+  passed: number;
+  failed: number;
+  /** PASS + FAIL. `unknown` and `notApplicable` are deliberately outside it. */
+  assessed: number;
+  unknown: number;
+  notApplicable: number;
+  total: number;
+  blockers: number;
+}
+
+export interface StandardsPanel {
+  fpt: { label: string; score: number; note: string };
+  /** Null when this project's customer has no checklist in the library. */
+  customer: { label: string; score: number; coverage: number; stale: boolean; note: string } | null;
+  readiness: number;
+  basis: 'CUSTOMER_AND_FPT' | 'FPT_ONLY';
+}
+
+export interface AssessmentPayload {
+  runId: string;
+  rows: RuleRow[];
+  categories: Record<AssessmentCategory, CategoryScore>;
+  standards: StandardsPanel;
+  at: string;
+  aiProvider: 'anthropic' | 'mock';
+  /** The project's current uploads — `readable` is how many have text the assessment can read. */
+  evidence: { files: number; readable: number };
+}
+
+export interface AssessmentResponse {
+  assessment: AssessmentPayload | null;
+  tabs: { key: string; label: string; category: AssessmentCategory | null }[];
+  catalogSize: number;
+}
+
 export interface DashboardResponse {
   workspace: Workspace;
   startReadiness: {
@@ -231,6 +323,15 @@ export interface DashboardResponse {
     blockers: number;
     note: string;
   };
+  /** Null until the Planning Assessment has been run at least once. */
+  standards: StandardsPanel | null;
+  assessment: {
+    at: string;
+    blockers: number;
+    unknown: number;
+    categories: Record<AssessmentCategory, CategoryScore>;
+  } | null;
+  actionCounts: { stale: number; required: number; conditional: number; info: number; resolved: number; total: number };
   outputs: {
     total: number;
     generated: number;
@@ -533,6 +634,17 @@ export interface DocumentStructuredData {
     fileType: string;
     sourceFile: string;
   };
+  /** Set when the document was drafted to follow a template's structure (too few blanks to fill). */
+  templateOutline?: {
+    templateId: string;
+    customerKey: string;
+    customerName: string;
+    documentType: string;
+    fileType: 'DOCX' | 'XLSX' | 'PPTX';
+    sourceFile: string;
+    house: boolean;
+    sections: number;
+  };
 }
 
 export interface DocumentSection {
@@ -546,10 +658,15 @@ export interface DocumentSection {
   custom: boolean;
 }
 
+/** The four planning work products of Process v5.0 — how Planning Documents groups its list. */
+export type WorkProduct = 'Project Plan' | 'Project Charter' | 'Project Schedule' | 'Project Estimation';
+
 export interface CatalogEntry {
   definitionId: string;
   name: string;
   domain: ManagementDomain;
+  /** Decided by the server; the client groups by it and never re-derives it. */
+  workProduct: WorkProduct;
   requirement: 'REQUIRED' | 'CONDITIONAL';
   conditionKey: string | null;
   /** Which real file this document downloads as. */
@@ -573,6 +690,13 @@ export interface CatalogEntry {
      * entitled to know which of the two they are looking at.
      */
     house: boolean;
+    /**
+     * FILL — the template's blanks are filled in place. OUTLINE — too few blanks, so the document
+     * is drafted following the template's structure and downloaded in its file type.
+     */
+    mode: 'FILL' | 'OUTLINE';
+    /** How many headings, slides or sheets the outline has; null when not yet read from the file. */
+    outlineCount: number | null;
   } | null;
   /**
    * True when the last analysis named this document as a planning gap; `null` on every entry when
@@ -699,6 +823,23 @@ export interface CustomerTemplateSummary {
   uploadedAt: string;
   placeholders: TemplatePlaceholder[];
   placeholderCount: number;
+  /** The template's own structure — Word headings, slide titles or sheet names. Null on older rows. */
+  outline: { level: number; text: string }[] | null;
+}
+
+export type CustomerReferenceKind = 'APPROVED_EXAMPLE' | 'LESSON_LEARNED';
+
+/** A document on a library's Approved Examples or Lessons Learned tab. */
+export interface CustomerReferenceSummary {
+  id: string;
+  customerId: string;
+  kind: CustomerReferenceKind;
+  title: string;
+  sourceFile: string;
+  mimeType: string;
+  sizeBytes: number;
+  uploadedAt: string;
+  textAvailable: boolean;
 }
 
 export interface CustomerSummary {
@@ -711,6 +852,7 @@ export interface CustomerSummary {
   hasLogo: boolean;
   checklists: CustomerChecklistSummary[];
   templates: CustomerTemplateSummary[];
+  references: CustomerReferenceSummary[];
 }
 
 export interface ChecklistItemRow {

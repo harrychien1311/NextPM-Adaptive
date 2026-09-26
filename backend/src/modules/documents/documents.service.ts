@@ -24,10 +24,12 @@ import {
   type DocumentGap,
   type DocumentTable,
   type GenerationOutput,
+  type KnownGap,
   type OrgChart,
   type RaciRow,
   type RiskRow,
 } from '../ai/provider';
+import { MISSING_INFORMATION_SUBJECT } from '../../data/assessment-rules';
 import { tableSchema } from '../../data/table-documents';
 import { buildOrgChartDeck } from '../../lib/pptx-orgchart';
 import fsp from 'node:fs/promises';
@@ -40,21 +42,26 @@ import { readDeckText } from '../../lib/pptx-read';
 import { readWorkbook } from '../../lib/xlsx-read';
 
 /**
- * The catalog documents the last analysis said this project is missing.
+ * The catalog documents this project needs generated — what Planning Documents shows.
+ *
+ * **Once the project has a Planning Assessment, that is the only source**: the documents that close
+ * a Missing Document rule it found failing, and nothing else. The assessment decided which documents
+ * apply to this project and which the input already provides, so adding documents it did not ask
+ * for would undo exactly that judgement.
+ *
+ * Before any assessment, it falls back to the older planning analysis: the documents its gaps named,
+ * plus the kickoff deck. Returns null when neither has named anything — the Studio reads that as "no
+ * filter", because hiding everything when nothing was named would leave the PM unable to generate
+ * anything at all.
  *
  * Lives here rather than in `rules.service` on purpose. `rules.service` imports this module for
  * `syncDocumentsWithPack`, and importing back would make the one module cycle this codebase
- * deliberately does not have. Nothing is lost by it: this only reads the stored snapshot, and the
- * consumer is the catalog right below.
- *
- * Returns null when no analysis has run, or when it tied no gap to a catalog name — the Studio
- * reads that as "no filter", which is the right fallback. Hiding everything because the model named
- * nothing would leave the PM unable to generate anything at all.
- *
- * The kickoff deck is always in the list: it is the meeting that starts the project, not a document
- * that might happen to be missing.
+ * deliberately does not have.
  */
 export async function gapDocumentNames(projectId: string): Promise<string[] | null> {
+  const assessed = await missingDocumentNames(projectId);
+  if (assessed) return assessed;
+
   const evaluation = await prisma.aiApproachSuggestion.findFirst({
     where: { projectId },
     orderBy: { createdAt: 'desc' },
@@ -71,11 +78,15 @@ export async function gapDocumentNames(projectId: string): Promise<string[] | nu
 import {
   MIN_PLACEHOLDERS_TO_FILL,
   fillabilityNote,
+  readTemplateOutline,
+  type TemplateOutlineEntry,
   type TemplatePlaceholder,
 } from '../../lib/pptx-template';
+import { fillDocxTemplate } from '../../lib/docx-fill';
 import { env } from '../../config/env';
 import { logEvent } from '../audit/audit.service';
-import { DELIVERY_TEMPLATE, KICKOFF_DECK } from '../../data/document-catalog';
+import { DELIVERY_TEMPLATE, KICKOFF_DECK, WORK_PRODUCTS, workProductFor } from '../../data/document-catalog';
+import { missingDocumentNames, missingInformationForDocument } from '../assessment/assessment.service';
 import { artifactGuidance, governanceModelMeta, isGovernanceArtifact } from '../../data/governance-models';
 import {
   DOC_COLORS,
@@ -90,7 +101,7 @@ import {
 import { buildDocumentXlsx } from './xlsx-export';
 import { markAssessmentStale, reassessAfterApproval } from '../checklist/checklist.service';
 // `input` owns ActionItem, and it imports neither this module nor `rules`, so this edge is acyclic.
-import { reopenActionsForDocument } from '../input/input.service';
+import { reopenActionsForDocument, resolveAction } from '../input/input.service';
 
 export { documentExportFormat, readGaps } from './document-format';
 
@@ -112,6 +123,21 @@ export interface DocumentStructuredData {
     documentType: string;
     fileType: string;
     sourceFile: string;
+  };
+  /**
+   * Set when the document was drafted to follow a template's *structure* — a template with too few
+   * blanks to fill in place. The export then takes that template's file type (a deck, a workbook
+   * or a Word file) instead of the name-based rule.
+   */
+  templateOutline?: {
+    templateId: string;
+    customerKey: string;
+    customerName: string;
+    documentType: string;
+    fileType: 'DOCX' | 'XLSX' | 'PPTX';
+    sourceFile: string;
+    house: boolean;
+    sections: number;
   };
 }
 
@@ -153,6 +179,35 @@ interface ResolvedTemplate {
   fillNote: string;
   /** True when this came from the house default rather than from the project's own customer. */
   house: boolean;
+  /** The template's structure as stored at upload; null on older rows (read from the file then). */
+  outline: TemplateOutlineEntry[] | null;
+}
+
+/**
+ * How a template shapes one document.
+ *
+ * - `FILL` — enough blanks to fill the customer's own file in place.
+ * - `OUTLINE` — too few blanks, so the document is drafted from the project's data, following the
+ *   template's structure, and exported in the template's file type.
+ * - null — the template does not apply: a chart or register document is its own drawn or tabular
+ *   deliverable, so an outline cannot restructure it (a fillable template still can).
+ */
+export type TemplateMode = 'FILL' | 'OUTLINE';
+
+export function templateModeFor(template: ResolvedTemplate | undefined | null, documentName: string): TemplateMode | null {
+  if (!template) return null;
+  if (template.usableForFill) return 'FILL';
+  return isStructureOnlyDocument(documentName) ? null : 'OUTLINE';
+}
+
+/**
+ * Templates are matched to documents by name. Compared without case or surrounding space, so a
+ * template typed as "project charter" under *Other* still reaches the Project Charter.
+ */
+const templateKey = (name: string) => name.trim().toLowerCase().replace(/\s+/g, ' ');
+
+function templateFor(templates: Map<string, ResolvedTemplate>, documentName: string) {
+  return templates.get(templateKey(documentName));
 }
 
 /**
@@ -194,7 +249,7 @@ async function customerTemplatesForProject(projectId: string) {
   ) => {
     for (const template of templates) {
       const placeholders = (template.placeholders ?? []) as unknown as TemplatePlaceholder[];
-      resolved.set(template.documentType, {
+      resolved.set(templateKey(template.documentType), {
         id: template.id,
         customerKey: customer.key,
         customerName: customer.name,
@@ -207,6 +262,7 @@ async function customerTemplatesForProject(projectId: string) {
         usableForFill: placeholders.length >= MIN_PLACEHOLDERS_TO_FILL,
         fillNote: fillabilityNote(placeholders.length),
         house: fromHouse,
+        outline: Array.isArray(template.outline) ? (template.outline as unknown as TemplateOutlineEntry[]) : null,
       });
     }
   };
@@ -218,16 +274,30 @@ async function customerTemplatesForProject(projectId: string) {
 }
 
 /**
- * The template that will actually be filled for one named document, or null.
+ * The template that shapes one named document, and how — or null when none applies.
  *
- * Returns null for a template with too few blanks. That is not a failure to find one — it is the
- * deliberate refusal described in `MIN_PLACEHOLDERS_TO_FILL`: filling an outline deck would ship
- * its example content under this project's name, so the neutral deck is the honest output and the
- * catalog explains why.
+ * Precedence is the layering in `customerTemplatesForProject`: the project's **own customer's**
+ * template, else the **FPT house** template, else nothing and the AI decides the structure itself.
+ * The customer's template wins even when it can only be followed as an outline and the house one
+ * could be filled — the document follows the customer it is written for.
+ *
+ * A template with too few blanks is never *filled*: that is the deliberate refusal described in
+ * `MIN_PLACEHOLDERS_TO_FILL` (filling an outline would ship its example content under this
+ * project's name). It is followed instead — its outline becomes the section structure.
  */
 async function customerTemplateForProject(projectId: string, documentName: string) {
-  const template = (await customerTemplatesForProject(projectId)).get(documentName) ?? null;
-  return template?.usableForFill ? template : null;
+  const template = templateFor(await customerTemplatesForProject(projectId), documentName) ?? null;
+  const mode = templateModeFor(template, documentName);
+  if (!template || !mode) return null;
+  if (mode === 'FILL') return { template, mode, outline: [] as TemplateOutlineEntry[] };
+
+  // Rows uploaded before outlines were recorded carry none; read it from the stored file once here.
+  let outline = template.outline;
+  if (!outline) {
+    const source = await fsp.readFile(path.join(env.uploadDir, template.storageKey)).catch(() => null);
+    outline = source ? await readTemplateOutline(source, template.sourceFile) : [];
+  }
+  return { template, mode, outline };
 }
 
 /**
@@ -265,7 +335,9 @@ export async function syncDocumentsWithPack(projectId: string) {
   const project = await prisma.project.findUnique({ where: { id: projectId } });
   if (!project) throw notFound('Project not found');
 
-  const definitions = await prisma.documentDefinition.findMany({ where: { projectType: project.type } });
+  // The standard pack only. A document the Planning Assessment added (`extended`) is provisioned for
+  // the project that needed it, by the assessment — not for every project of the type.
+  const definitions = await prisma.documentDefinition.findMany({ where: { projectType: project.type, extended: false } });
 
   const existing = await prisma.planningDocument.findMany({ where: { projectId } });
   const existingIds = new Set(existing.map((doc) => doc.definitionId));
@@ -294,8 +366,18 @@ export async function catalogForProject(projectId: string, domain?: ManagementDo
   const project = await prisma.project.findUnique({ where: { id: projectId } });
   if (!project) throw notFound('Project not found');
 
+  /**
+   * The standard catalog, plus every document the Planning Assessment added *for this project* —
+   * which is what "any document found missing appears in Planning Documents" means. A document
+   * another project of the same type needed is not shown here: that it exists is that project's
+   * finding, not this one's.
+   */
   const definitions = await prisma.documentDefinition.findMany({
-    where: { projectType: project.type, ...(domain ? { domain } : {}) },
+    where: {
+      projectType: project.type,
+      ...(domain ? { domain } : {}),
+      OR: [{ extended: false }, { documents: { some: { projectId } } }],
+    },
     orderBy: [{ domain: 'asc' }, { order: 'asc' }],
   });
 
@@ -317,16 +399,30 @@ export async function catalogForProject(projectId: string, domain?: ManagementDo
    */
   const gapNames = await gapDocumentNames(projectId);
 
-  return definitions.map((definition) => ({
+  return definitions
+    .map((definition) => ({
     definitionId: definition.id,
     name: definition.name,
     domain: definition.domain,
+    /** Which of the four Process v5.0 planning work products this document belongs to. */
+    workProduct: workProductFor(definition.name, definition.domain),
     requirement: definition.requirement,
     conditionKey: definition.conditionKey,
-    /** Which real file this document downloads as. */
-    exportFormat: templates.get(definition.name)?.fileType ?? documentExportFormat(definition.name),
-    /** Set when this document is produced by filling the customer's own file, for the UI to say so. */
-    customerTemplate: templates.get(definition.name) ?? null,
+    /** Which real file this document downloads as — the template's own type when one applies. */
+    exportFormat: templateModeFor(templateFor(templates, definition.name), definition.name)
+      ? templateFor(templates, definition.name)!.fileType
+      : documentExportFormat(definition.name),
+    /**
+     * The template that shapes this document, for the UI to say so — filled in place (`FILL`) or
+     * followed as an outline (`OUTLINE`). Null when none applies and the AI chooses the structure.
+     */
+    customerTemplate: (() => {
+      const template = templateFor(templates, definition.name);
+      const mode = templateModeFor(template, definition.name);
+      if (!template || !mode) return null;
+      const { storageKey, outline, ...rest } = template;
+      return { ...rest, mode, outlineCount: outline?.length ?? null };
+    })(),
     /** A register's own columns, so the grid shows the right header even before generation. */
     tableColumns: tableSchema(definition.name)?.columns ?? null,
     /**
@@ -355,7 +451,10 @@ export async function catalogForProject(projectId: string, domain?: ManagementDo
           staleSince: byDefinition.get(definition.id)!.staleSince,
         }
       : null,
-  }));
+  }))
+    // Work-product order first, so the grouped list reads Plan → Charter → Schedule → Estimation;
+    // the catalog's own domain/order sort is kept within each group.
+    .sort((a, b) => WORK_PRODUCTS.indexOf(a.workProduct) - WORK_PRODUCTS.indexOf(b.workProduct));
 }
 
 /** Domain tab counts for the planning studio. */
@@ -410,6 +509,68 @@ export async function generateDocumentForDefinition(params: {
   return generateDraft({ projectId, documentId: existing.id, actorId });
 }
 
+/**
+ * Keeps a gap's `ruleId` only when it names a finding the drafter was actually given. A rule id
+ * the model invented would tie the PM's answer to a finding it has nothing to do with.
+ */
+function tagKnownGaps(gaps: DocumentGap[], knownGaps: KnownGap[]): DocumentGap[] {
+  const known = new Set(knownGaps.map((gap) => gap.ruleId));
+  return gaps.map((gap) => ({ ...gap, ruleId: gap.ruleId && known.has(gap.ruleId) ? gap.ruleId : null }));
+}
+
+/** The section the server adds blanks to when the model left a known gap out. */
+const KEY_FACTS_SECTION = 'Key project facts';
+
+/**
+ * Makes sure every Missing Information finding the assessment tied to this document is asked.
+ *
+ * A finding counts as asked only when its question carries the rule id **and** its token is really
+ * in the text — a question whose token appears nowhere could be answered, but "Fill out the
+ * document" would have nowhere to put the answer. Anything missing is added as one line,
+ * "<subject>: {{gap:N}}", under a "Key project facts" section: it reads as a plain fact once the
+ * PM's answer replaces the token, so it survives into the exported file as naturally as anything the
+ * model wrote, while the unanswered token still exports as the highlighted "[ answer needed ]".
+ */
+function ensureKnownGapsAsked(
+  output: GenerationOutput,
+  knownGaps: KnownGap[],
+  /** Where to add the lines instead — a document following a template has no section of its own for them. */
+  intoSection: string = KEY_FACTS_SECTION,
+): GenerationOutput {
+  const gaps = tagKnownGaps(output.gaps, knownGaps);
+  const text = output.sections.map((section) => section.content).join('\n');
+  const asked = new Set(gaps.filter((gap) => gap.ruleId && text.includes(gap.token)).map((gap) => gap.ruleId));
+  const missing = knownGaps.filter((gap) => gap.forThisDocument && !asked.has(gap.ruleId));
+  if (!missing.length) return { ...output, gaps };
+
+  // Numbers after the highest the model used, so a server-added token can never collide with one.
+  let next =
+    Math.max(0, ...[...text.matchAll(/\{\{gap:(\d+)\}\}/g)].map((match) => Number(match[1])), ...gaps.map((gap) => Number(/\d+/.exec(gap.token)?.[0] ?? 0))) + 1;
+
+  const lines: string[] = [];
+  for (const gap of missing) {
+    const token = `{{gap:${next++}}}`;
+    const subject = MISSING_INFORMATION_SUBJECT[gap.ruleId] ?? gap.missing;
+    lines.push(`${subject}: ${token}.`);
+    gaps.push({ token, question: `${subject} — ${gap.ask}`, answer: null, ruleId: gap.ruleId });
+  }
+
+  const sections = [...output.sections];
+  const existing = sections.findIndex((section) => section.title === intoSection);
+  if (existing >= 0) {
+    sections[existing] = { ...sections[existing], content: `${sections[existing].content}\n${lines.join('\n')}` };
+  } else {
+    sections.push({ title: intoSection, content: lines.join('\n') });
+  }
+
+  return {
+    ...output,
+    sections,
+    gaps,
+    unresolved: [...output.unresolved, ...missing.map((gap) => gap.missing)],
+  };
+}
+
 /** The model owns the structure; this writes whatever it returned. AI drafts, PM approves. */
 export async function generateDraft(params: { projectId: string; documentId: string; actorId: string }) {
   const { projectId, documentId, actorId } = params;
@@ -455,7 +616,26 @@ export async function generateDraft(params: { projectId: string; documentId: str
 
   await prisma.planningDocument.update({ where: { id: documentId }, data: { status: DocumentStatus.GENERATING } });
 
-  const verifiedInputs = verified.map((value) => ({ label: value.definition.label, value: value.value! }));
+  /**
+   * What the Planning Assessment already knows about this project's missing facts. The unresolved
+   * ones go to the drafter as known gaps; the ones the PM has since answered go in as facts, so the
+   * same question is not asked again in every document.
+   */
+  const { knownGaps, confirmed } = await missingInformationForDocument(projectId, document.name);
+
+  const verifiedInputs = [
+    ...verified.map((value) => ({ label: value.definition.label, value: value.value! })),
+    ...confirmed,
+  ];
+
+  /**
+   * The template that shapes this document: the customer's, else the FPT house one, else none (the
+   * AI then chooses the structure). A fillable one is filled in place below; an outline one is
+   * handed to the drafter as the section structure to follow.
+   */
+  const resolvedTemplate = await customerTemplateForProject(projectId, document.name);
+  const templateForDocument = resolvedTemplate?.mode === 'FILL' ? resolvedTemplate.template : null;
+  const outlineTemplate = resolvedTemplate?.mode === 'OUTLINE' ? resolvedTemplate : null;
 
   const generationContext = {
     projectName: document.project.name,
@@ -465,12 +645,20 @@ export async function generateDraft(params: { projectId: string; documentId: str
     documentName: document.name,
     verifiedInputs,
     reasons,
+    knownGaps,
+    templateOutline:
+      outlineTemplate && outlineTemplate.outline.length
+        ? {
+            customerName: outlineTemplate.template.customerName,
+            sourceFile: outlineTemplate.template.sourceFile,
+            fileType: outlineTemplate.template.fileType,
+            entries: outlineTemplate.outline,
+          }
+        : undefined,
   };
 
   let output: GenerationOutput;
   let structuredData: DocumentStructuredData | null = null;
-
-  const templateForDocument = await customerTemplateForProject(projectId, document.name);
 
   if (templateForDocument) {
     // The customer's own file is the document. Skill 2c fills its blanks instead of writing
@@ -542,8 +730,37 @@ export async function generateDraft(params: { projectId: string; documentId: str
 
   // A chart or a register IS the document. Anything the model wrote alongside it is the noise the
   // PM asked not to receive, and dropping it in one place means the export, the preview and the
-  // studio panel cannot disagree about whether prose exists.
-  if (isStructureOnlyDocument(document.name)) output = { ...output, sections: [] };
+  // studio panel cannot disagree about whether prose exists. Not for a filled template: there the
+  // sections are the placeholder values, and emptying them would ship the customer's file blank.
+  if (isStructureOnlyDocument(document.name) && !templateForDocument) output = { ...output, sections: [] };
+
+  // Drafted to a template's outline: recorded, so the export takes that template's file type.
+  if (outlineTemplate) {
+    structuredData = {
+      ...(structuredData ?? {}),
+      templateOutline: {
+        templateId: outlineTemplate.template.id,
+        customerKey: outlineTemplate.template.customerKey,
+        customerName: outlineTemplate.template.customerName,
+        documentType: outlineTemplate.template.documentType,
+        fileType: outlineTemplate.template.fileType,
+        sourceFile: outlineTemplate.template.sourceFile,
+        house: outlineTemplate.template.house,
+        sections: outlineTemplate.outline.filter((entry) => entry.level === 1).length,
+      },
+    };
+  }
+
+  // Every Missing Information finding tied to this document reaches the PM as a question, whether
+  // or not the model remembered to ask it. Prose documents only: a register, a chart and a filled
+  // customer template have no prose to hold a blank, so there the prompt is the whole of it. A
+  // document following a template's outline gets the lines in its first section rather than a
+  // section of their own, which the template does not have.
+  if (!templateForDocument && output.sections.length) {
+    output = ensureKnownGapsAsked(output, knownGaps, outlineTemplate ? output.sections[0].title : undefined);
+  } else {
+    output = { ...output, gaps: tagKnownGaps(output.gaps, knownGaps) };
+  }
 
   // The model's structure replaces whatever was there — a regeneration may legitimately return a
   // different set of sections.
@@ -655,6 +872,7 @@ export async function answerDocumentGap(params: {
   documentId: string;
   token: string;
   answer: string;
+  actorId?: string;
 }) {
   const { projectId, documentId, token, answer } = params;
   const document = await prisma.planningDocument.findFirst({ where: { id: documentId, projectId } });
@@ -665,11 +883,29 @@ export async function answerDocumentGap(params: {
   if (!target) throw notFound('That question is not open on this document');
   target.answer = answer;
 
-  return prisma.planningDocument.update({
+  const updated = await prisma.planningDocument.update({
     where: { id: documentId },
     data: { pmQuestions: gaps as unknown as Prisma.InputJsonValue },
     include: { sections: { orderBy: { order: 'asc' } } },
   });
+
+  /**
+   * A question asked because of a Missing Information finding is that finding being answered. The
+   * PM action for it is resolved with the answer, so Missing Information shows it resolved, the PM
+   * action turns green, and every document drafted after this one is given the answer as a fact —
+   * instead of asking the PM the same thing again in the next document.
+   */
+  if (target.ruleId && answer.trim() && params.actorId) {
+    const action = await prisma.actionItem.findFirst({
+      where: { projectId, ruleId: target.ruleId, status: 'OPEN' },
+      select: { id: true },
+    });
+    if (action) {
+      await resolveAction({ projectId, actionId: action.id, value: answer.trim(), actorId: params.actorId });
+    }
+  }
+
+  return updated;
 }
 
 /**
@@ -940,13 +1176,15 @@ export async function documentDetail(projectId: string, documentId: string) {
     },
   });
   if (!document) throw notFound('Planning document not found');
-  const fill = readStructured(document.structuredData)?.templateFill;
+  const structured = readStructured(document.structuredData);
+  const fill = structured?.templateFill;
   return {
     ...document,
     gaps: readGaps(document.pmQuestions),
-    // A document generated from a customer template downloads as that customer's file type.
-    exportFormat: (fill?.fileType as 'DOCX' | 'XLSX' | 'PPTX' | undefined) ?? documentExportFormat(document.name),
+    // A document generated from, or to the outline of, a template downloads as that template's type.
+    exportFormat: storedExportFormat(document.name, document.structuredData),
     templateFill: fill ?? null,
+    templateOutline: structured?.templateOutline ?? null,
     tableColumns: tableSchema(document.name)?.columns ?? null,
   };
 }
@@ -1360,6 +1598,7 @@ export async function renderDocumentXlsx(
     // has its own columns, and must never borrow the RACI sheet to stand in for them.
     tableColumns: tableSchema(document.name)?.columns ?? null,
     table: structured?.table ?? null,
+    sectionsAsSheets: structured?.templateOutline?.fileType === 'XLSX',
   });
 }
 
@@ -1412,6 +1651,18 @@ export async function renderDocumentFromTemplate(
     };
   }
 
+  // A Word template goes through the Word filler. It used to fall through to the deck filler below,
+  // which looks for PowerPoint's `<a:t>` runs, finds none in a .docx, and hands back the blank file
+  // under a .pptx name.
+  if (template.fileType === 'DOCX') {
+    const { buffer } = await fillDocxTemplate(source, values);
+    return {
+      fileName: `${slugForFile(document.project.name)}-${slugForFile(document.name)}-v${document.version}.docx`,
+      buffer,
+      contentType: DOCX_CONTENT_TYPE,
+    };
+  }
+
   const { buffer } = await fillPptxTemplate(source, values);
 
   return {
@@ -1423,6 +1674,22 @@ export async function renderDocumentFromTemplate(
 
 const PPTX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 const XLSX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+const DOCX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+/**
+ * The file type a stored document downloads as: the template it was filled from, else the template
+ * whose outline it followed, else the name-based rule. One function, so the Download label, the
+ * preview's shape and the actual file cannot disagree.
+ */
+function storedExportFormat(documentName: string, structuredData: unknown): 'DOCX' | 'XLSX' | 'PPTX' {
+  const structured = readStructured(structuredData);
+  const fromTemplate = (structured?.templateFill?.fileType ?? structured?.templateOutline?.fileType) as
+    | 'DOCX'
+    | 'XLSX'
+    | 'PPTX'
+    | undefined;
+  return fromTemplate ?? documentExportFormat(documentName);
+}
 
 /**
  * The image kind `docx` expects, from a file extension.
@@ -1602,11 +1869,13 @@ export async function renderDocumentExport(
 
   const document = await prisma.planningDocument.findFirst({
     where: { id: documentId, projectId },
-    select: { name: true },
+    select: { name: true, structuredData: true },
   });
   if (!document) throw notFound('Planning document not found');
 
-  const format = documentExportFormat(document.name);
+  // A document drafted to a template's outline takes that template's file type — a Word template
+  // gives a Word file even for a document whose name would say deck, and vice versa.
+  const format = storedExportFormat(document.name, document.structuredData);
 
   // The chart *is* the document — drawn, not described.
   if (isChartDocument(document.name)) return renderOrgChartDeck(projectId, documentId);

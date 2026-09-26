@@ -27,9 +27,21 @@ export interface TemplatePlaceholder {
   splitAcrossRuns: boolean;
 }
 
+/** One entry of a template's own structure: a Word heading, a slide title or a sheet name. */
+export interface TemplateOutlineEntry {
+  /** 1 for a top-level heading, slide or sheet; 2-3 for Word sub-headings. */
+  level: number;
+  text: string;
+}
+
 export interface ParsedTemplate {
   fileType: 'PPTX' | 'DOCX' | 'XLSX';
   placeholders: TemplatePlaceholder[];
+  /**
+   * The template's structure, in order. A template with too few blanks to fill in place is still
+   * the customer's statement of how the document is laid out, so the drafted document follows this.
+   */
+  outline: TemplateOutlineEntry[];
   /** Slides for a deck, pages are not counted for Word. */
   partCount: number;
   /** Whether this template has enough blanks to be filled in place — see MIN_PLACEHOLDERS_TO_FILL. */
@@ -48,11 +60,82 @@ export function fillabilityNote(placeholders: number, slides?: number): string {
   const where = slides ? ` across ${slides} slide${slides === 1 ? '' : 's'}` : '';
   return (
     `Only ${placeholders} blank${placeholders === 1 ? '' : 's'} found${where}. ` +
-    'This reads as an outline template whose slides carry example content to overwrite, not blanks to fill. ' +
-    'Filling it would hand the PM that example content under their own project name, so generation builds a ' +
-    'neutral deck from the project’s own data instead. To have this file filled in place, mark its variable text ' +
-    'with [square brackets].'
+    'This reads as an outline template whose content is example text to overwrite, not blanks to fill. ' +
+    'Filling it would hand the PM that example content under their own project name, so generation instead ' +
+    'drafts the document from the project’s own data, following this template’s structure and file format. ' +
+    'To have this file filled in place, mark its variable text with [square brackets].'
   );
+}
+
+/** Caps, so a 200-heading manual does not become a 200-section prompt. */
+const MAX_OUTLINE_ENTRIES = 40;
+const MAX_OUTLINE_TEXT = 120;
+
+function pushOutline(outline: TemplateOutlineEntry[], level: number, raw: string) {
+  const text = raw.replace(/\s+/g, ' ').trim().slice(0, MAX_OUTLINE_TEXT);
+  if (!text || outline.length >= MAX_OUTLINE_ENTRIES) return;
+  const last = outline[outline.length - 1];
+  if (last && last.text === text && last.level === level) return; // a repeated running title
+  outline.push({ level, text });
+}
+
+/**
+ * Which Word paragraph styles are headings, and at what level.
+ *
+ * Read from `styles.xml` rather than guessed from style ids, because the ids are localised: an
+ * English template says `Heading1`, a Korean one very often says `1` or `제목1`. A style counts when
+ * its *name* is "heading N" / "title", or it carries an outline level of 0-2.
+ */
+function headingStyles(stylesXml: string | undefined): Map<string, number> {
+  const levels = new Map<string, number>();
+  for (const style of (stylesXml ?? '').matchAll(/<w:style\b[^>]*w:styleId="([^"]+)"[^>]*>([\s\S]*?)<\/w:style>/g)) {
+    const [, id, body] = style;
+    const name = body.match(/<w:name w:val="([^"]+)"/)?.[1]?.toLowerCase() ?? '';
+    const outlineLevel = body.match(/<w:outlineLvl w:val="(\d)"/)?.[1];
+    const named = name.match(/^heading (\d)$/)?.[1];
+    if (name === 'title') levels.set(id, 1);
+    else if (named && Number(named) <= 3) levels.set(id, Number(named));
+    else if (outlineLevel !== undefined && Number(outlineLevel) <= 2) levels.set(id, Number(outlineLevel) + 1);
+  }
+  return levels;
+}
+
+function docxOutline(documentXml: string, stylesXml: string | undefined): TemplateOutlineEntry[] {
+  const styles = headingStyles(stylesXml);
+  const outline: TemplateOutlineEntry[] = [];
+  for (const paragraph of documentXml.matchAll(new RegExp(PARAGRAPH.docx.source, 'g'))) {
+    const xml = paragraph[0];
+    const styleId = xml.match(/<w:pStyle w:val="([^"]+)"/)?.[1];
+    const direct = xml.match(/<w:outlineLvl w:val="(\d)"/)?.[1];
+    const level = styleId && styles.has(styleId) ? styles.get(styleId)! : direct !== undefined && Number(direct) <= 2 ? Number(direct) + 1 : null;
+    if (level === null) continue;
+    pushOutline(outline, level, runTexts(xml, 'docx').join(''));
+  }
+  return outline;
+}
+
+/** A slide's title placeholder text, in slide order. Slides without a title are skipped. */
+function pptxOutline(slideXmls: string[]): TemplateOutlineEntry[] {
+  const outline: TemplateOutlineEntry[] = [];
+  for (const xml of slideXmls) {
+    const title = [...xml.matchAll(/<p:sp>[\s\S]*?<\/p:sp>/g)].find((shape) =>
+      /<p:ph[^>]*type="(title|ctrTitle)"/.test(shape[0]),
+    );
+    if (title) pushOutline(outline, 1, runTexts(title[0], 'pptx').join(''));
+  }
+  return outline;
+}
+
+/**
+ * The outline of an already-stored template, for rows uploaded before `outline` was recorded.
+ * Never throws — a template whose structure cannot be read simply has none.
+ */
+export async function readTemplateOutline(buffer: Buffer, fileName: string): Promise<TemplateOutlineEntry[]> {
+  try {
+    return (await parseTemplate(buffer, fileName)).outline;
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -161,8 +244,10 @@ export async function parseTemplate(buffer: Buffer, fileName: string): Promise<P
       .sort(byNumber);
 
     const found: { token: string; split: boolean; label: string }[] = [];
+    const slideXmls: string[] = [];
     for (const name of slides) {
       const xml = await zip.file(name)!.async('string');
+      slideXmls.push(xml);
       const number = name.match(/slide(\d+)\.xml/)?.[1] ?? '?';
       found.push(...scanPart(xml, 'pptx', `slide ${number}`));
     }
@@ -180,6 +265,7 @@ export async function parseTemplate(buffer: Buffer, fileName: string): Promise<P
     return {
       fileType: 'PPTX',
       placeholders,
+      outline: pptxOutline(slideXmls),
       partCount: slides.length,
       usableForFill: placeholders.length >= MIN_PLACEHOLDERS_TO_FILL,
       note,
@@ -192,17 +278,25 @@ export async function parseTemplate(buffer: Buffer, fileName: string): Promise<P
       return {
         fileType: 'DOCX',
         placeholders: [],
+        outline: [],
         partCount: 0,
         usableForFill: false,
         note: 'Not a readable Word document.',
       };
     }
     const xml = await entry.async('string');
-    const placeholders = collect(scanPart(xml, 'docx', 'document'));
+    // Headers and footers too: a Word template very often carries the project name and the date
+    // there, and `lib/docx-fill.ts` fills them, so the count must include them.
+    const found = scanPart(xml, 'docx', 'document');
+    for (const name of Object.keys(zip.files).filter((part) => /^word\/(header|footer)\d*\.xml$/.test(part)).sort()) {
+      found.push(...scanPart(await zip.file(name)!.async('string'), 'docx', name.includes('header') ? 'header' : 'footer'));
+    }
+    const placeholders = collect(found);
     const split = placeholders.filter((p) => p.splitAcrossRuns);
     return {
       fileType: 'DOCX',
       placeholders,
+      outline: docxOutline(xml, await zip.file('word/styles.xml')?.async('string')),
       partCount: 1,
       usableForFill: placeholders.length >= MIN_PLACEHOLDERS_TO_FILL,
       note: `Word template · ${placeholders.length} placeholder(s)${
@@ -233,9 +327,12 @@ export async function parseTemplate(buffer: Buffer, fileName: string): Promise<P
 
     const sheetNames = (await zip.file('xl/workbook.xml')?.async('string'))?.match(/<sheet[^>]*name="[^"]+"/g) ?? [];
     const placeholders = collect(found);
+    const outline: TemplateOutlineEntry[] = [];
+    for (const sheet of sheetNames) pushOutline(outline, 1, unescapeXml(sheet.match(/name="([^"]+)"/)?.[1] ?? ''));
     return {
       fileType: 'XLSX',
       placeholders,
+      outline,
       partCount: sheetNames.length,
       usableForFill: placeholders.length >= MIN_PLACEHOLDERS_TO_FILL,
       note:
@@ -247,6 +344,7 @@ export async function parseTemplate(buffer: Buffer, fileName: string): Promise<P
   return {
     fileType: 'XLSX',
     placeholders: [],
+    outline: [],
     partCount: 0,
     usableForFill: false,
     note: `${ext || 'This file type'} is stored but not scanned for placeholders — upload .pptx, .docx or .xlsx.`,

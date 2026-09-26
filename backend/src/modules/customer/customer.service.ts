@@ -18,11 +18,12 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { Prisma } from '@prisma/client';
+import { Prisma, type CustomerReferenceKind } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 import { badRequest, conflict, notFound } from '../../lib/http-error';
 import { env } from '../../config/env';
 import { parseChecklist } from '../../lib/checklist-parser';
+import { extractTextFromFile } from '../../lib/extract-text';
 import { parseTemplate } from '../../lib/pptx-template';
 import { matchCustomer } from '../../lib/customer-match';
 import { translateChecklistItems } from '../ai/provider';
@@ -52,22 +53,52 @@ export async function listCustomers() {
         include: { _count: { select: { items: true } } },
       },
       templates: { orderBy: [{ active: 'desc' }, { version: 'desc' }] },
+      references: { orderBy: { uploadedAt: 'desc' } },
     },
   });
 
-  return customers.map((customer) => ({
+  return customers.map(({ references, ...customer }) => ({
     ...customer,
     hasLogo: Boolean(customer.logoStorageKey),
     checklists: customer.checklists.map(({ _count, storageKey, ...checklist }) => ({
       ...checklist,
       itemCount: _count.items,
     })),
-    templates: customer.templates.map(({ storageKey, placeholders, ...template }) => ({
+    templates: customer.templates.map(({ storageKey, placeholders, outline, ...template }) => ({
       ...template,
       placeholders,
       placeholderCount: Array.isArray(placeholders) ? placeholders.length : 0,
+      /** Null for a template uploaded before outlines were recorded — read on first use. */
+      outline: Array.isArray(outline) ? outline : null,
+    })),
+    references: references.map(({ storageKey, extraction, ...reference }) => ({
+      ...reference,
+      textAvailable: Boolean((extraction as { textAvailable?: boolean } | null)?.textAvailable),
     })),
   }));
+}
+
+/**
+ * Every document name the app can generate — the choices for a template's document type.
+ *
+ * Templates are matched to documents by name, so a free-text type spelled differently from the
+ * catalog is a template that never gets used, silently. Offering the catalog's own spellings makes
+ * the match exact; "Other" stays available for a document the catalog does not have yet. Extended
+ * definitions (added by the Planning Assessment) are included — they are generated like any other.
+ */
+export async function listDocumentTypes() {
+  const definitions = await prisma.documentDefinition.findMany({
+    select: { name: true, projectType: true },
+    orderBy: { name: 'asc' },
+  });
+  const byName = new Map<string, Set<string>>();
+  for (const definition of definitions) {
+    if (!byName.has(definition.name)) byName.set(definition.name, new Set());
+    byName.get(definition.name)!.add(definition.projectType);
+  }
+  return [...byName.entries()]
+    .map(([name, types]) => ({ name, projectTypes: [...types].sort() }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export async function createCustomer(params: { key?: string; name: string; aliases?: string[]; actorId: string }) {
@@ -113,7 +144,7 @@ export async function updateCustomer(
 export async function deleteCustomer(customerId: string) {
   const customer = await prisma.customer.findUnique({
     where: { id: customerId },
-    include: { checklists: true, templates: true },
+    include: { checklists: true, templates: true, references: true },
   });
   if (!customer) throw notFound('Customer not found');
 
@@ -121,6 +152,7 @@ export async function deleteCustomer(customerId: string) {
   const keys = [
     ...customer.checklists.map((c) => c.storageKey),
     ...customer.templates.map((t) => t.storageKey),
+    ...customer.references.map((r) => r.storageKey),
     ...(customer.logoStorageKey ? [customer.logoStorageKey] : []),
   ];
   await prisma.customer.delete({ where: { id: customerId } });
@@ -310,6 +342,7 @@ export async function addTemplate(params: {
         version: (previous?.version ?? 0) + 1,
         active: true,
         placeholders: parsed.placeholders as unknown as Prisma.InputJsonValue,
+        outline: parsed.outline as unknown as Prisma.InputJsonValue,
         parseNote: parsed.note,
       },
     });
@@ -333,6 +366,66 @@ export async function deleteTemplate(templateId: string) {
   if (!template) throw notFound('Template not found');
   await prisma.customerTemplate.delete({ where: { id: templateId } });
   await fs.rm(filePath(template.storageKey), { force: true }).catch(() => undefined);
+  return { deleted: true };
+}
+
+// ---------------------------------------------------------------------------
+// Approved examples and lessons learned
+// ---------------------------------------------------------------------------
+
+/**
+ * Stores a document on a library's Approved Examples or Lessons Learned tab.
+ *
+ * Kept with its extracted text so a later feature can read it without a re-upload; nothing in
+ * generation or assessment reads these yet, and the screen says so. Unlike checklists and
+ * templates these are not versioned — each upload is its own document.
+ */
+export async function addReference(params: {
+  customerId: string;
+  kind: CustomerReferenceKind;
+  title?: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  storageKey: string;
+  actorId: string;
+}) {
+  const customer = await prisma.customer.findUnique({ where: { id: params.customerId } });
+  if (!customer) throw notFound('Customer not found');
+
+  const { text } = await extractTextFromFile({ storageKey: params.storageKey, fileName: params.fileName });
+  const reference = await prisma.customerReference.create({
+    data: {
+      customerId: params.customerId,
+      kind: params.kind,
+      title: params.title?.trim() || params.fileName.replace(/\.[^.]+$/, ''),
+      sourceFile: params.fileName,
+      storageKey: params.storageKey,
+      mimeType: params.mimeType,
+      sizeBytes: params.sizeBytes,
+      extraction: { rawText: text, textAvailable: Boolean(text) },
+      uploadedById: params.actorId,
+    },
+  });
+
+  await logEvent({
+    actorId: params.actorId,
+    actorType: 'PM',
+    type: 'CUSTOMER_REFERENCE_UPLOADED',
+    title: `${params.kind === 'APPROVED_EXAMPLE' ? 'Approved example' : 'Lesson learned'} "${reference.title}" added to ${customer.name}`,
+    detail: text ? 'Text extracted.' : 'Stored, but no readable text was found.',
+    payload: { customerId: customer.id, referenceId: reference.id, kind: params.kind },
+  });
+
+  const { storageKey, extraction, ...rest } = reference;
+  return { ...rest, textAvailable: Boolean(text) };
+}
+
+export async function deleteReference(referenceId: string) {
+  const reference = await prisma.customerReference.findUnique({ where: { id: referenceId } });
+  if (!reference) throw notFound('Document not found');
+  await prisma.customerReference.delete({ where: { id: referenceId } });
+  await fs.rm(filePath(reference.storageKey), { force: true }).catch(() => undefined);
   return { deleted: true };
 }
 
@@ -365,10 +458,15 @@ export async function setLogo(params: {
  * saying plainly instead of letting `sendFile` fail with an opaque error.
  */
 export async function customerFile(
-  kind: 'checklist' | 'template' | 'logo',
+  kind: 'checklist' | 'template' | 'logo' | 'reference',
   id: string,
 ): Promise<{ path: string; fileName: string; mimeType: string }> {
   const resolved = await (async () => {
+    if (kind === 'reference') {
+      const row = await prisma.customerReference.findUnique({ where: { id } });
+      if (!row) throw notFound('Document not found');
+      return { path: filePath(row.storageKey), fileName: row.sourceFile, mimeType: row.mimeType };
+    }
     if (kind === 'checklist') {
       const row = await prisma.customerChecklist.findUnique({ where: { id } });
       if (!row) throw notFound('Checklist not found');

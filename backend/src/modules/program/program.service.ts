@@ -13,6 +13,7 @@ import { slugify } from '../../lib/slug';
 import { INPUT_SCHEMAS } from '../../data/input-schemas';
 import { computeInputReadiness } from '../../lib/readiness';
 import { checklistScoreForProject } from '../checklist/checklist.service';
+import { fptStandardScore } from '../assessment/assessment.service';
 import { logEvent } from '../audit/audit.service';
 
 const COLOR_ROTATION = ['blue', 'violet', 'green', 'orange'];
@@ -98,26 +99,29 @@ export async function deleteProject(projectId: string, user: { id: string; role:
 /**
  * Readiness for one project — the number the Ready-to-Start ring shows.
  *
- * **Once the customer's own standard has been assessed, that standard and the approved planning
- * outputs are the whole score.** Input readiness drops out of it deliberately: how much of *our*
- * intake form is filled in is our administration, not a measure of whether this project can start.
- * What can be defended in front of the customer is how far the project meets the criteria that
- * customer standardised, and how much of the plan the PM has actually approved.
+ * **Two standards, 60/40.** The customer's own checklist is the heavier of the two because it is
+ * the one the customer will ask about; the FPT standard is the company baseline and applies to
+ * every project. The FPT half is the `MISSING_DOCUMENT` half of the Planning Assessment catalog,
+ * so "every required document is confirmed" and "the FPT standard is met" are the same statement
+ * rather than two numbers that can quietly disagree.
  *
- * The customer standard carries the heavier weight of the two for the same reason it used to: it
- * is the one the customer will ask about. It only enters the score once something has actually
- * been assessed (`coverage > 0`), so an un-assessed checklist cannot silently halve a project.
+ * **With no customer standard, the FPT standard is the whole score.** Most customers have no
+ * checklist in the library, and inventing a second blend for them would make the same percentage
+ * mean different things on two projects side by side on the program board.
  *
- * Projects whose customer has no checklist in the library — most of them — keep the older basis
- * (input readiness blended with approved outputs), because the alternative is scoring them on
- * approved documents alone and telling a PM who has just filled in a careful profile that they are
- * at 0%. `basis` reports which of the two produced the number, so no screen has to guess.
+ * Input readiness is deliberately not in either formula: how full *our* intake form is is our
+ * administration, not evidence that the project can start. It is still returned, because the
+ * Project Input screen shows it.
+ *
+ * `basis` reports which formula produced the number, and every screen prints it — a percentage
+ * whose basis is unstated is one nobody can act on.
  */
 async function projectReadiness(projectId: string) {
-  const [values, documents, checklist] = await Promise.all([
+  const [values, documents, checklist, fptScore] = await Promise.all([
     prisma.projectInputValue.findMany({ where: { projectId }, include: { definition: true } }),
     prisma.planningDocument.findMany({ where: { projectId } }),
     checklistScoreForProject(projectId),
+    fptStandardScore(projectId),
   ]);
 
   const input = computeInputReadiness(
@@ -128,16 +132,18 @@ async function projectReadiness(projectId: string) {
   const approved = documents.filter((doc) => doc.status === DocumentStatus.APPROVED).length;
   const outputShare = documents.length ? Math.round((approved / documents.length) * 100) : 0;
 
-  const ownScore = documents.length
-    ? Math.round(input.readiness * 0.5 + outputShare * 0.5)
-    : input.readiness;
-
   const checklistCounts = Boolean(checklist && checklist.coverage > 0);
-  const readiness = checklistCounts
-    ? documents.length
-      ? Math.round(checklist!.score * 0.6 + outputShare * 0.4)
-      : checklist!.score
-    : ownScore;
+
+  /**
+   * Null means the assessment has never been run, which is not the same as scoring zero: a project
+   * nobody has assessed has not failed the standard, it has not been measured. Until then the
+   * number falls back to approved outputs, and `basis` says `NOT_ASSESSED` so the screen can tell
+   * the PM to run the assessment rather than showing them a figure built from nothing.
+   */
+  const assessed = fptScore !== null;
+  const fpt = fptScore ?? outputShare;
+
+  const readiness = checklistCounts ? Math.round(checklist!.score * 0.6 + fpt * 0.4) : fpt;
 
   return {
     readiness,
@@ -146,12 +152,14 @@ async function projectReadiness(projectId: string) {
      * percentage with no stated meaning.
      */
     basis: checklistCounts
-      ? documents.length
-        ? ('CUSTOMER_AND_OUTPUTS' as const)
-        : ('CUSTOMER' as const)
-      : documents.length
-        ? ('INPUT_AND_OUTPUTS' as const)
-        : ('INPUT' as const),
+      ? assessed
+        ? ('CUSTOMER_AND_FPT' as const)
+        : ('CUSTOMER_AND_OUTPUTS' as const)
+      : assessed
+        ? ('FPT_ONLY' as const)
+        : ('NOT_ASSESSED' as const),
+    /** The FPT standard score, or null when the Planning Assessment has never been run. */
+    fptScore,
     outputShare,
     /** Split out so the dashboard can show what moved the number, not just the number. */
     checklistReadiness: checklist ? { score: checklist.score, coverage: checklist.coverage, stale: checklist.stale } : null,
@@ -163,6 +171,30 @@ async function projectReadiness(projectId: string) {
     documentsApproved: approved,
     documentsInReview: documents.filter((doc) => doc.status === DocumentStatus.PM_REVIEW).length,
   };
+}
+
+/**
+ * PM actions still outstanding — the "Open gaps" column. The same test the dashboard applies to
+ * its own list: an OPEN action stops counting once the PM resolved it, once the document it names
+ * is approved, or once the PM ticked its rule as met in Standards. `openDecisions` counts every
+ * OPEN row, resolved-but-not-closed ones included, so it overstates what is left to do.
+ */
+async function openGapCount(projectId: string) {
+  const [actions, approved, ticked] = await Promise.all([
+    prisma.actionItem.findMany({
+      where: { projectId, status: 'OPEN', resolvedAt: null },
+      select: { targetDocument: true, ruleId: true },
+    }),
+    prisma.planningDocument.findMany({ where: { projectId, status: DocumentStatus.APPROVED }, select: { name: true } }),
+    prisma.assessmentOverride.findMany({ where: { projectId, met: true }, select: { ruleId: true } }),
+  ]);
+  const approvedNames = new Set(approved.map((doc) => doc.name.trim().toLowerCase()));
+  const tickedRules = new Set(ticked.map((verdict) => verdict.ruleId));
+  return actions.filter(
+    (action) =>
+      !(action.targetDocument && approvedNames.has(action.targetDocument.trim().toLowerCase())) &&
+      !(action.ruleId && tickedRules.has(action.ruleId)),
+  ).length;
 }
 
 /**
@@ -189,9 +221,10 @@ export async function programOverview(user: { id: string; role: Role }) {
   const enriched = await Promise.all(
     projects.map(async (project) => {
       const stats = await projectReadiness(project.id);
-      const [decision, openActions] = await Promise.all([
+      const [decision, openActions, openGaps] = await Promise.all([
         prisma.approachDecision.findFirst({ where: { projectId: project.id, active: true } }),
         prisma.actionItem.count({ where: { projectId: project.id, status: 'OPEN' } }),
+        openGapCount(project.id),
       ]);
       const membership = project.members.find((member) => member.userId === user.id);
       const isProjectOwner = project.ownerId === user.id;
@@ -208,6 +241,7 @@ export async function programOverview(user: { id: string; role: Role }) {
         programName: project.program?.name ?? 'Standalone',
         approach: decision?.approach ?? null,
         openDecisions: openActions,
+        openGaps,
         members: project.members.map((member) => member.user),
         canOpen: isProgramOwner || isProjectOwner || Boolean(membership),
         /** Rename, re-file, change status — anyone with the OWNER role inside the project. */
@@ -351,14 +385,15 @@ export async function createProject(params: {
       dashboardLayouts: {
         create: {
           userId: params.ownerId,
+          // The default set only. Optional blocks — information coverage, recent activity, the
+          // document list — stay off until the owner ticks them in Customize.
           widgets: {
             readiness: true,
             approach: true,
             outputs: true,
             tasks: true,
             decisions: true,
-            domains: true,
-            activity: true,
+            standards: true,
           } as Prisma.InputJsonValue,
         },
       },

@@ -43,6 +43,8 @@ export type XlsxDocument = {
   tableColumns?: string[] | null;
   /** The rows, once generated. */
   table?: { columns: string[]; rows: string[][] } | null;
+  /** Drafted to a workbook template's outline: write one sheet per section, as the template does. */
+  sectionsAsSheets?: boolean;
 };
 
 /** Writes one cell, rendering unanswered `{{gap:N}}` tokens as a highlighted blank. */
@@ -242,7 +244,7 @@ function addRegisterSheet(workbook: ExcelJS.Workbook, doc: XlsxDocument, table: 
   } else {
     // An empty grid under a correct header is still confusing — say why it is empty.
     const row = sheet.addRow([
-      'No rows yet. Press “Generate document” in the Planning Studio — a version produced before ' +
+      'No rows yet. Press “Generate document” in Planning Documents — a version produced before ' +
         'this document became a table holds prose instead, and needs generating again.',
     ]);
     sheet.mergeCells(row.number, 1, row.number, table.columns.length);
@@ -251,6 +253,36 @@ function addRegisterSheet(workbook: ExcelJS.Workbook, doc: XlsxDocument, table: 
     row.getCell(1).alignment = { vertical: 'top', wrapText: true };
     row.height = 34;
   }
+}
+
+/**
+ * A prose document drafted to a workbook template's outline: one sheet per section, named after it,
+ * because the template's own structure is its sheets. Sheet names are made unique, since two
+ * sections can shorten to the same 31 characters.
+ */
+function addSectionSheets(workbook: ExcelJS.Workbook, doc: XlsxDocument) {
+  const sections = doc.sections.filter((section) => section.included && section.content);
+  const used = new Set<string>();
+  for (const section of sections) {
+    let name = sheetName(section.title);
+    for (let n = 2; used.has(name.toLowerCase()); n++) name = `${sheetName(section.title).slice(0, 27)} (${n})`;
+    used.add(name.toLowerCase());
+
+    const sheet = workbook.addWorksheet(name);
+    sheet.getColumn(1).width = 120;
+    const title = sheet.addRow([section.title]);
+    title.getCell(1).font = { bold: true, size: 12, color: { argb: argb(DOC_COLORS.blue) }, name: 'Calibri' };
+    title.height = 20;
+    for (const block of (section.content ?? '').split(/\n{2,}/)) {
+      const text = block.trim();
+      if (!text) continue;
+      const row = sheet.addRow([]);
+      writeCell(row.getCell(1), text);
+      row.getCell(1).alignment = { vertical: 'top', wrapText: true };
+      fitRowHeight(row, [text], [120]);
+    }
+  }
+  if (!sections.length) workbook.addWorksheet(sheetName(doc.name));
 }
 
 /** Excel sheet names cap at 31 characters and reject `[]:*?/\`. */
@@ -278,6 +310,8 @@ export async function buildDocumentXlsx(doc: XlsxDocument): Promise<{ fileName: 
   const columns = doc.tableColumns?.length ? doc.tableColumns : doc.table?.columns;
   if (columns?.length) {
     addRegisterSheet(workbook, doc, { columns, rows: doc.table?.rows ?? [] });
+  } else if (doc.sectionsAsSheets && !doc.raciTable.length) {
+    addSectionSheets(workbook, doc);
   } else {
     addMatrixSheet(workbook, doc);
     addNarrativeSheet(workbook, doc);

@@ -106,6 +106,7 @@ documentsRouter.post(
         projectId: req.params.projectId,
         documentId: req.params.documentId,
         ...body,
+        actorId: req.user!.id,
       }),
     );
   }),

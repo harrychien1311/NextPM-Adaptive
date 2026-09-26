@@ -3,7 +3,7 @@ import { useAuth } from './store/auth';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { AdminPage } from './pages/AdminPage';
-import { CustomerLibraryPage } from './pages/CustomerLibraryPage';
+import { AccountLibraryPage } from './pages/AccountLibraryPage';
 import { ProgramOverviewPage } from './pages/ProgramOverviewPage';
 import { WorkspacePage } from './pages/WorkspacePage';
 
@@ -65,19 +65,21 @@ export function App() {
           }
         />
         {/*
-          The one screen both sides of the app share. The customer library is configuration rather
-          than delivery data — which checklist a customer requires, which template their kickoff
-          deck follows — so an administrator may set it up, and a project owner may read it to see
+          The one screen both sides of the app share. The account libraries are configuration rather
+          than delivery data — which checklist an account requires, which template its kickoff deck
+          follows — so an administrator may set them up, and a project owner may read them to see
           what their project will be assessed against. Write access is gated in the API, not here.
         */}
         <Route
-          path="/customers"
+          path="/libraries"
           element={
             <RequireAuth>
-              <CustomerLibraryPage />
+              <AccountLibraryPage />
             </RequireAuth>
           }
         />
+        {/* The screen's old address, so saved links still land on it. */}
+        <Route path="/customers" element={<Navigate to="/libraries" replace />} />
         <Route
           path="/projects/:projectId/*"
           element={

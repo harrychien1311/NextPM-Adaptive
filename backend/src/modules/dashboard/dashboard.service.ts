@@ -4,26 +4,34 @@ import { notFound } from '../../lib/http-error';
 import { listEvents } from '../audit/audit.service';
 import { projectWorkspace } from '../program/program.service';
 import { gapDocumentNames } from '../documents/documents.service';
+import { latestAssessment } from '../assessment/assessment.service';
 
-const DEFAULT_WIDGETS = {
+/**
+ * The default set is what fits one screen. Everything else is opt-in through Customize and renders
+ * below it, because a dashboard that needs scrolling to reach its first decision is a report.
+ */
+const DEFAULT_WIDGETS: Record<string, boolean> = {
+  // On by default — the one-screen set.
   readiness: true,
   approach: true,
   outputs: true,
   tasks: true,
   decisions: true,
-  // `domains` (Project information coverage) was retired from the dashboard — it measured how full
-  // the intake form is, which is our administration rather than anything about the project. Plan
-  // history took its place. `domains` stays in the payload: `recomputeDomainReadiness` still runs
-  // and the rows are still the record of per-domain input coverage.
-  history: true,
-  activity: true,
+  standards: true,
+  // Optional: shown only once the PM ticks them in Customize.
+  customer: false,
+  domains: false,
+  library: false,
+  activity: false,
+  // Plan history is no longer a dashboard widget: it is step 5 of the planning flow, in the sidebar,
+  // once the plan is confirmed. A saved layout that still has `history: true` is simply ignored.
 };
 
 /** "One view. Every setup decision." — everything the control center renders. */
 export async function dashboard(projectId: string, userId: string) {
   const workspace = await projectWorkspace(projectId);
 
-  const [actions, domains, documents, references, planChanges, activity, layout] = await Promise.all([
+  const [actions, domains, documents, references, planChanges, activity, layout, assessment] = await Promise.all([
     prisma.actionItem.findMany({ where: { projectId, status: 'OPEN' }, orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }] }),
     prisma.domainReadiness.findMany({ where: { projectId } }),
     prisma.planningDocument.findMany({
@@ -55,6 +63,11 @@ export async function dashboard(projectId: string, userId: string) {
     }),
     listEvents(projectId, 8),
     prisma.dashboardLayout.findUnique({ where: { projectId_userId: { projectId, userId } } }),
+    /**
+     * The stored snapshot, never a fresh run. `dashboard()` is called on every visit to the
+     * control center; re-running the catalog here would put four model calls behind a page load.
+     */
+    latestAssessment(projectId),
   ]);
 
   /**
@@ -80,13 +93,32 @@ export async function dashboard(projectId: string, userId: string) {
    * gap that asked for it.
    */
   const documentStatusByName = new Map(documents.map((doc) => [doc.name.trim().toLowerCase(), doc.status]));
-  const actionRows = actions.map((action) => ({
-    ...action,
-    kind: 'GAP' as const,
-    targetDocumentStatus: action.targetDocument
+  // Rules the PM ticked as met in the Standards popup — their actions are answered too.
+  const tickedRules = new Set(
+    (await prisma.assessmentOverride.findMany({ where: { projectId, met: true }, select: { ruleId: true } })).map(
+      (verdict) => verdict.ruleId,
+    ),
+  );
+  const actionRows = actions.map((action) => {
+    const targetDocumentStatus = action.targetDocument
       ? documentStatusByName.get(action.targetDocument.trim().toLowerCase()) ?? null
-      : null,
-  }));
+      : null;
+    return {
+      ...action,
+      kind: 'GAP' as const,
+      targetDocumentStatus,
+      /**
+       * Resolved — green, and now closable — when the PM pressed Resolve, or when the document it
+       * asked for has been confirmed in Planning Documents. The second is derived here on read,
+       * never written: the approval is the fact, and a stored copy of it would go stale the moment
+       * the document was deleted or regenerated.
+       */
+      resolved:
+        Boolean(action.resolvedAt) ||
+        targetDocumentStatus === DocumentStatus.APPROVED ||
+        Boolean(action.ruleId && tickedRules.has(action.ruleId)),
+    };
+  });
 
   /**
    * A document an applied plan change made out of date is an open question for the PM, so it belongs
@@ -117,6 +149,10 @@ export async function dashboard(projectId: string, userId: string) {
       targetView: 'studio',
       targetDocument: doc.name,
       targetDocumentStatus: null,
+      // Never "resolved": it clears when the PM regenerates or deletes the document, and there is
+      // no row to resolve or close.
+      resolved: false,
+      ruleId: null,
       suggestions: [],
       status: 'OPEN' as const,
       resolvedValue: null,
@@ -158,40 +194,63 @@ export async function dashboard(projectId: string, userId: string) {
   const requiredDone = requiredInputs.filter(Boolean).length;
 
   const generated = inScope.length - notGenerated;
+
+  /**
+   * Five steps, and the fourth is the one the old four-step list had no room for: closing the
+   * blockers the assessment raised is real work between deciding an approach and approving a
+   * baseline, and a PM whose progress jumped straight from "decided" to "approve documents" had
+   * nowhere on this screen that acknowledged it.
+   *
+   * A step's sub-line never repeats a number the KPI strip already shows: done steps carry the
+   * date, the current step carries the next action, the last carries what is waiting.
+   */
+  const openBlockers = actionRows.filter((action) => !action.resolved && action.priority === ActionPriority.REQUIRED).length;
   const planningTasks = [
     {
       id: 'profile',
-      title: 'Complete minimum project profile',
-      detail: `${requiredDone}/${requiredInputs.length} required inputs`,
+      title: 'Project input',
+      detail:
+        requiredDone === requiredInputs.length
+          ? 'Complete'
+          : `${requiredDone}/${requiredInputs.length} required inputs`,
       state: requiredDone === requiredInputs.length ? 'DONE' : 'TODO',
       order: 0,
     },
     {
       id: 'analysis',
-      // Named after the button that exists. The old title said "Verify inputs & get AI
-      // recommendation", which is two buttons that were both deleted.
-      title: 'Analyze planning needs',
-      detail: workspace.recommendation
-        ? `${workspace.recommendation.approach} · ${workspace.recommendation.confidence}% fit`
-        : 'Reads the uploaded documents in one pass',
-      state: workspace.recommendation ? 'DONE' : 'TODO',
+      title: 'Planning assessment',
+      detail: assessment
+        ? `FPT standard ${assessment.standards.fpt.score}%`
+        : 'Reads the uploaded documents against the rule catalog',
+      state: assessment ? 'DONE' : 'TODO',
       order: 1,
     },
     {
       id: 'decision',
-      title: 'Confirm governance model',
+      title: 'Approach decision',
       detail: workspace.approach ? `${workspace.approach.approach} · ${workspace.approach.outcome}` : 'PM decision gate',
       state: workspace.approach ? 'DONE' : 'TODO',
       order: 2,
     },
     {
+      id: 'resolution',
+      title: 'PM resolution',
+      detail: openBlockers ? `Next: close the ${openBlockers} required gap${openBlockers === 1 ? '' : 's'}` : 'No required gaps open',
+      state: openBlockers ? 'TODO' : actions.length ? 'REVIEW' : 'DONE',
+      order: 3,
+    },
+    {
       id: 'documents',
-      title: 'Generate & approve planning pack',
-      detail: inScope.length ? `${approved}/${inScope.length} approved` : 'AI drafts, PM approves',
+      title: 'Baseline approval',
+      detail: inScope.length
+        ? approved === inScope.length
+          ? 'Every document confirmed'
+          : `${inReview} draft${inReview === 1 ? '' : 's'} ready to review`
+        : 'AI drafts, PM approves',
       // REVIEW, not DONE, while drafts exist that nobody has approved: generating is not finishing,
       // and the whole point of the approval step is that it is a separate decision.
       state: inScope.length && approved === inScope.length ? 'DONE' : generated ? 'REVIEW' : 'TODO',
-      order: 3,
+      order: 4,
     },
   ];
 
@@ -201,6 +260,31 @@ export async function dashboard(projectId: string, userId: string) {
       : workspace.readiness >= 55
         ? { label: 'GO WITH CONDITIONS', tone: 'amber' }
         : { label: 'NOT READY', tone: 'red' };
+
+  /**
+   * The Standards block, in precedence order: the FPT baseline applies to every project, the
+   * customer's own checklist is laid on top. `customer` is null when this project's customer has no
+   * checklist in the library — most of them — and the panel then shows the baseline alone rather
+   * than a second row reading 0%, which would look like a failure instead of an absence.
+   */
+  const standards = assessment?.standards ?? null;
+
+  /**
+   * Counts for the PM Actions legend. Outstanding only: a resolved action is still on the list
+   * until the PM closes it, but counting it as "required" would report work that is already done.
+   */
+  // Unresolved first, then by the server's priority order — a green row waiting for Close should not
+  // push an outstanding one out of the dashboard's five.
+  const allActions = [...staleRows, ...actionRows].sort((a, b) => Number(a.resolved) - Number(b.resolved));
+  const outstanding = actionRows.filter((action) => !action.resolved);
+  const actionCounts = {
+    stale: staleRows.length,
+    required: outstanding.filter((action) => action.priority === ActionPriority.REQUIRED).length,
+    conditional: outstanding.filter((action) => action.priority === ActionPriority.CONDITIONAL).length,
+    info: outstanding.filter((action) => action.priority === ActionPriority.INFO).length,
+    resolved: actionRows.length - outstanding.length,
+    total: allActions.length,
+  };
 
   return {
     workspace,
@@ -212,6 +296,23 @@ export async function dashboard(projectId: string, userId: string) {
         ? `${requiredPending} required outputs await approval`
         : 'All required planning outputs are approved',
     },
+    standards,
+    /**
+     * Enough of the assessment for the dashboard to report it without carrying all 147 rows onto a
+     * screen that shows two numbers. The Planning Assessment screen fetches the rows itself.
+     */
+    assessment: assessment
+      ? {
+          at: assessment.at,
+          // Across every category, the same sum the Planning Assessment screen's "Blocking checks"
+          // tile and the ASSESSMENT_RUN audit line use. Counting only MISSING_DOCUMENT here made
+          // the dashboard report 4 blockers for a project whose assessment screen said 7.
+          blockers: Object.values(assessment.categories).reduce((sum, entry) => sum + entry.blockers, 0),
+          unknown: Object.values(assessment.categories).reduce((sum, entry) => sum + entry.unknown, 0),
+          categories: assessment.categories,
+        }
+      : null,
+    actionCounts,
     outputs: {
       total: inScope.length,
       generated: inScope.length - notGenerated,
@@ -229,7 +330,7 @@ export async function dashboard(projectId: string, userId: string) {
      * Out-of-date documents first: they are the consequence of a change the PM has just applied, so
      * they are the newest thing on the list and the reason they came to this screen.
      */
-    actions: [...staleRows, ...actionRows],
+    actions: allActions,
     domains: domains.map((row) => ({ domain: row.domain, score: row.score, target: row.target })),
     /**
      * What the Plan history panel shows. Flattened here rather than sent whole: the panel needs a
@@ -279,7 +380,13 @@ export async function dashboard(projectId: string, userId: string) {
         })),
     ],
     activity,
-    widgets: (layout?.widgets as Record<string, boolean>) ?? DEFAULT_WIDGETS,
+    /**
+     * Every widget key, always: the defaults with the PM's saved choices laid on top. A key the
+     * saved layout lacks takes its default — which for an optional block is *off*. The client used to
+     * read a missing key as visible, so every optional block appeared on a layout saved before it
+     * existed, and on every project that had never been customised at all.
+     */
+    widgets: { ...DEFAULT_WIDGETS, ...((layout?.widgets as Record<string, boolean> | null) ?? {}) },
   };
 }
 

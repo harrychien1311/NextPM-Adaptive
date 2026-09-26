@@ -14,6 +14,7 @@ import { inputRouter } from './modules/input/input.routes';
 import { rulesRouter } from './modules/rules/rules.routes';
 import { documentsRouter } from './modules/documents/documents.routes';
 import { checklistRouter } from './modules/checklist/checklist.routes';
+import { assessmentRouter } from './modules/assessment/assessment.routes';
 import { dashboardRouter } from './modules/dashboard/dashboard.routes';
 import { agentRouter } from './modules/agent/agent.routes';
 
@@ -53,6 +54,7 @@ export function createApp() {
   api.use('/projects', rulesRouter);
   api.use('/projects', documentsRouter);
   api.use('/projects', checklistRouter);
+  api.use('/projects', assessmentRouter);
   api.use('/projects', dashboardRouter);
   api.use('/projects', agentRouter);
   app.use('/api', api);

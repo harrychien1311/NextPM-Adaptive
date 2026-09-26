@@ -222,7 +222,8 @@ async function main() {
         dashboardLayouts: {
           create: {
             userId: users.LV,
-            widgets: { readiness: true, approach: true, outputs: true, tasks: true, decisions: true, domains: true, activity: true },
+            // The default set only — optional blocks stay off until someone ticks them in Customize.
+            widgets: { readiness: true, approach: true, outputs: true, tasks: true, decisions: true, standards: true },
           },
         },
       },

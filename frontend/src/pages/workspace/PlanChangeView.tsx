@@ -22,10 +22,13 @@ export function PlanChangeView({
   projectId,
   change,
   onNavigate,
+  onEdit,
 }: {
   projectId: string;
   change: PlanChange;
   onNavigate: NavigateToView;
+  /** Returns to the change recorder in Update Planning, to edit what was recorded. */
+  onEdit?: () => void;
 }) {
   const notify = useToast();
   const queryClient = useQueryClient();
@@ -49,7 +52,9 @@ export function PlanChangeView({
       await refresh();
       notify({
         title: 'Plan updated',
-        detail: `${result.flagged} document(s) flagged as out of date · ${result.openActions} PM action(s) open.`,
+        // The PM actions come from the Planning Assessment, which a change does not re-run on its own
+        // (it costs model calls) — so the PM is told how to refresh them rather than left to wonder.
+        detail: `${result.flagged} document(s) flagged as out of date. Re-assess on Planning Assessment to refresh the missing items and PM actions.`,
       });
     },
     onError: (error) =>
@@ -84,7 +89,7 @@ export function PlanChangeView({
     <section className="view active">
       <div className="page-head">
         <div>
-          <p>CHANGE IMPACT</p>
+          <p>PLANNING FLOW 4 · UPDATE PLANNING · CHANGE IMPACT</p>
           <h1>What this change does to the plan</h1>
           <span>{impact.summary}</span>
         </div>
@@ -227,7 +232,7 @@ export function PlanChangeView({
                    gate (`ApproachDecision`); a plan change must not walk through it. */
                 <p>
                   Consider <b>{impact.approach.suggested}</b> instead — applying this change does not
-                  switch it. Re-decide on Planning Review if you agree.
+                  switch it. Re-decide on Planning Assessment if you agree.
                 </p>
               )}
             </div>
@@ -276,13 +281,19 @@ export function PlanChangeView({
           <span>⇄</span>
           <p>
             Nothing has changed yet. <strong>Apply</strong> writes a new analysis snapshot, updates the
-            PM action center and flags the documents above — each one then carries a banner in the
-            Planning Studio saying what is wrong with it, and you decide whether to regenerate it.
+            PM action center and flags the documents above — each one then carries a banner in
+            Planning Documents saying what is wrong with it, and you decide whether to regenerate it.
           </p>
         </div>
-        <button className="secondary" onClick={() => onNavigate('input')}>
-          ← Back to inputs
-        </button>
+        {onEdit ? (
+          <button className="secondary" onClick={onEdit}>
+            ← Edit the change
+          </button>
+        ) : (
+          <button className="secondary" onClick={() => onNavigate('update')}>
+            ← Back to Update Planning
+          </button>
+        )}
         <button
           className={`secondary${lockClass}`}
           {...lockedProps}
