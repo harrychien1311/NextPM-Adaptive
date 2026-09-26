@@ -15,6 +15,7 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:seed:customers": "tsx prisma/seed-customers.ts",
     "db:seed:catalog": "tsx prisma/seed-catalog.ts",
+    "db:seed:inputs": "tsx prisma/seed-input-fields.ts",
     "db:rename:catalog": "tsx prisma/rename-catalog.ts",
     "db:fix:gap-language": "tsx prisma/fix-gap-language.ts",
     "db:backfill:actions": "tsx prisma/backfill-actions.ts",

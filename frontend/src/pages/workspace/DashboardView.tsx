@@ -228,15 +228,13 @@ export function DashboardView({ projectId, onNavigate }: { projectId: string; on
                 ?
               </button>
             </div>
+            {/*
+              The ring and the way to the blockers, nothing else. How the figure is built stays one
+              hover away on the "?" beside the label, rather than three lines of text on the tile.
+            */}
             <div className="score-row">
               <Ring value={data.startReadiness.score} className="readiness-ring v2-ready" />
               <div>
-                <strong className={data.startReadiness.verdict.tone === 'green' ? '' : 'amber'}>
-                  {data.startReadiness.verdict.label}
-                </strong>
-                {/* A percentage with no stated basis is a number nobody can argue with or act on. */}
-                <small className="readiness-basis">{basis.label}</small>
-                <p>{data.startReadiness.note}</p>
                 <button className="text-button" onClick={() => onNavigate('actions')}>
                   Review blockers →
                 </button>
@@ -263,12 +261,14 @@ export function DashboardView({ projectId, onNavigate }: { projectId: string; on
                       ? `${titleCase(data.workspace.recommendation.approach)} (recommended)`
                       : 'Not selected'}
                 </strong>
-                <p>{data.workspace.approach?.rigor ?? 'Awaiting PM decision'}</p>
+                {/* The rigor label is gone; before a decision the tile still says one is awaited. */}
+                {!data.workspace.approach && <p>Awaiting PM decision</p>}
                 {/* "Fit score" — the weighted total over the nine criteria, not how sure the model is. */}
                 {data.workspace.recommendation && <small>Fit score {data.workspace.recommendation.confidence}%</small>}
               </div>
             </div>
-            <button className="text-button" onClick={() => onNavigate('approach')}>
+            {/* Straight to the rationale itself — the Methodology Fit tab — not the assessment's Overview. */}
+            <button className="text-button" onClick={() => onNavigate('approach', 'fit')}>
               View rationale →
             </button>
           </article>

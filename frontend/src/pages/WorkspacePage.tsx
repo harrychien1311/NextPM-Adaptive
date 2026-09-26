@@ -38,6 +38,9 @@ export type WorkspaceView = 'dashboard' | 'input' | 'approach' | 'studio' | 'upd
  * the list open the same screen, which is what it did before this existed.
  */
 export type NavigateToView = (view: WorkspaceView, focusDocument?: string | null) => void;
+// The same second argument names a Planning Assessment tab for `approach` (e.g. 'fit'), so the
+// dashboard's "View rationale" lands on Methodology Fit. The sidebar navigates through `goToView`
+// too, with no focus, so a stale one can never reopen a tab or document nobody asked for.
 
 /** The values `?view=` accepts, so a hand-edited URL cannot put the workspace in a state that isn't one. */
 const WORKSPACE_VIEWS: WorkspaceView[] = ['dashboard', 'input', 'approach', 'studio', 'update', 'history', 'actions'];
@@ -149,23 +152,23 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
           <nav aria-label="Primary navigation">
             <button
               className={`nav-item overview-item${view === 'dashboard' ? ' active' : ''}`}
-              onClick={() => setView('dashboard')}
+              onClick={() => goToView('dashboard')}
             >
               <span className="nav-icon">▦</span>
               <span>Dashboard</span>
             </button>
             <div className="flow-label">PROJECT PLANNING FLOW</div>
             <div className="planning-flow-nav">
-              <button className={`nav-item${view === 'input' ? ' active' : ''}`} onClick={() => setView('input')}>
+              <button className={`nav-item${view === 'input' ? ' active' : ''}`} onClick={() => goToView('input')}>
                 <span className="step-node">1</span>
                 <span>Project Input</span>
               </button>
-              <button className={`nav-item${view === 'approach' ? ' active' : ''}`} onClick={() => setView('approach')}>
+              <button className={`nav-item${view === 'approach' ? ' active' : ''}`} onClick={() => goToView('approach')}>
                 <span className="step-node">2</span>
                 <span>Planning Assessment</span>
                 {project.approach ? <b>✓</b> : <i>!</i>}
               </button>
-              <button className={`nav-item${view === 'studio' ? ' active' : ''}`} onClick={() => setView('studio')}>
+              <button className={`nav-item${view === 'studio' ? ' active' : ''}`} onClick={() => goToView('studio')}>
                 <span className="step-node">3</span>
                 <span>Planning Documents</span>
                 <b>
@@ -179,12 +182,12 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
               */}
               {project.approach && (
                 <>
-                  <button className={`nav-item${view === 'update' ? ' active' : ''}`} onClick={() => setView('update')}>
+                  <button className={`nav-item${view === 'update' ? ' active' : ''}`} onClick={() => goToView('update')}>
                     <span className="step-node">4</span>
                     <span>Update Planning</span>
                     {planChange.data?.change && <i title="A change is being recorded">●</i>}
                   </button>
-                  <button className={`nav-item${view === 'history' ? ' active' : ''}`} onClick={() => setView('history')}>
+                  <button className={`nav-item${view === 'history' ? ' active' : ''}`} onClick={() => goToView('history')}>
                     <span className="step-node">5</span>
                     <span>Plan History</span>
                   </button>
@@ -243,7 +246,7 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
             </div>
             <div className="top-actions">
               {project.documentsInReview > 0 && (
-                <button className="primary small" onClick={() => setView('studio')}>
+                <button className="primary small" onClick={() => goToView('studio')}>
                   Review {project.documentsInReview} draft{project.documentsInReview > 1 ? 's' : ''}
                 </button>
               )}
@@ -271,7 +274,9 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
 
           {view === 'dashboard' && <DashboardView projectId={projectId} onNavigate={goToView} />}
           {view === 'input' && <InputView projectId={projectId} onNavigate={goToView} />}
-          {view === 'approach' && <PlanningAssessmentView projectId={projectId} onNavigate={goToView} />}
+          {view === 'approach' && (
+            <PlanningAssessmentView projectId={projectId} onNavigate={goToView} initialTab={focusDocument} />
+          )}
           {view === 'studio' && <StudioView projectId={projectId} focusDocument={focusDocument} />}
           {/*
             Update Planning holds the whole change — record, analyse, then the impact to apply or

@@ -17,6 +17,21 @@ export interface FieldSeed {
 }
 
 /**
+ * The contract type, shown on Project Input's minimum profile beside name, type and approach. The
+ * same four options for every project type (the redesign mockup's list): it is a fact about the
+ * engagement, not about the kind of work, and one scale lets projects be compared. No default —
+ * a preselected contract type is a claim nobody made.
+ */
+const CONTRACT_TYPE: FieldSeed = {
+  key: 'contractType',
+  label: 'Contract type',
+  fieldType: FieldType.SELECT,
+  options: ['T&M', 'Fixed Price', 'ODC', 'Managed Service'],
+  domain: ManagementDomain.FINANCE,
+  signalKey: 'contractType',
+};
+
+/**
  * "Minimum project profile" — the signals the AI scores a governance model from, per project type.
  * Mirrors `inputSchemas` in the approved prototype.
  */
@@ -39,6 +54,7 @@ export const INPUT_SCHEMAS: Record<ProjectType, FieldSeed[]> = {
     { key: 'escalationSla', label: 'Escalation SLA', fieldType: FieldType.SELECT, options: ['2 days', '3 days', '5 days'], domain: ManagementDomain.GOVERNANCE, signalKey: 'escalationSla' },
     { key: 'externalApiOwner', label: 'External API owner', fieldType: FieldType.TEXT, domain: ManagementDomain.RISK, signalKey: 'externalApiOwner' },
     { key: 'budgetControlScope', label: 'Budget control scope', fieldType: FieldType.SELECT, options: ['PM owns', 'Track impact only'], domain: ManagementDomain.FINANCE, signalKey: 'budgetControlScope' },
+    CONTRACT_TYPE,
   ],
   SM: [
     { key: 'serviceName', label: 'Service name', fieldType: FieldType.TEXT, domain: ManagementDomain.GOVERNANCE, required: true, defaultValue: 'SK Manufacturing AMS' },
@@ -55,6 +71,7 @@ export const INPUT_SCHEMAS: Record<ProjectType, FieldSeed[]> = {
     { key: 'continuityRequirement', label: 'Continuity requirement', fieldType: FieldType.SELECT, options: ['DR required', 'Backup only', 'Standard recovery'], domain: ManagementDomain.RISK, signalKey: 'continuityRequirement', defaultValue: 'DR required' },
     { key: 'escalationSla', label: 'Escalation SLA', fieldType: FieldType.SELECT, options: ['2 days', '3 days', '5 days'], domain: ManagementDomain.GOVERNANCE, signalKey: 'escalationSla' },
     { key: 'budgetControlScope', label: 'Budget control scope', fieldType: FieldType.SELECT, options: ['PM owns', 'Track impact only'], domain: ManagementDomain.FINANCE, signalKey: 'budgetControlScope' },
+    CONTRACT_TYPE,
   ],
   PRODUCT: [
     { key: 'productName', label: 'Product name', fieldType: FieldType.TEXT, domain: ManagementDomain.GOVERNANCE, required: true, defaultValue: 'AI Quality Assistant' },
@@ -70,6 +87,7 @@ export const INPUT_SCHEMAS: Record<ProjectType, FieldSeed[]> = {
     { key: 'customerDecisionSpeed', label: 'Feedback access', fieldType: FieldType.SELECT, options: ['Weekly user testing', 'Monthly review', 'Limited access'], domain: ManagementDomain.STAKEHOLDERS, signalKey: 'customerDecisionSpeed', defaultValue: 'Weekly user testing' },
     { key: 'complianceNeed', label: 'Regulatory need', fieldType: FieldType.SELECT, options: ['Medium', 'High', 'Low'], domain: ManagementDomain.GOVERNANCE, signalKey: 'complianceNeed', defaultValue: 'Medium' },
     { key: 'budgetControlScope', label: 'Budget control scope', fieldType: FieldType.SELECT, options: ['PM owns', 'Track impact only'], domain: ManagementDomain.FINANCE, signalKey: 'budgetControlScope' },
+    CONTRACT_TYPE,
   ],
 };
 

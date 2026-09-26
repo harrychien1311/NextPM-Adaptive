@@ -287,6 +287,12 @@ export function InputView({
    * they are simply not part of this screen any more.
    */
   const nameField = data.fields.find((field) => /^(project|service|product)Name$/.test(field.key));
+  /**
+   * Contract type is an ordinary input field (unlike type and approach, which live on `Project`), so
+   * it saves like any other answer and reaches the analysis as a verified input. Optional: "Not
+   * specified" leaves it blank rather than claiming a contract nobody named.
+   */
+  const contractField = data.fields.find((field) => field.key === 'contractType');
 
   const requiredState: RequiredState = {
     name: Boolean(nameField && valueOf(nameField).trim()),
@@ -584,6 +590,23 @@ export function InputView({
                 ))}
               </select>
             </label>
+            {contractField && (
+              <label>
+                {contractField.label}
+                <select
+                  value={valueOf(contractField)}
+                  disabled={!canWrite}
+                  onChange={(event) => change(contractField, event.target.value)}
+                >
+                  <option value="">Not specified</option>
+                  {contractField.options.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
 
 

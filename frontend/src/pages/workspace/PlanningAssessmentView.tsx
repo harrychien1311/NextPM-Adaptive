@@ -37,12 +37,18 @@ import type { WorkspaceView } from '../WorkspacePage';
  * "not evaluated" only made the PM wonder whether it was a finding. It reappears on its own once
  * the input is updated and the project re-assessed.
  */
+/** The tabs a caller may open this screen on. Anything else lands on Overview. */
+const TAB_KEYS = ['overview', 'information', 'documents', 'risks', 'conflicts', 'fit'];
+
 export function PlanningAssessmentView({
   projectId,
   onNavigate,
+  initialTab,
 }: {
   projectId: string;
   onNavigate: (view: WorkspaceView) => void;
+  /** Open on this tab — the dashboard's "View rationale" asks for 'fit'. */
+  initialTab?: string | null;
 }) {
   const notify = useToast();
   const queryClient = useQueryClient();
@@ -57,7 +63,7 @@ export function PlanningAssessmentView({
     queryFn: () => rulesApi.approach(projectId),
   });
 
-  const [tab, setTab] = useState('overview');
+  const [tab, setTab] = useState(initialTab && TAB_KEYS.includes(initialTab) ? initialTab : 'overview');
   const [selected, setSelected] = useState<Approach | null>(null);
   const [modal, setModal] = useState(false);
   const [rationale, setRationale] = useState('');
