@@ -39,7 +39,7 @@ export function PmActionsView({ projectId, onNavigate }: { projectId: string; on
           <h1>Decisions only you can make.</h1>
           <span>
             Each one says what is missing and what to add. Open goes where the work happens; confirming the document
-            in Planning Documents resolves it for you.
+            in Planning Artifacts resolves it for you.
           </span>
         </div>
         <button className="secondary" onClick={() => onNavigate('dashboard')}>

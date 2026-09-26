@@ -262,7 +262,13 @@ export const planChangeApi = {
     api.post<PlanChange>(`/projects/${projectId}/plan-changes/${changeId}/analyze`),
   /** The PM gate: merge the delta into a new snapshot and move the plan. */
   apply: (projectId: string, changeId: string) =>
-    api.post<{ snapshotId: string; flagged: number; openActions: number }>(
+    api.post<{
+      snapshotId: string;
+      flagged: number;
+      openActions: number;
+      /** Null when the change moved no Missing Information / Missing Documents rule, or none was assessed. */
+      assessment: { runId: string; nowMissing: number; settled: number; fptScore: number } | null;
+    }>(
       `/projects/${projectId}/plan-changes/${changeId}/apply`,
     ),
   dismiss: (projectId: string, changeId: string) =>

@@ -1826,7 +1826,38 @@ export interface PlanChangeImpact {
     suggested: string | null;
   };
   affectedDocuments: AffectedDocument[];
+  /**
+   * Missing Information / Missing Documents rules whose result this change moves — nothing else.
+   * Merged into a new assessment snapshot on Apply, so those two tabs and the PM actions follow the
+   * change without re-running the whole assessment. Absent on changes analysed before this existed.
+   */
+  assessmentUpdates?: AssessmentUpdate[];
   provider: AiProvider;
+}
+
+/** One rule the change moved, in the assessment's own terms. */
+export interface AssessmentUpdate {
+  ruleId: string;
+  status: 'PASS' | 'FAIL' | 'NOT_APPLICABLE';
+  finding: string;
+  /** For FAIL: exactly what to add, for this project. */
+  action: string | null;
+  /** For FAIL: the catalog document it belongs in, or null for something recorded on Project Input. */
+  targetDocument: string | null;
+  /** For a conditional rule: why it does or does not apply now. */
+  applicability: string | null;
+  evidence: EvidenceItem[];
+}
+
+/** A Missing Information / Missing Documents rule as the change call sees it: what it asks and where it stands. */
+export interface AssessmentRuleForChange {
+  ruleId: string;
+  category: 'MISSING_INFORMATION' | 'MISSING_DOCUMENT';
+  question: string;
+  /** Null when the rule applies to every project — then it can never be NOT_APPLICABLE. */
+  appliesWhen: string | null;
+  current: 'PASS' | 'FAIL' | 'NOT_APPLICABLE' | 'UNKNOWN';
+  finding: string;
 }
 
 export interface PlanChangeContext {
@@ -1862,6 +1893,8 @@ export interface PlanChangeContext {
   /** Documents already generated for this project, by name — the only ones that can be affected. */
   generatedDocuments: string[];
   catalogDocuments: string[];
+  /** The project's Missing Information / Missing Documents rules and their current result; empty when never assessed. */
+  assessmentRules?: AssessmentRuleForChange[];
 }
 
 const PLAN_CHANGE_SYSTEM_PROMPT = `You are the NextPM planning agent. This project already has an analysis and a confirmed governance
@@ -1900,6 +1933,20 @@ are given, that the change makes wrong, say specifically WHY it is wrong: which 
 number or commitment no longer holds. "The plan changed" is not a reason. Copy the document name
 exactly. A document the change does not touch must not appear.
 
+"assessmentUpdates" — the project's Planning Assessment rules for missing information (facts the
+plan needs) and missing documents (documents the plan needs), each shown with its CURRENT result.
+Report ONLY the rules whose result this change moves:
+- a fact the assessment has as missing that the change now states → "PASS", quoting it;
+- a document it has as missing that the change now supplies → "PASS";
+- a fact it has as provided that the change contradicts or makes out of date, or a document the new
+  situation now needs that the project does not have → "FAIL", with "action" (exactly what to add,
+  for this project) and "targetDocument" (a catalog document name copied EXACTLY, or null when it is
+  something the PM records on Project Input rather than a document);
+- a conditional rule whose condition the change makes true or false → its new result, with
+  "applicability" saying why. Never "NOT_APPLICABLE" for a rule marked [every project].
+Leave out every rule the change does not move, and never report a rule merely because it is still
+missing — an empty array is the normal answer for a small change. Use the rule ids as given.
+
 Language: write everything in English whatever language the documents are in. Proper nouns keep the
 spelling their document uses. Evidence carries "english", the verbatim "original" where the source
 is not English, and "source" naming the file exactly.
@@ -1912,7 +1959,18 @@ Return strict JSON and nothing else:
   "newFindings": [{ "title": string, "detail": string,
                     "evidence": [{ "english": string, "original": string, "source": string }] }],
   "approach": { "stillFits": boolean, "score": number, "note": string, "suggested": string|null },
-  "affectedDocuments": [{ "documentName": string, "reason": string, "severity": "HIGH"|"MEDIUM"|"LOW" }] }`;
+  "affectedDocuments": [{ "documentName": string, "reason": string, "severity": "HIGH"|"MEDIUM"|"LOW" }],
+  "assessmentUpdates": [{ "ruleId": string, "status": "PASS"|"FAIL"|"NOT_APPLICABLE", "finding": string,
+                          "action": string|null, "targetDocument": string|null, "applicability": string|null,
+                          "evidence": [{ "english": string, "original": string, "source": string }] }] }`;
+
+/** How a rule's current result reads in the change prompt. */
+const CHANGE_RULE_STATE: Record<AssessmentRuleForChange['current'], string> = {
+  FAIL: 'MISSING',
+  PASS: 'PROVIDED',
+  NOT_APPLICABLE: 'NOT APPLICABLE',
+  UNKNOWN: 'NOT JUDGED',
+};
 
 function buildPlanChangePrompt(context: PlanChangeContext): string {
   const overview = context.previous.overview
@@ -1947,6 +2005,19 @@ function buildPlanChangePrompt(context: PlanChangeContext): string {
     'Catalog documents this project can produce (use these names verbatim in newGaps):',
     context.catalogDocuments.map((name) => `- ${name}`).join('\n') || '- none',
     '',
+    ...(context.assessmentRules?.length
+      ? [
+          'Planning Assessment — missing information and missing documents, with the CURRENT result of each',
+          '(report in "assessmentUpdates" only the ones this change moves):',
+          context.assessmentRules
+            .map(
+              (rule) =>
+                `- ${rule.ruleId} · currently ${CHANGE_RULE_STATE[rule.current]}${rule.appliesWhen ? ` · only when: ${rule.appliesWhen}` : rule.category === 'MISSING_DOCUMENT' ? ' · [every project]' : ''} · ${rule.question}${rule.finding ? ` — ${rule.finding}` : ''}`,
+            )
+            .join('\n'),
+          '',
+        ]
+      : ['Planning Assessment: not run for this project yet — return "assessmentUpdates": [].', '']),
     '=== WHAT HAS CHANGED ===',
     context.note ? `The PM writes:\n${context.note}` : 'The PM has not written a note; the change is in the documents below.',
     '',
@@ -2043,8 +2114,48 @@ export async function analyzePlanChange(context: PlanChangeContext): Promise<Pla
         severity: entry.severity === 'HIGH' || entry.severity === 'LOW' ? entry.severity : ('MEDIUM' as const),
       }))
       .filter((entry) => entry.documentName && entry.reason && generated.has(entry.documentName.toLowerCase())),
+    assessmentUpdates: validAssessmentUpdates(result.assessmentUpdates, context),
     provider: 'anthropic',
   };
+}
+
+/**
+ * The model's assessment updates, kept only where they are genuine moves on rules it was shown.
+ *
+ * Dropped: a rule id it was not given, a status that is not one of the three, a "move" to the
+ * result the rule already has, NOT_APPLICABLE on a rule every project needs, and a FAIL with no
+ * finding. A target document outside the catalog is cleared rather than trusted — the server picks
+ * the catalog document itself for a missing-document rule on Apply.
+ */
+function validAssessmentUpdates(raw: unknown, context: PlanChangeContext): AssessmentUpdate[] {
+  if (!Array.isArray(raw) || !context.assessmentRules?.length) return [];
+  const rules = new Map(context.assessmentRules.map((rule) => [rule.ruleId, rule]));
+  const catalog = new Map(context.catalogDocuments.map((name) => [name.trim().toLowerCase(), name]));
+  const seen = new Set<string>();
+  const updates: AssessmentUpdate[] = [];
+  for (const entry of raw as Record<string, unknown>[]) {
+    const ruleId = String(entry?.ruleId ?? '').trim();
+    const rule = rules.get(ruleId);
+    const status = String(entry?.status ?? '');
+    if (!rule || seen.has(ruleId)) continue;
+    if (status !== 'PASS' && status !== 'FAIL' && status !== 'NOT_APPLICABLE') continue;
+    if (status === rule.current) continue;
+    if (status === 'NOT_APPLICABLE' && !rule.appliesWhen) continue;
+    const finding = String(entry?.finding ?? '').trim();
+    if (!finding) continue;
+    const target = entry?.targetDocument ? catalog.get(String(entry.targetDocument).trim().toLowerCase()) ?? null : null;
+    seen.add(ruleId);
+    updates.push({
+      ruleId,
+      status,
+      finding,
+      action: status === 'FAIL' && entry?.action ? String(entry.action).trim() : null,
+      targetDocument: status === 'FAIL' ? target : null,
+      applicability: entry?.applicability ? String(entry.applicability).trim() : null,
+      evidence: normalizeEvidence(entry?.evidence),
+    });
+  }
+  return updates;
 }
 
 function buildGovernanceRecommendationPrompt(context: GovernanceRecommendationContext): string {

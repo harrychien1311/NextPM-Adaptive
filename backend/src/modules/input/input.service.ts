@@ -682,7 +682,7 @@ export async function closeAction(params: { projectId: string; actionId: string;
       status: 'RESOLVED',
       resolvedValue:
         action.resolvedValue ??
-        (document ? `${document.name} confirmed by the PM in Planning Documents` : TICK_CLOSE_REASON),
+        (document ? `${document.name} confirmed by the PM in Planning Artifacts` : TICK_CLOSE_REASON),
       resolvedAt: action.resolvedAt ?? new Date(),
     },
   });

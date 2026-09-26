@@ -34,7 +34,13 @@ import {
   type RuleSeverity,
   type RuleStatus,
 } from '../../data/assessment-rules';
-import { judgeAssessmentRules, type EvidenceItem, type RuleJudgementRequest } from '../ai/provider';
+import {
+  judgeAssessmentRules,
+  type AssessmentRuleForChange,
+  type AssessmentUpdate,
+  type EvidenceItem,
+  type RuleJudgementRequest,
+} from '../ai/provider';
 import { logEvent } from '../audit/audit.service';
 import { checklistScoreForProject } from '../checklist/checklist.service';
 
@@ -54,6 +60,13 @@ export interface RuleResult {
   targetDocument: string | null;
   /** For a conditional rule: why it does or does not apply to this project. */
   applicability: string | null;
+  /**
+   * When this result was last judged, if later than the run it sits in. Set on the rules a plan
+   * change moved: a merged snapshot carries forward everything else from the run before it, and a
+   * PM action resolved *before* the change must not quietly resolve a rule the change just made
+   * missing again. Absent: judged when the run was made.
+   */
+  judgedAt?: string;
 }
 
 /** How a rule came to be met after the run, if it was: a confirmed document, a closed action, or a PM tick. */
@@ -362,6 +375,16 @@ export async function runAssessment(projectId: string, actorId: string) {
   return (await latestAssessment(projectId))!;
 }
 
+/** When a result was judged: its own time when a plan change moved it, else the run's. */
+const judgedAtOf = (result: RuleResult, runAt: Date) => (result.judgedAt ? new Date(result.judgedAt) : runAt);
+
+function earliestJudged(runAt: Date, results: RuleResult[]) {
+  return results.reduce((earliest, result) => {
+    const at = judgedAtOf(result, runAt);
+    return at < earliest ? at : earliest;
+  }, runAt);
+}
+
 /**
  * What the PM has done since the run, per failed rule: a confirmed document in Planning Documents,
  * or a closed PM action. Read live, so the screen and the score move without a model call.
@@ -373,14 +396,17 @@ async function resolutionsFor(projectId: string, runAt: Date, results: RuleResul
       select: { name: true, approvedAt: true },
     }),
     // Resolved by the PM since the run, whether or not they have also closed it: pressing Resolve is
-    // the PM saying the item is handled, and Close only takes it off their list.
+    // the PM saying the item is handled, and Close only takes it off their list. The earliest judging
+    // time in the run bounds the query; each rule is then checked against its own time below.
     prisma.actionItem.findMany({
-      where: { projectId, ruleId: { not: null }, resolvedAt: { gte: runAt } },
+      where: { projectId, ruleId: { not: null }, resolvedAt: { gte: earliestJudged(runAt, results) } },
       select: { ruleId: true, resolvedValue: true, resolvedAt: true },
+      orderBy: { resolvedAt: 'desc' },
     }),
   ]);
   const approved = new Map(documents.map((doc) => [doc.name, doc.approvedAt]));
-  const closed = new Map(actions.map((action) => [action.ruleId!, action]));
+  const closed = new Map<string, (typeof actions)[number]>();
+  for (const action of actions) if (!closed.has(action.ruleId!)) closed.set(action.ruleId!, action);
 
   const resolutions = new Map<string, Resolution>();
   for (const result of results) {
@@ -388,13 +414,14 @@ async function resolutionsFor(projectId: string, runAt: Date, results: RuleResul
     if (result.targetDocument && approved.has(result.targetDocument)) {
       resolutions.set(result.ruleId, {
         by: 'DOCUMENT',
-        detail: `${result.targetDocument} confirmed by the PM in Planning Documents`,
+        detail: `${result.targetDocument} confirmed by the PM in Planning Artifacts`,
         at: approved.get(result.targetDocument) ?? null,
       });
       continue;
     }
     const action = closed.get(result.ruleId);
-    if (action) {
+    // Only a resolution made after this rule was last judged counts for it.
+    if (action && action.resolvedAt && action.resolvedAt >= judgedAtOf(result, runAt)) {
       resolutions.set(result.ruleId, {
         by: 'ACTION',
         detail: action.resolvedValue ?? 'Resolved by the PM',
@@ -728,4 +755,161 @@ export async function missingInformationForDocument(projectId: string, documentN
 /** Whether this project has ever been assessed — the gap-based action sync defers to it once it has. */
 export async function hasAssessment(projectId: string): Promise<boolean> {
   return (await prisma.assessmentRun.count({ where: { projectId } })) > 0;
+}
+
+/** The question a rule asks, worded the same way for the assessment and for the change call. */
+function questionFor(rule: AssessmentRule): string {
+  return rule.evaluate.kind === 'JUDGEMENT'
+    ? rule.evaluate.question
+    : `Does the project input provide the ${rule.name}, as its own document or as an equivalent section?`;
+}
+
+/**
+ * The Missing Information and Missing Documents rules with their current result, for the plan
+ * change call — so it can say which of them the change moves. Current means what the PM sees: the
+ * model's answer with confirmed documents, resolved actions and ticks laid on top. Empty when the
+ * project has never been assessed; the change call then leaves the assessment alone.
+ */
+export async function assessmentRulesForChange(projectId: string): Promise<AssessmentRuleForChange[]> {
+  const latest = await loadLatest(projectId);
+  if (!latest) return [];
+  const effective = new Map(latest.effective.map((result) => [result.ruleId, result]));
+  return ASSESSMENT_RULES.filter((rule) => ACTIONABLE_CATEGORIES.includes(rule.assessmentCategory)).map((rule) => {
+    const result = effective.get(rule.ruleId);
+    const status = result?.status ?? 'UNKNOWN';
+    return {
+      ruleId: rule.ruleId,
+      category: rule.assessmentCategory as AssessmentRuleForChange['category'],
+      question: questionFor(rule),
+      appliesWhen: rule.appliesWhen,
+      current: status === 'OVERRIDDEN' ? 'PASS' : status,
+      finding: (result?.finding ?? '').slice(0, 200),
+    };
+  });
+}
+
+/**
+ * Applies what a plan change said about Missing Information and Missing Documents.
+ *
+ * **A new snapshot, merged — never an edit, never a re-run.** The latest run's results are carried
+ * forward and only the rules the change moved are replaced, each stamped with `judgedAt`, so the two
+ * tabs, the FPT standard and Planning readiness follow the change with no further model call.
+ * Everything else — risks, conflicts, every rule the change did not touch — keeps its last assessed
+ * result; Re-assess still re-judges the lot.
+ *
+ * **PM actions are updated per rule, not rebuilt.** A rebuild would delete actions the PM had
+ * resolved but not yet closed on rules this change never touched. So: a rule the change makes
+ * missing gets its action (created, or re-opened with its resolution cleared — the change has just
+ * undone it); a rule the change settles has its open action closed, recording that the change
+ * settled it. Nothing else moves.
+ */
+export async function applyAssessmentUpdates(params: {
+  projectId: string;
+  updates: AssessmentUpdate[];
+  actorId: string;
+  changeSummary: string;
+}) {
+  const latest = await loadLatest(params.projectId);
+  if (!latest || !params.updates.length) return null;
+  const context = await loadContext(params.projectId);
+  const catalogNames = context.catalog.map((entry) => entry.name);
+  const now = new Date();
+  const byRule = new Map(params.updates.map((update) => [update.ruleId, update]));
+  const baseTime = latest.run.createdAt.toISOString();
+
+  const results: RuleResult[] = latest.stored.map((result) => {
+    const update = byRule.get(result.ruleId);
+    const rule = RULE_BY_ID.get(result.ruleId);
+    // Carried forward with the time it was really judged, so resolutions made since still count.
+    if (!update || !rule) return { ...result, judgedAt: result.judgedAt ?? baseTime };
+    const failed = update.status === 'FAIL';
+    return {
+      ruleId: result.ruleId,
+      status: update.status,
+      finding: update.finding,
+      evidence: update.evidence,
+      action: failed ? update.action ?? rule.result.recommendedAction : null,
+      targetDocument: failed
+        ? rule.assessmentCategory === 'MISSING_DOCUMENT'
+          ? catalogDocumentFor(rule, catalogNames) ?? update.targetDocument
+          : update.targetDocument
+        : null,
+      applicability: update.applicability ?? result.applicability,
+      judgedAt: now.toISOString(),
+    };
+  });
+
+  for (const result of results) {
+    const rule = RULE_BY_ID.get(result.ruleId);
+    if (byRule.has(result.ruleId) && rule && result.status === 'FAIL' && rule.assessmentCategory === 'MISSING_DOCUMENT' && !result.targetDocument) {
+      result.targetDocument = await provisionMissingDocument(params.projectId, context.project.type, rule);
+      const fallback = MISSING_DOCUMENT_FALLBACK[result.ruleId];
+      if (fallback) context.catalog.push({ name: fallback.name, domain: fallback.domain });
+    }
+  }
+
+  const fpt = scoreCategory(results, 'MISSING_DOCUMENT');
+  const run = await prisma.assessmentRun.create({
+    data: {
+      projectId: params.projectId,
+      results: results as unknown as object[],
+      fptScore: fpt.score,
+      unknowns: results.filter((result) => result.status === 'UNKNOWN').length,
+      blockers: results.filter((result) => result.status === 'FAIL' && RULE_BY_ID.get(result.ruleId)?.mandatory).length,
+      aiProvider: latest.run.aiProvider,
+    },
+  });
+
+  const domainOf = new Map(context.catalog.map((entry) => [entry.name, entry.domain]));
+  let nowMissing = 0;
+  let settled = 0;
+  for (const result of results.filter((entry) => byRule.has(entry.ruleId))) {
+    const rule = RULE_BY_ID.get(result.ruleId)!;
+    const open = await prisma.actionItem.findMany({
+      where: { projectId: params.projectId, ruleId: result.ruleId, status: 'OPEN', blocksDocument: null },
+    });
+    if (result.status === 'FAIL') {
+      nowMissing += 1;
+      const data = {
+        priority: ACTION_PRIORITY[rule.result.severity],
+        domain: (result.targetDocument && domainOf.get(result.targetDocument)) || ManagementDomain.GOVERNANCE,
+        title: rule.result.message,
+        description: result.action ?? rule.result.recommendedAction,
+        targetView: result.targetDocument ? 'studio' : 'input',
+        targetDocument: result.targetDocument,
+        suggestions: result.targetDocument ? [result.targetDocument] : [],
+        resolvedAt: null,
+        resolvedValue: null,
+      };
+      if (open.length) {
+        await prisma.actionItem.update({ where: { id: open[0].id }, data });
+      } else {
+        await prisma.actionItem.create({ data: { projectId: params.projectId, ruleId: result.ruleId, ...data } });
+      }
+    } else {
+      settled += 1;
+      if (open.length) {
+        await prisma.actionItem.updateMany({
+          where: { id: { in: open.map((action) => action.id) } },
+          data: {
+            status: 'RESOLVED',
+            resolvedAt: now,
+            resolvedValue: `Settled by a plan change: ${params.changeSummary || result.finding}`.slice(0, 500),
+          },
+        });
+      }
+    }
+  }
+
+  await logEvent({
+    projectId: params.projectId,
+    actorId: params.actorId,
+    actorType: 'AGENT',
+    type: 'ASSESSMENT_UPDATED_BY_CHANGE',
+    title: 'Planning Assessment updated from a plan change',
+    detail: `${nowMissing} now missing · ${settled} now provided or not applicable · FPT standard ${fpt.score}%`,
+    payload: { runId: run.id, basedOn: latest.run.id, rules: params.updates.map((update) => update.ruleId) },
+  });
+
+  return { runId: run.id, nowMissing, settled, fptScore: fpt.score };
 }

@@ -46,13 +46,13 @@ export function RegisterPage() {
         <div className="brand">
           <div className="brand-mark">N</div>
           <div>
-            <strong>NEXTFIT AI</strong>
-            <span>Adaptive Planning Agent</span>
+            <strong>NEXTPLAN AI</strong>
+            <span>Project Planning Studio</span>
           </div>
         </div>
         <h1>Create your workspace account</h1>
         <p>
-          Sign up to plan, verify and approve projects in NEXTFIT AI ADAPTIVE. New accounts are created as{' '}
+          Sign up to plan, verify and approve projects in NEXTPLAN AI. New accounts are created as{' '}
           <strong>project owners</strong> — you can create your own projects and invite teammates onto them. Program
           owner and administrator accounts are issued by an administrator.
         </p>

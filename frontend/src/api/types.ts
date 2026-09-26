@@ -164,6 +164,9 @@ export interface Workspace {
   documentsGenerated: number;
   documentsApproved: number;
   documentsInReview: number;
+  /** Documents the planning needs — what Planning Artifacts lists — and how many are approved. */
+  artifactsNeeded: number;
+  artifactsApproved: number;
 }
 
 export interface ProjectTeamMember {
@@ -755,6 +758,18 @@ export interface PlanChangeImpact {
   newFindings: AnalysisFinding[];
   approach: { stillFits: boolean; score: number; note: string; suggested: string | null };
   affectedDocuments: AffectedDocument[];
+  /**
+   * Missing Information / Missing Documents rules this change moves — applied to the Planning
+   * Assessment on Apply. Absent on changes analysed before this existed.
+   */
+  assessmentUpdates?: {
+    ruleId: string;
+    status: 'PASS' | 'FAIL' | 'NOT_APPLICABLE';
+    finding: string;
+    action: string | null;
+    targetDocument: string | null;
+    applicability: string | null;
+  }[];
 }
 
 /** One document in a change, with the version it replaces where it replaces one. */

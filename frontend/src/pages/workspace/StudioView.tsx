@@ -275,7 +275,7 @@ export function StudioView({
     <section className="view active">
       <div className="page-head compact">
         <div>
-          <p>PLANNING FLOW 3 · PLANNING DOCUMENTS</p>
+          <p>PLANNING FLOW 3 · PLANNING ARTIFACTS</p>
           <h1>Pick a document and let the AI write it.</h1>
           <span>
             The AI chooses the structure from the project type and the confirmed governance model. It never invents a

@@ -18,7 +18,7 @@
 }
 
 /*
- * The wordmark under NEXTFIT AI reads "Adaptive Planning Agent". The prototype's `.brand span`
+ * The wordmark under NEXTPLAN AI reads "Project Planning Studio". The prototype's `.brand span`
  * was tracked at .16em for the single word "ADAPTIVE"; three words at that spacing measure about
  * 190px, and the workspace sidebar leaves the text block only ~160px beside the 36px mark — so it
  * wraps. Tightening the tracking and pulling the line-height in keeps the wrapped pair compact
@@ -4133,6 +4133,19 @@ article.approach-option.is-locked:hover {
 .history-mini .doc-status {
   flex-shrink: 0;
   margin-top: 2px;
+}
+
+/*
+  The workspace top bar's five-step rail. Its labels grew from one word ("Input", "Approve") to
+  three ("Conduct Planning Review", "Complete Project Planning"); at the prototype's 50px connectors
+  neighbouring labels ran into each other. Wider connectors, and each label centred on its circle.
+*/
+.workflow-rail b {
+  width: 84px;
+}
+.workflow-rail span em {
+  left: 50%;
+  transform: translateX(-50%);
 }
 
 /* ==========================================================================

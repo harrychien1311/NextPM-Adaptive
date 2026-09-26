@@ -43,6 +43,8 @@ export function PlanChangeView({
       queryClient.invalidateQueries({ queryKey: ['studio', projectId] }),
       queryClient.invalidateQueries({ queryKey: ['dashboard', projectId] }),
       queryClient.invalidateQueries({ queryKey: ['workspace', projectId] }),
+      // Applying can move Missing Information / Missing Documents and the PM actions they drive.
+      queryClient.invalidateQueries({ queryKey: ['assessment', projectId] }),
     ]);
   };
 
@@ -52,9 +54,11 @@ export function PlanChangeView({
       await refresh();
       notify({
         title: 'Plan updated',
-        // The PM actions come from the Planning Assessment, which a change does not re-run on its own
-        // (it costs model calls) — so the PM is told how to refresh them rather than left to wonder.
-        detail: `${result.flagged} document(s) flagged as out of date. Re-assess on Planning Assessment to refresh the missing items and PM actions.`,
+        // Missing Information / Missing Documents follow the change in the same step; risks and
+        // conflicts are not re-judged (that is Re-assess, which costs model calls), so say so.
+        detail: result.assessment
+          ? `${result.flagged} document(s) flagged as out of date. Planning Assessment updated: ${result.assessment.nowMissing} now missing, ${result.assessment.settled} settled — PM actions follow. Risks and conflicts refresh on Re-assess.`
+          : `${result.flagged} document(s) flagged as out of date. The change moved nothing in Missing Information or Missing Documents.`,
       });
     },
     onError: (error) =>
@@ -83,7 +87,9 @@ export function PlanChangeView({
     !impact.newGaps.length &&
     !impact.closedGaps.length &&
     !impact.newFindings.length &&
-    !impact.affectedDocuments.length;
+    !impact.affectedDocuments.length &&
+    !impact.assessmentUpdates?.length;
+  const assessmentUpdates = impact.assessmentUpdates ?? [];
 
   return (
     <section className="view active">
@@ -276,13 +282,60 @@ export function PlanChangeView({
         )}
       </article>
 
+      {/*
+        What the change does to the Planning Assessment's Missing Information and Missing Documents —
+        only the items it moves. Applied on Apply, with the PM actions they drive; every other item
+        keeps its last assessed result.
+      */}
+      <article className="panel widget">
+        <div className="panel-head">
+          <div>
+            <h2>Planning Assessment</h2>
+            <p>Missing information and missing documents this change would move</p>
+          </div>
+          <span className="count-pill">{assessmentUpdates.length}</span>
+        </div>
+        {impact.assessmentUpdates === undefined ? (
+          <div className="program-empty">
+            This change was analysed before the assessment was part of it — analyse it again to see its effect here.
+          </div>
+        ) : assessmentUpdates.length === 0 ? (
+          <div className="program-empty">No missing information or missing document is affected by this change.</div>
+        ) : (
+          assessmentUpdates.map((update) => {
+            const kind = update.ruleId.startsWith('MD-') ? 'DOCUMENT' : 'INFORMATION';
+            const label =
+              update.status === 'FAIL' ? 'NOW MISSING' : update.status === 'PASS' ? 'NOW PROVIDED' : 'NO LONGER APPLIES';
+            return (
+              <div className={`decision-item ${update.status === 'FAIL' ? 'critical' : 'info'}`} key={update.ruleId}>
+                <span>{update.status === 'FAIL' ? '+' : '✓'}</span>
+                <div>
+                  <small>
+                    {kind === 'DOCUMENT' ? 'MISSING DOCUMENT' : 'MISSING INFORMATION'} · {label}
+                  </small>
+                  <strong>{update.finding}</strong>
+                  {update.status === 'FAIL' && update.action && (
+                    <p>
+                      {update.action}
+                      {update.targetDocument ? ` — in ${update.targetDocument}` : ' — on Project Input'}
+                    </p>
+                  )}
+                  {update.status === 'NOT_APPLICABLE' && update.applicability && <p>{update.applicability}</p>}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </article>
+
       <div className="sticky-action">
         <div>
           <span>⇄</span>
           <p>
-            Nothing has changed yet. <strong>Apply</strong> writes a new analysis snapshot, updates the
-            PM action center and flags the documents above — each one then carries a banner in
-            Planning Documents saying what is wrong with it, and you decide whether to regenerate it.
+            Nothing has changed yet. <strong>Apply</strong> writes a new analysis snapshot, updates Missing
+            Information and Missing Documents with the items above and the PM actions they drive, and flags
+            the affected documents — each then carries a banner in Planning Artifacts, and you decide whether to
+            regenerate it.
           </p>
         </div>
         {onEdit ? (

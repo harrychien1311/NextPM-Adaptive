@@ -244,7 +244,7 @@ function addRegisterSheet(workbook: ExcelJS.Workbook, doc: XlsxDocument, table: 
   } else {
     // An empty grid under a correct header is still confusing — say why it is empty.
     const row = sheet.addRow([
-      'No rows yet. Press “Generate document” in Planning Documents — a version produced before ' +
+      'No rows yet. Press “Generate document” in Planning Artifacts — a version produced before ' +
         'this document became a table holds prose instead, and needs generating again.',
     ]);
     sheet.mergeCells(row.number, 1, row.number, table.columns.length);
@@ -292,7 +292,7 @@ function sheetName(name: string): string {
 
 export async function buildDocumentXlsx(doc: XlsxDocument): Promise<{ fileName: string; buffer: Buffer }> {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'NEXTFIT AI ADAPTIVE';
+  workbook.creator = 'NEXTPLAN AI';
   workbook.created = new Date();
 
   /**

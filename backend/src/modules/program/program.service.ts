@@ -13,7 +13,7 @@ import { slugify } from '../../lib/slug';
 import { INPUT_SCHEMAS } from '../../data/input-schemas';
 import { computeInputReadiness } from '../../lib/readiness';
 import { checklistScoreForProject } from '../checklist/checklist.service';
-import { fptStandardScore } from '../assessment/assessment.service';
+import { fptStandardScore, missingDocumentNames } from '../assessment/assessment.service';
 import { logEvent } from '../audit/audit.service';
 
 const COLOR_ROTATION = ['blue', 'violet', 'green', 'orange'];
@@ -117,12 +117,23 @@ export async function deleteProject(projectId: string, user: { id: string; role:
  * whose basis is unstated is one nobody can act on.
  */
 async function projectReadiness(projectId: string) {
-  const [values, documents, checklist, fptScore] = await Promise.all([
+  const [values, documents, checklist, fptScore, neededNames] = await Promise.all([
     prisma.projectInputValue.findMany({ where: { projectId }, include: { definition: true } }),
     prisma.planningDocument.findMany({ where: { projectId } }),
     checklistScoreForProject(projectId),
     fptStandardScore(projectId),
+    missingDocumentNames(projectId),
   ]);
+
+  /**
+   * The documents this project's planning needs — what Planning Artifacts lists: the ones the
+   * Planning Assessment found missing (a confirmed one stays in that list). Before any assessment
+   * nothing says which are needed, so it falls back to every document generated so far. The top
+   * bar's *Approve* step is done only when every one of these is approved.
+   */
+  const needed = neededNames
+    ? documents.filter((doc) => neededNames.includes(doc.name))
+    : documents.filter((doc) => doc.status !== DocumentStatus.NOT_GENERATED);
 
   const input = computeInputReadiness(
     values.map((value) => ({ value: value.value, verified: value.verified, required: value.definition.required })),
@@ -170,6 +181,9 @@ async function projectReadiness(projectId: string) {
     documentsGenerated: generated,
     documentsApproved: approved,
     documentsInReview: documents.filter((doc) => doc.status === DocumentStatus.PM_REVIEW).length,
+    /** How many documents the planning needs (see `needed`), and how many of those are approved. */
+    artifactsNeeded: needed.length,
+    artifactsApproved: needed.filter((doc) => doc.status === DocumentStatus.APPROVED).length,
   };
 }
 

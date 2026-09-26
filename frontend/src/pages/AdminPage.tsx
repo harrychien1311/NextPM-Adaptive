@@ -105,8 +105,8 @@ export function AdminPage() {
           <div className="brand portfolio-brand">
             <div className="brand-mark">N</div>
             <div>
-              <strong>NEXTFIT AI</strong>
-              <span>Adaptive Planning Agent</span>
+              <strong>NEXTPLAN AI</strong>
+              <span>Project Planning Studio</span>
             </div>
           </div>
           <div className="portfolio-level">
@@ -423,7 +423,7 @@ function ResetPasswordModal({
         <div className="create-note">
           <span>✉</span>
           <p>
-            The account signs in with this password immediately. NEXTFIT AI does not email it — pass it to {account?.email}{' '}
+            The account signs in with this password immediately. NEXTPLAN AI does not email it — pass it to {account?.email}{' '}
             through your normal channel and ask them to change it.
           </p>
         </div>

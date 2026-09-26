@@ -134,7 +134,7 @@ export function PlanningAssessmentView({
       setRationale('');
       notify({
         title: `${titleCase(chosen.approach)} confirmed`,
-        detail: 'Opening Planning Documents. These facts are now the generation contract.',
+        detail: 'Opening Planning Artifacts. These facts are now the generation contract.',
       });
       setTimeout(() => onNavigate('studio'), 350);
     },
@@ -287,7 +287,7 @@ export function PlanningAssessmentView({
                 : `Confirming freezes this assessment and ${titleCase(chosen?.approach ?? 'the approach')} as the generation contract.`}
             </strong>
             <br />
-            Planning Documents then opens with the documents these checks found missing.
+            Planning Artifacts then opens with the documents these checks found missing.
           </p>
         </div>
         <button className="secondary" onClick={() => onNavigate('input')}>
@@ -299,7 +299,7 @@ export function PlanningAssessmentView({
           disabled={canWrite && !chosen}
           onClick={guard(() => setModal(true))}
         >
-          Confirm and Open Planning Documents
+          Confirm and Open Planning Artifacts
         </button>
       </div>
 

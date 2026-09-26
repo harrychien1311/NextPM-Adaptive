@@ -118,8 +118,8 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
           <div className="brand">
             <div className="brand-mark">N</div>
             <div>
-              <strong>NEXTFIT AI</strong>
-              <span>Adaptive Planning Agent</span>
+              <strong>NEXTPLAN AI</strong>
+              <span>Project Planning Studio</span>
             </div>
           </div>
           <button className="back-projects" onClick={() => navigate('/')}>
@@ -170,7 +170,7 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
               </button>
               <button className={`nav-item${view === 'studio' ? ' active' : ''}`} onClick={() => goToView('studio')}>
                 <span className="step-node">3</span>
-                <span>Planning Documents</span>
+                <span>Planning Artifacts</span>
                 <b>
                   {project.documentsGenerated}/{project.documentsTotal || 0}
                 </b>
@@ -225,22 +225,30 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
             </div>
             <div className="workflow-rail" aria-label="Project planning workflow">
               <span className={project.inputReadiness > 0 ? 'done' : ''}>
-                1 <em>Input</em>
+                1 <em>Setup Project</em>
               </span>
               <b />
-              <span className={project.verifiedInputs > 0 ? 'done' : ''}>
-                2 <em>Verify</em>
+              {/* Done once the planning review has been run — the analysis behind Planning Assessment. */}
+              <span className={project.recommendation || project.approach ? 'done' : ''}>
+                2 <em>Conduct Planning Review</em>
               </span>
               <b />
               <span className={project.approach ? 'done' : ''}>
-                3 <em>PM confirm</em>
+                3 <em>PM Confirm</em>
               </span>
               <b />
               <span className={project.documentsGenerated > 0 ? 'done' : project.approach ? 'current' : ''}>
                 4 <em>Generate</em>
               </span>
               <b />
-              <span className={project.documentsApproved > 0 ? 'done' : ''}>
+              {/*
+                Green only when every document the planning needs (what Planning Artifacts lists)
+                is approved — one approved document out of twenty is not an approved plan.
+              */}
+              <span
+                className={project.artifactsNeeded > 0 && project.artifactsApproved === project.artifactsNeeded ? 'done' : ''}
+                title={`${project.artifactsApproved} of ${project.artifactsNeeded} planning artifacts approved`}
+              >
                 5 <em>Approve</em>
               </span>
             </div>

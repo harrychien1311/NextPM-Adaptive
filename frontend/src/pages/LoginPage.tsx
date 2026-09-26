@@ -38,8 +38,8 @@ export function LoginPage() {
         <div className="brand">
           <div className="brand-mark">N</div>
           <div>
-            <strong>NEXTFIT AI</strong>
-            <span>Adaptive Planning Agent</span>
+            <strong>NEXTPLAN AI</strong>
+            <span>Project Planning Studio</span>
           </div>
         </div>
         <h1>Sign in to your workspace</h1>
@@ -48,7 +48,7 @@ export function LoginPage() {
           internal vocabulary that means nothing to someone who has not used the app yet, which is
           everyone reading this screen.
         */}
-        <p>Let NEXTFIT help you plan your project</p>
+        <p>Let NEXTPLAN help you plan your project</p>
         {error && <div className="auth-error">{error}</div>}
         <label>
           Work email

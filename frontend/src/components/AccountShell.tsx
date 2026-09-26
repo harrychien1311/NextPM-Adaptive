@@ -54,8 +54,8 @@ export function AccountShell({
         <div className="brand">
           <div className="brand-mark">N</div>
           <div>
-            <strong>NEXTFIT AI</strong>
-            <span>Adaptive Planning Agent</span>
+            <strong>NEXTPLAN AI</strong>
+            <span>Project Planning Studio</span>
           </div>
         </div>
 

@@ -118,7 +118,7 @@ export function PmActionList({
               {!compact && action.description && <p>{action.description}</p>}
               {!compact && action.targetDocument && !action.resolved && (
                 <span className="action-doc">
-                  {stale ? 'Regenerate' : 'Update'} <strong>{action.targetDocument}</strong> in Planning Documents
+                  {stale ? 'Regenerate' : 'Update'} <strong>{action.targetDocument}</strong> in Planning Artifacts
                 </span>
               )}
               {!compact && action.resolved && (
@@ -178,7 +178,7 @@ export function PmActionList({
             <div className="decision-buttons">
               <button
                 onClick={() => onNavigate(action.targetView, action.targetDocument)}
-                title={action.targetDocument ? `Open ${action.targetDocument} in Planning Documents` : 'Open Project Input'}
+                title={action.targetDocument ? `Open ${action.targetDocument} in Planning Artifacts` : 'Open Project Input'}
               >
                 Open
               </button>
@@ -223,7 +223,7 @@ export function PmActionList({
           <p>
             {closing?.targetDocumentStatus === 'APPROVED' && !closing.resolvedValue ? (
               <>
-                <strong>{closing.targetDocument}</strong> has been confirmed in Planning Documents, which is what this
+                <strong>{closing.targetDocument}</strong> has been confirmed in Planning Artifacts, which is what this
                 action asked for.
               </>
             ) : (

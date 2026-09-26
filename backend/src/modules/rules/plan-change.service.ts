@@ -14,6 +14,7 @@ import {
 } from '../ai/provider';
 import { logEvent } from '../audit/audit.service';
 import { syncPlanningActions } from '../input/input.service';
+import { applyAssessmentUpdates, assessmentRulesForChange } from '../assessment/assessment.service';
 
 /**
  * Change plan mode — recording a change to a plan that already exists.
@@ -461,13 +462,16 @@ export async function runPlanChangeAnalysis(projectId: string, changeId: string,
     .map((file) => documentText(file))
     .filter((entry): entry is { label: string; text: string } => entry !== null);
 
-  const [generated, definitions] = await Promise.all([
+  const [generated, definitions, assessmentRules] = await Promise.all([
     prisma.planningDocument.findMany({
       where: { projectId, status: { not: 'NOT_GENERATED' } },
       select: { name: true },
       orderBy: { name: 'asc' },
     }),
     prisma.documentDefinition.findMany({ where: { projectType: project.type }, select: { name: true } }),
+    // The Missing Information / Missing Documents rules and where each stands, so the same call can
+    // say which of them this change moves — applied on Apply without re-running the assessment.
+    assessmentRulesForChange(projectId),
   ]);
 
   const impact = await analyzePlanChange({
@@ -485,6 +489,7 @@ export async function runPlanChangeAnalysis(projectId: string, changeId: string,
     },
     generatedDocuments: generated.map((document) => document.name),
     catalogDocuments: [...new Set(definitions.map((definition) => definition.name))],
+    assessmentRules,
   });
 
   const updated = await prisma.planChange.update({
@@ -502,7 +507,7 @@ export async function runPlanChangeAnalysis(projectId: string, changeId: string,
     actorType: 'AGENT',
     type: 'PLAN_CHANGE_ANALYZED',
     title: impact.summary || 'Plan change analysed',
-    detail: `${changedDocuments.length} changed document(s) read against ${otherDocuments.length} already on file · ${impact.changedOverview.length} block(s) changed · ${impact.newGaps.length} new gap(s) · ${impact.closedGaps.length} closed · ${impact.affectedDocuments.length} document(s) affected`,
+    detail: `${changedDocuments.length} changed document(s) read against ${otherDocuments.length} already on file · ${impact.changedOverview.length} block(s) changed · ${impact.newGaps.length} new gap(s) · ${impact.closedGaps.length} closed · ${impact.affectedDocuments.length} document(s) affected · ${impact.assessmentUpdates?.length ?? 0} assessment rule(s) moved`,
     payload: { changeId, affected: impact.affectedDocuments.map((entry) => entry.documentName) },
   });
 
@@ -587,7 +592,21 @@ export async function applyPlanChange(projectId: string, changeId: string, actor
 
   // The merged gaps are the project's open questions now, so the action center follows them. A gap
   // the change closed disappears from the list; a new one arrives with its document already linked.
+  // (Once the project has an assessment this stands down, and the assessment update below owns them.)
   const openActions = await syncPlanningActions(projectId, merged.gaps);
+
+  /**
+   * Missing Information and Missing Documents follow the change too: the rules the change call said
+   * it moved are merged into a new assessment snapshot and their PM actions updated — no further
+   * model call. Risks and conflicts, and every rule the change did not touch, keep their last
+   * assessed result until the PM re-assesses.
+   */
+  const assessment = await applyAssessmentUpdates({
+    projectId,
+    updates: impact.assessmentUpdates ?? [],
+    actorId,
+    changeSummary: impact.summary,
+  });
 
   /**
    * Affected documents are **flagged only**. An approved document is something the PM signed off,
@@ -631,11 +650,13 @@ export async function applyPlanChange(projectId: string, changeId: string, actor
     actorType: 'PM',
     type: 'PLAN_CHANGED',
     title: impact.summary || 'Plan change applied',
-    detail: `${flagged} document(s) flagged as out of date · ${openActions} PM action(s) open · ${impact.approach.stillFits ? `${primary?.approach} still fits` : `${primary?.approach} may no longer fit${impact.approach.suggested ? ` — consider ${impact.approach.suggested}` : ''}`}`,
-    payload: { changeId, snapshotId: snapshot.id, flagged },
+    detail: `${flagged} document(s) flagged as out of date · ${
+      assessment ? `assessment: ${assessment.nowMissing} now missing, ${assessment.settled} settled` : `${openActions} PM action(s) open`
+    } · ${impact.approach.stillFits ? `${primary?.approach} still fits` : `${primary?.approach} may no longer fit${impact.approach.suggested ? ` — consider ${impact.approach.suggested}` : ''}`}`,
+    payload: { changeId, snapshotId: snapshot.id, flagged, assessmentRunId: assessment?.runId ?? null },
   });
 
-  return { change: applied, snapshotId: snapshot.id, flagged, openActions };
+  return { change: applied, snapshotId: snapshot.id, flagged, openActions, assessment };
 }
 
 /** Abandons a change. Kept rather than deleted — "we considered this and decided against it" is history. */

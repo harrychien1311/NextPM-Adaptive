@@ -63,7 +63,7 @@ const READINESS_BASIS: Record<string, { label: string; help: string }> = {
 const WIDGET_LABELS: [string, string, string][] = [
   ['readiness', 'Planning readiness', 'Default'],
   ['approach', 'Approach', 'Default'],
-  ['outputs', 'Planning documents', 'Default'],
+  ['outputs', 'Planning artifacts', 'Default'],
   ['tasks', 'Planning progress', 'Default'],
   ['decisions', 'PM Actions', 'Default'],
   ['standards', 'Standards (FPT → customer)', 'Default'],
@@ -131,7 +131,7 @@ export function DashboardView({ projectId, onNavigate }: { projectId: string; on
         title: entry.kind === 'GENERATED' ? 'Document deleted' : 'Upload deleted',
         detail:
           entry.kind === 'GENERATED'
-            ? `${entry.name} is back to not generated. Planning documents and PM Actions have been updated.`
+            ? `${entry.name} is back to not generated. Planning Artifacts and PM Actions have been updated.`
             : `${entry.name} and the text extracted from it are gone.${
                 result.restored.length ? ` ${result.restored.join(', ')}, which it had replaced, is current again.` : ''
               }`,
@@ -277,7 +277,7 @@ export function DashboardView({ projectId, onNavigate }: { projectId: string; on
         {show('outputs') && (
           <article className="metric widget">
             <div className="metric-label">
-              <span>PLANNING DOCUMENTS</span>
+              <span>PLANNING ARTIFACTS</span>
               <span className="delta">
                 {data.outputs.generated} of {data.outputs.total} generated
               </span>
@@ -300,7 +300,7 @@ export function DashboardView({ projectId, onNavigate }: { projectId: string; on
               </ul>
             </div>
             <button className="text-button" onClick={() => onNavigate('studio')}>
-              Open Planning Documents →
+              Open Planning Artifacts →
             </button>
           </article>
         )}
@@ -509,7 +509,7 @@ export function DashboardView({ projectId, onNavigate }: { projectId: string; on
             </div>
             {!libraryOpen ? null : data.library.length === 0 ? (
               <div className="program-empty">
-                Nothing yet. Upload reference files on Project Input, or generate a document in Planning Documents.
+                Nothing yet. Upload reference files on Project Input, or generate a document in Planning Artifacts.
               </div>
             ) : (
               <div className="doc-library">
@@ -632,10 +632,10 @@ export function DashboardView({ projectId, onNavigate }: { projectId: string; on
             <>
               <p>
                 The draft, its sections and its PM questions are deleted. The catalog entry stays, so you can generate
-                this document again from Planning Documents.
+                this document again from Planning Artifacts.
               </p>
               <p>
-                Planning documents drops it from the approved count, the deletion is written to the activity log, and any
+                Planning Artifacts drops it from the approved count, the deletion is written to the activity log, and any
                 PM action closed because this document was confirmed goes back to open.
               </p>
               {removing?.status === 'APPROVED' && (
