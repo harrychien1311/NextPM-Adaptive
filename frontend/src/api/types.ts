@@ -865,6 +865,8 @@ export interface CustomerSummary {
   aliases: string[];
   active: boolean;
   hasLogo: boolean;
+  /** Moves when the logo is replaced — what tells the screen to fetch it again. */
+  updatedAt?: string;
   checklists: CustomerChecklistSummary[];
   templates: CustomerTemplateSummary[];
   references: CustomerReferenceSummary[];

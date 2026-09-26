@@ -4557,6 +4557,26 @@ article.approach-option.is-locked:hover {
   max-width: 120px;
   object-fit: contain;
 }
+/* The logo beside the card's chip, and the space it holds while it loads so the card does not jump. */
+.lib-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 26px;
+}
+.lib-card-logo {
+  max-height: 26px;
+  max-width: 96px;
+  object-fit: contain;
+}
+.lib-logo-placeholder {
+  display: inline-block;
+  width: 48px;
+  height: 22px;
+  border-radius: 4px;
+  background: #f1f4f8;
+}
 .lib-tabs {
   margin-bottom: 12px;
 }

@@ -87,6 +87,13 @@ export const customersApi = {
   downloadTemplate: (templateId: string, fileName: string) =>
     api.download(`/customers/templates/${templateId}/file`, fileName),
 
+  /**
+   * The logo as a `blob:` URL for an `<img>`. Never a plain `/api/...` src: the API wants the Bearer
+   * token, which a browser-issued image request does not carry, so a plain src is always a broken
+   * image. The caller revokes the URL when done.
+   */
+  logoUrl: (customerId: string) => api.objectUrl(`/customers/logo/${customerId}/file`),
+
   /** Every catalog document name — the choices for a template's document type. */
   documentTypes: () => api.get<{ documentTypes: { name: string; projectTypes: string[] }[] }>('/customers/document-types'),
 

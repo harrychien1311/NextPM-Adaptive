@@ -289,13 +289,52 @@ const describe = (library: CustomerSummary) =>
       ? `Applied to projects whose customer matches ${library.aliases.join(', ')}.`
       : 'Applied only to projects whose customer is exactly this name.';
 
+/**
+ * A library's logo, fetched with the session's token and shown from a `blob:` URL.
+ *
+ * A plain `<img src="/api/…">` cannot work: the API authenticates with a Bearer token that a
+ * browser-issued image request never carries, so it was answered 401 and drawn as a broken image.
+ * Keyed on `updatedAt` so a replaced logo is fetched again, and the URL is revoked when the image
+ * goes away so a long session does not pile up blobs.
+ */
+function LibraryLogo({ library, className }: { library: CustomerSummary; className?: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let created: string | null = null;
+    setFailed(false);
+    customersApi
+      .logoUrl(library.id)
+      .then((objectUrl) => {
+        created = objectUrl;
+        if (cancelled) URL.revokeObjectURL(objectUrl);
+        else setUrl(objectUrl);
+      })
+      .catch(() => !cancelled && setFailed(true));
+    return () => {
+      cancelled = true;
+      if (created) URL.revokeObjectURL(created);
+      setUrl(null);
+    };
+  }, [library.id, library.updatedAt]);
+
+  if (failed) return <small className="customer-empty">Logo file could not be loaded — re-upload it.</small>;
+  if (!url) return <span className={`lib-logo-placeholder ${className ?? ''}`} aria-hidden />;
+  return <img className={className} src={url} alt={`${library.name} logo`} />;
+}
+
 function LibraryCard({ library, selected, onSelect }: { library: CustomerSummary; selected: boolean; onSelect: () => void }) {
   const checklistItems = library.checklists.filter((checklist) => checklist.active).reduce((n, c) => n + c.itemCount, 0);
   const templates = library.templates.filter((template) => template.active).length;
   const house = isHouseLibrary(library);
   return (
     <button className="panel lib-card" aria-pressed={selected} onClick={onSelect}>
-      <span className={`lib-chip ${house ? 'baseline' : 'account'}`}>{house ? 'Mandatory baseline' : 'Account library'}</span>
+      <span className="lib-card-top">
+        <span className={`lib-chip ${house ? 'baseline' : 'account'}`}>{house ? 'Mandatory baseline' : 'Account library'}</span>
+        {library.hasLogo && <LibraryLogo library={library} className="lib-card-logo" />}
+      </span>
       <b>{library.name}</b>
       <p>{describe(library)}</p>
       <span className="lib-count">
@@ -392,7 +431,7 @@ function LibraryPanel({
         <div className="lib-logo">
           <span className="lib-meta-label">Logo</span>
           {library.hasLogo ? (
-            <img src={`/api/customers/logo/${library.id}/file`} alt={`${library.name} logo`} />
+            <LibraryLogo library={library} />
           ) : (
             <small className="customer-empty">No logo uploaded.</small>
           )}
