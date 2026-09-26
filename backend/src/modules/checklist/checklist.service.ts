@@ -182,10 +182,19 @@ export async function checklistReadiness(projectId: string) {
   };
 }
 
-/** Just the number, for the dashboard and the program roll-up. Null when no checklist applies. */
+/**
+ * Just the number, for the dashboard and the program roll-up. Null when no checklist applies, or it
+ * has not been assessed yet.
+ *
+ * Read for the checklist the project matches *now*. It used to take any assessment row the project
+ * had, so after the Customer field changed, or the customer uploaded a new checklist version, the
+ * readiness figure kept scoring the project against the old checklist.
+ */
 export async function checklistScoreForProject(projectId: string): Promise<(ChecklistScore & { stale: boolean }) | null> {
-  const assessment = await prisma.projectChecklistAssessment.findFirst({
-    where: { projectId },
+  const resolved = await activeChecklistForProject(projectId).catch(() => null);
+  if (!resolved) return null;
+  const assessment = await prisma.projectChecklistAssessment.findUnique({
+    where: { projectId_checklistId: { projectId, checklistId: resolved.checklist.id } },
     include: { items: { select: { status: true } } },
   });
   if (!assessment) return null;

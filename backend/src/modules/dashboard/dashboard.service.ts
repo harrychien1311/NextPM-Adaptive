@@ -5,6 +5,7 @@ import { listEvents } from '../audit/audit.service';
 import { projectWorkspace } from '../program/program.service';
 import { gapDocumentNames } from '../documents/documents.service';
 import { latestAssessment } from '../assessment/assessment.service';
+import { activeChecklistForProject } from '../checklist/checklist.service';
 
 /**
  * The default set is what fits one screen. Everything else is opt-in through Customize and renders
@@ -270,6 +271,21 @@ export async function dashboard(projectId: string, userId: string) {
   const standards = assessment?.standards ?? null;
 
   /**
+   * Which customer checklist this project matched in the library, whether or not it has been
+   * assessed yet. `standards.customer` only exists once the checklist has been assessed, and the
+   * panel used to read its absence as "no checklist in the library for SK AX" — on exactly the
+   * projects whose checklist had been found but not yet run. This says which of the two it is.
+   */
+  const resolvedChecklist = await activeChecklistForProject(projectId).catch(() => null);
+  const customerChecklist = resolvedChecklist
+    ? {
+        customerName: resolvedChecklist.customer.name,
+        checklistName: resolvedChecklist.checklist.name,
+        items: resolvedChecklist.checklist.items.length,
+      }
+    : null;
+
+  /**
    * Counts for the PM Actions legend. Outstanding only: a resolved action is still on the list
    * until the PM closes it, but counting it as "required" would report work that is already done.
    */
@@ -297,6 +313,7 @@ export async function dashboard(projectId: string, userId: string) {
         : 'All required planning outputs are approved',
     },
     standards,
+    customerChecklist,
     /**
      * Enough of the assessment for the dashboard to report it without carrying all 147 rows onto a
      * screen that shows two numbers. The Planning Assessment screen fetches the rows itself.

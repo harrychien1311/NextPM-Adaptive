@@ -328,6 +328,11 @@ export interface DashboardResponse {
   };
   /** Null until the Planning Assessment has been run at least once. */
   standards: StandardsPanel | null;
+  /**
+   * The customer checklist this project matched in the library, assessed or not — null when the
+   * library has none for this customer. Tells "found, not assessed yet" apart from "none exists".
+   */
+  customerChecklist: { customerName: string; checklistName: string; items: number } | null;
   assessment: {
     at: string;
     blockers: number;

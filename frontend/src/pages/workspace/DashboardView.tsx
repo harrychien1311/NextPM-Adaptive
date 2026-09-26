@@ -447,6 +447,28 @@ export function DashboardView({ projectId, onNavigate }: { projectId: string; on
                       </div>
                     </div>
                   </div>
+                ) : data.customerChecklist ? (
+                  /*
+                    Found in the library but not assessed yet. This used to read "No checklist in the
+                    library for SK AX" — the one thing it certainly was not — because the row only
+                    looked at assessment results. View detail opens the checklist, where it can be
+                    assessed or ticked.
+                  */
+                  <div className="standard-row">
+                    <span className="standard-order">2</span>
+                    <div>
+                      <div className="standard-title">
+                        <strong>{data.customerChecklist.customerName} standards</strong>
+                        <button className="link-button" onClick={() => setStandardOpen('CUSTOMER')}>
+                          View detail
+                        </button>
+                      </div>
+                      <small>
+                        {data.customerChecklist.checklistName} · {data.customerChecklist.items} items · not assessed yet —
+                        open it and run the assessment to score the project against it.
+                      </small>
+                    </div>
+                  </div>
                 ) : (
                   /* No second row reading 0% — there is nothing to measure against, not a failure. */
                   <div className="standard-row muted">
