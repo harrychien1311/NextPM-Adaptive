@@ -35,6 +35,7 @@ import {
   type RuleStatus,
 } from '../../data/assessment-rules';
 import {
+  assessmentCacheWorthwhile,
   judgeAssessmentRules,
   type AssessmentRuleForChange,
   type AssessmentUpdate,
@@ -264,42 +265,53 @@ export async function runAssessment(projectId: string, actorId: string) {
   const context = await loadContext(projectId);
   const catalogNames = context.catalog.map((entry) => entry.name);
 
-  const categories: AssessmentCategory[] = ['MISSING_INFORMATION', 'MISSING_DOCUMENT', 'PLANNING_RISK', 'CONFLICT'];
+  const shared = {
+    projectName: context.project.name,
+    projectType: context.project.type,
+    governanceModel: context.governanceModel,
+    projectManager: context.projectManager,
+    inputs: context.inputs,
+    documents: context.documents,
+    catalogDocuments: catalogNames,
+  };
 
-  const judgements = (
-    await Promise.all(
-      categories.map((category) =>
-        judgeAssessmentRules({
-          projectName: context.project.name,
-          projectType: context.project.type,
-          governanceModel: context.governanceModel,
-          projectManager: context.projectManager,
-          inputs: context.inputs,
-          documents: context.documents,
-          // Missing information and missing documents are judged on the project input alone. A
-          // draft this application wrote is not evidence that the project supplied anything, so the
-          // two input-only categories are not shown the drafts at all.
-          planningDocuments: ACTIONABLE_CATEGORIES.includes(category)
-            ? []
-            : context.planningDocuments.map((doc) => ({ name: doc.name, status: doc.status })),
-          catalogDocuments: catalogNames,
-          rules: ASSESSMENT_RULES.filter((rule) => rule.assessmentCategory === category).map(
-            (rule): RuleJudgementRequest => ({
-              ruleId: rule.ruleId,
-              category: rule.assessmentCategory,
-              question:
-                rule.evaluate.kind === 'JUDGEMENT'
-                  ? rule.evaluate.question
-                  : `Does the project input provide the ${rule.name}, as its own document or as an equivalent section?`,
-              appliesWhen: rule.appliesWhen,
-              message: rule.result.message,
-              ...(rule.evaluate.kind === 'ARTIFACT' ? { acceptableAs: rule.evaluate.artifacts } : {}),
-            }),
-          ),
-        }),
-      ),
-    )
-  ).flat();
+  /**
+   * Prompt caching, when it pays. The four calls share the system prompt and the project block (the
+   * uploaded documents are most of the input), and a cache entry can only be read by a request that
+   * starts after it was written — four parallel calls would each pay to write it. So when the shared
+   * part is big enough to cache, the conflict checks go first (fewest rules, shortest answer) and the
+   * other three follow in parallel, reading the cache at a tenth of the input price. When it is too
+   * small to cache, all four run in parallel as before and nothing is marked.
+   */
+  const cache = assessmentCacheWorthwhile(shared);
+  const judge = (category: AssessmentCategory) =>
+    judgeAssessmentRules(
+      {
+        ...shared,
+        // Missing information and missing documents are judged on the project input alone. A
+        // draft this application wrote is not evidence that the project supplied anything, so the
+        // two input-only categories are not shown the drafts at all.
+        planningDocuments: ACTIONABLE_CATEGORIES.includes(category)
+          ? []
+          : context.planningDocuments.map((doc) => ({ name: doc.name, status: doc.status })),
+        rules: ASSESSMENT_RULES.filter((rule) => rule.assessmentCategory === category).map(
+          (rule): RuleJudgementRequest => ({
+            ruleId: rule.ruleId,
+            category: rule.assessmentCategory,
+            question: questionFor(rule),
+            appliesWhen: rule.appliesWhen,
+            message: rule.result.message,
+            ...(rule.evaluate.kind === 'ARTIFACT' ? { acceptableAs: rule.evaluate.artifacts } : {}),
+          }),
+        ),
+      },
+      { cache },
+    );
+
+  const rest: AssessmentCategory[] = ['MISSING_INFORMATION', 'MISSING_DOCUMENT', 'PLANNING_RISK'];
+  const judgements = cache
+    ? [...(await judge('CONFLICT')), ...(await Promise.all(rest.map(judge))).flat()]
+    : (await Promise.all([...rest, 'CONFLICT' as AssessmentCategory].map(judge))).flat();
 
   const byId = new Map(judgements.map((row) => [row.ruleId, row]));
 

@@ -63,6 +63,9 @@ services:
         value: claude-opus-5
       - key: AI_EFFORT
         value: medium
+      - key: AI_ASSESSMENT_EFFORT
+        # Re-assess only — 147 fixed checks against a rubric; `low` roughly halves its thinking cost.
+        value: low
       - key: MAX_UPLOAD_MB
         value: 20
       - key: MAX_FILES_PER_GROUP

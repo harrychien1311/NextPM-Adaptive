@@ -396,8 +396,11 @@ const MAX_OUTPUT_TOKENS = 16000;
  * `output_config.effort` steers how much the model thinks before answering. Returns an empty
  * object when AI_EFFORT is `off`, so the parameter is omitted rather than sent as a bad value.
  */
-function outputConfig(): { output_config?: { effort: string } } {
-  const effort = env.ai.effort.toLowerCase();
+function outputConfig(override?: string): { output_config?: { effort: string } } {
+  const global = env.ai.effort.toLowerCase();
+  // `off` globally means the model may reject the parameter — never send one, override or not.
+  if (global === 'off' || global === 'none') return {};
+  const effort = (override ?? global).toLowerCase();
   if (effort === 'off' || effort === 'none') return {};
   return { output_config: { effort } };
 }
@@ -414,7 +417,29 @@ interface AnthropicResponse {
   };
 }
 
-async function callAnthropicJson<T>(params: { system: string; prompt: string; label: string }): Promise<T> {
+async function callAnthropicJson<T>(params: {
+  system: string;
+  prompt: string;
+  label: string;
+  /** Overrides AI_EFFORT for this call (see `outputConfig`). */
+  effort?: string;
+  /**
+   * Text that goes before `prompt` and is identical across several calls. With `cache` set it is
+   * sent as its own block marked for prompt caching, so the calls after the first read the system
+   * prompt and this prefix at a tenth of the input price instead of paying for them again.
+   */
+  sharedPrefix?: string;
+  cache?: boolean;
+}): Promise<T> {
+  const content = params.sharedPrefix
+    ? params.cache
+      ? [
+          { type: 'text', text: params.sharedPrefix, cache_control: { type: 'ephemeral' } },
+          { type: 'text', text: params.prompt },
+        ]
+      : `${params.sharedPrefix}\n\n${params.prompt}`
+    : params.prompt;
+
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -425,9 +450,9 @@ async function callAnthropicJson<T>(params: { system: string; prompt: string; la
     body: JSON.stringify({
       model: env.ai.model,
       max_tokens: MAX_OUTPUT_TOKENS,
-      ...outputConfig(),
+      ...outputConfig(params.effort),
       system: params.system,
-      messages: [{ role: 'user', content: params.prompt }],
+      messages: [{ role: 'user', content }],
     }),
   });
 
@@ -443,7 +468,7 @@ async function callAnthropicJson<T>(params: { system: string; prompt: string; la
     // Logged raw, every field: a summary that drops a field is exactly how a billing surprise
     // hides (cache writes and server-tool use are billed but are not `output_tokens`).
     console.log(
-      `[ai:usage] ${params.label} · ${env.ai.model} · effort=${env.ai.effort} · ${JSON.stringify(data.usage)}`,
+      `[ai:usage] ${params.label} · ${env.ai.model} · effort=${outputConfig(params.effort).output_config?.effort ?? 'off'} · ${JSON.stringify(data.usage)}`,
     );
   }
 
@@ -2439,15 +2464,24 @@ How to decide, per category:
 - PLANNING_RISK and CONFLICT: silence is not a finding. FAIL only when the material positively shows
   the trigger or the contradiction — a register with empty owner columns, two figures that disagree.
 
-Evidence:
-- Every FAIL and every PASS should carry at least one quoted line where one exists. UNKNOWN and
-  NOT_APPLICABLE carry none.
+Evidence — ONLY for FAIL:
+- Every FAIL carries at least one quoted line where one exists. PASS, UNKNOWN and NOT_APPLICABLE
+  carry NO evidence: return "evidence": [] for them. Decide PASS only when you could point at the
+  text, but do not quote it — the PM is shown only what is missing, and quotes nobody reads cost the
+  project money on every assessment.
 - A CONFLICT rule asks whether two things disagree. It can only be FAIL when you can quote BOTH
   sides. One quote is an assertion, not a conflict — if you have only one, the answer is UNKNOWN.
 - Absence is never a conflict. A missing document does not contradict anything.
 
+Keep answers short:
+- FAIL: "finding" one sentence saying what is missing or wrong; "action" one sentence.
+- PASS: "finding" a short phrase of at most 12 words naming where it is stated
+  ("Start date stated in the SOW"), nothing more.
+- UNKNOWN: "finding" a short phrase saying what could not be established.
+- NOT_APPLICABLE: "finding" empty; the reason goes in "applicability".
+
 Language — the interface is English whatever the documents are in:
-- Write every "finding" in English, one sentence, saying what you actually found.
+- Write every "finding" in English, saying what you actually found.
 - Evidence carries both languages: "english" is your rendering, "original" is the sentence copied
   VERBATIM from the source in its own language (omit it when the source is already English), and
   "source" names the document file exactly as it was given to you.
@@ -2457,12 +2491,39 @@ Language — the interface is English whatever the documents are in:
 Return strict JSON and nothing else:
 { "results": [ { "ruleId": string, "status": "PASS"|"FAIL"|"UNKNOWN"|"NOT_APPLICABLE",
   "finding": string,
-  "evidence": [{ "english": string, "original": string, "source": string }],
+  "evidence": [{ "english": string, "original": string, "source": string }]  (FAIL only; [] otherwise),
   "action": string | null, "targetDocument": string | null, "applicability": string | null } ] }
 
 Return one entry for every rule you were given, in the order given.`;
 
-function buildRuleJudgementPrompt(context: RuleJudgementContext): string {
+/** Below this many input tokens a prompt cannot be cached at all, so sequencing calls for it buys nothing. */
+const MIN_CACHEABLE_TOKENS = 4096;
+
+/** A deliberately cautious token estimate: Hangul ≈ 1 token per character, other text ≈ 3 characters. */
+function estimateTokens(text: string): number {
+  const hangul = (text.match(/[가-힣㄰-㆏]/g) ?? []).length;
+  return hangul + Math.ceil((text.length - hangul) / 3);
+}
+
+/**
+ * Whether the part of an assessment prompt the four calls share — the system prompt and the project
+ * block — is large enough to cache. When it is, the caller runs one call first and the other three
+ * after it, so they read the cache instead of all four paying for it (parallel requests cannot share
+ * a cache entry that none of them has written yet). When it is not, caching would do nothing and the
+ * calls stay parallel.
+ */
+export function assessmentCacheWorthwhile(context: Omit<RuleJudgementContext, 'rules' | 'planningDocuments'>): boolean {
+  const shared = buildRuleJudgementShared({ ...context, planningDocuments: [], rules: [] });
+  return estimateTokens(RULE_JUDGEMENT_SYSTEM_PROMPT) + estimateTokens(shared) >= MIN_CACHEABLE_TOKENS;
+}
+
+/**
+ * The part of the assessment prompt that is identical in all four category calls: the project, the
+ * PM's answers, every uploaded document and the catalog. It comes first, after the system prompt, so
+ * it can be cached once and read by the other three calls — the uploaded documents are the bulk of
+ * the input and used to be paid for four times over.
+ */
+function buildRuleJudgementShared(context: RuleJudgementContext): string {
   const documents = context.documents.length
     ? context.documents.map((doc) => `### ${doc.label}\n${doc.text}`).join('\n\n')
     : '(no documents have been uploaded to this project)';
@@ -2475,6 +2536,15 @@ function buildRuleJudgementPrompt(context: RuleJudgementContext): string {
       context.inputs.length ? context.inputs.map((i) => `- ${i.label}: ${i.value}`).join('\n') : '(nothing recorded yet)'
     }`,
     `# Project input — uploaded document text\n${documents}`,
+    `# Documents this project can generate (use these exact names for "targetDocument")\n${context.catalogDocuments
+      .map((name) => `- ${name}`)
+      .join('\n')}`,
+  ].join('\n\n');
+}
+
+/** The part that differs per category: the drafted-document list (risks and conflicts only) and the checks. */
+function buildRuleJudgementPrompt(context: RuleJudgementContext): string {
+  return [
     // Only sent for risk and conflict checks. For missing information and missing documents the
     // section is left out entirely, rather than sent empty, so a draft cannot be mistaken for input.
     ...(context.planningDocuments.length
@@ -2484,9 +2554,6 @@ function buildRuleJudgementPrompt(context: RuleJudgementContext): string {
             .join('\n')}`,
         ]
       : []),
-    `# Documents this project can generate (use these exact names for "targetDocument")\n${context.catalogDocuments
-      .map((name) => `- ${name}`)
-      .join('\n')}`,
     `# Checks to answer (${context.rules.length})`,
     context.rules
       .map(
@@ -2501,7 +2568,11 @@ function buildRuleJudgementPrompt(context: RuleJudgementContext): string {
   ].join('\n\n');
 }
 
-export async function judgeAssessmentRules(context: RuleJudgementContext): Promise<RuleJudgement[]> {
+export async function judgeAssessmentRules(
+  context: RuleJudgementContext,
+  /** Mark the shared prefix for caching — the caller sequences the calls so the cache can be read. */
+  options: { cache?: boolean } = {},
+): Promise<RuleJudgement[]> {
   if (env.ai.provider !== 'anthropic' || !env.ai.anthropicKey) {
     throw serviceUnavailable(
       'The Planning Assessment needs a model — a keyword heuristic cannot judge governance rules, and ' +
@@ -2511,7 +2582,10 @@ export async function judgeAssessmentRules(context: RuleJudgementContext): Promi
 
   const result = await callAnthropicJson<{ results?: unknown[] }>({
     system: RULE_JUDGEMENT_SYSTEM_PROMPT,
+    sharedPrefix: buildRuleJudgementShared(context),
     prompt: buildRuleJudgementPrompt(context),
+    cache: options.cache,
+    effort: env.ai.assessmentEffort,
     label: `skill4:assessment-rules(${context.rules.length})`,
   });
 
@@ -2560,7 +2634,8 @@ export async function judgeAssessmentRules(context: RuleJudgementContext): Promi
         ruleId,
         status,
         finding: text(row.finding) ?? '',
-        evidence,
+        // Quotes belong to failures only; anything else the model sent anyway is not stored.
+        evidence: status === 'FAIL' ? evidence : [],
         action: status === 'FAIL' ? text(row.action) : null,
         targetDocument,
         applicability: rule.appliesWhen ? text(row.applicability) : null,

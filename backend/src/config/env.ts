@@ -33,6 +33,13 @@ export const env = {
      * and silently drop the app back to the mock writer.
      */
     effort: process.env.AI_EFFORT || 'medium',
+    /**
+     * Effort for the Planning Assessment (Re-assess) alone. Judging 147 fixed checks is recognition
+     * against a rubric, not open-ended reasoning, and thinking was ~29% of its output — the most
+     * expensive part of the app's most expensive action. Ignored when AI_EFFORT is `off`, since then
+     * the model may reject the parameter entirely.
+     */
+    assessmentEffort: process.env.AI_ASSESSMENT_EFFORT || 'low',
   },
   isProd: process.env.NODE_ENV === 'production',
 };
