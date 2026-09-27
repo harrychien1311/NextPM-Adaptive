@@ -31,6 +31,8 @@ export interface User {
   initials: string;
   role: Role;
   jobTitle: string;
+  /** When the account finished or skipped the first-run tutorial; null opens it at sign-in. */
+  tutorialSeenAt: string | null;
 }
 
 export interface AdminAccount {

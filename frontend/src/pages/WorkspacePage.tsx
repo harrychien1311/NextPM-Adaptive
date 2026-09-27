@@ -17,6 +17,7 @@ import { AgentDrawer } from './workspace/AgentDrawer';
 import { FloatingAgentButton } from './workspace/FloatingAgentButton';
 import { TeamModal } from './workspace/TeamModal';
 import { SignOutIcon } from '../components/icons';
+import { TutorialButton } from '../components/Tutorial';
 
 /**
  * The planning flow is five steps: Project Input, Planning Assessment, Planning Documents, then —
@@ -122,7 +123,7 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
               <span>Project Planning Studio</span>
             </div>
           </div>
-          <button className="back-projects" onClick={() => navigate('/')}>
+          <button className="back-projects" data-tour="back-projects" onClick={() => navigate('/')}>
             ← Program overview
           </button>
           <div className="workspace-path">
@@ -152,6 +153,7 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
           <nav aria-label="Primary navigation">
             <button
               className={`nav-item overview-item${view === 'dashboard' ? ' active' : ''}`}
+              data-tour="nav-dashboard"
               onClick={() => goToView('dashboard')}
             >
               <span className="nav-icon">▦</span>
@@ -159,16 +161,28 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
             </button>
             <div className="flow-label">PROJECT PLANNING FLOW</div>
             <div className="planning-flow-nav">
-              <button className={`nav-item${view === 'input' ? ' active' : ''}`} onClick={() => goToView('input')}>
+              <button
+                className={`nav-item${view === 'input' ? ' active' : ''}`}
+                data-tour="nav-input"
+                onClick={() => goToView('input')}
+              >
                 <span className="step-node">1</span>
                 <span>Project Input</span>
               </button>
-              <button className={`nav-item${view === 'approach' ? ' active' : ''}`} onClick={() => goToView('approach')}>
+              <button
+                className={`nav-item${view === 'approach' ? ' active' : ''}`}
+                data-tour="nav-approach"
+                onClick={() => goToView('approach')}
+              >
                 <span className="step-node">2</span>
                 <span>Planning Assessment</span>
                 {project.approach ? <b>✓</b> : <i>!</i>}
               </button>
-              <button className={`nav-item${view === 'studio' ? ' active' : ''}`} onClick={() => goToView('studio')}>
+              <button
+                className={`nav-item${view === 'studio' ? ' active' : ''}`}
+                data-tour="nav-studio"
+                onClick={() => goToView('studio')}
+              >
                 <span className="step-node">3</span>
                 <span>Planning Artifacts</span>
                 <b>
@@ -182,7 +196,11 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
               */}
               {project.approach && (
                 <>
-                  <button className={`nav-item${view === 'update' ? ' active' : ''}`} onClick={() => goToView('update')}>
+                  <button
+                    className={`nav-item${view === 'update' ? ' active' : ''}`}
+                    data-tour="nav-update"
+                    onClick={() => goToView('update')}
+                  >
                     <span className="step-node">4</span>
                     <span>Update Planning</span>
                     {planChange.data?.change && <i title="A change is being recorded">●</i>}
@@ -197,7 +215,7 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
           </nav>
 
           <div className="side-spacer" />
-          <div className="agent-card">
+          <div className="agent-card" data-tour="agent-card">
             <div className="agent-orb">✦</div>
             <strong>Planning Agent</strong>
             <span>Advisory</span>
@@ -258,6 +276,7 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
                   Review {project.documentsInReview} draft{project.documentsInReview > 1 ? 's' : ''}
                 </button>
               )}
+              <TutorialButton />
               {/* Sign out sits last so it is the top-right corner on every screen of the app. */}
               <button className="icon-button signout-button" onClick={logout} title="Sign out" aria-label="Sign out">
                 <SignOutIcon />

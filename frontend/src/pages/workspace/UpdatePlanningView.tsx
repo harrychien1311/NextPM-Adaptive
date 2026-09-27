@@ -345,6 +345,7 @@ export function UpdatePlanningView({ projectId, onNavigate }: { projectId: strin
             )}
             <button
               className="primary"
+              data-tour="analyze-change"
               onClick={() => analyzeChange.mutate()}
               disabled={!canWrite || analyzeChange.isPending}
               title="Measure what changed against the plan already on file"

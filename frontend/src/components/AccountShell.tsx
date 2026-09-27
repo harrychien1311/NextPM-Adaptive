@@ -5,6 +5,7 @@ import { customersApi } from '../api/endpoints';
 import type { CustomerSummary } from '../api/types';
 import { useAuth } from '../store/auth';
 import { SignOutIcon } from './icons';
+import { TutorialButton } from './Tutorial';
 
 const ROLE_LABEL: Record<string, string> = {
   ADMIN: 'Administrator',
@@ -95,6 +96,7 @@ export function AccountShell({
           ) : (
             <button
               className={`nav-item${location.pathname === '/' ? ' active' : ''}`}
+              data-tour="nav-overview"
               onClick={() => navigate('/')}
             >
               <span className="nav-icon">▦</span>
@@ -120,6 +122,7 @@ export function AccountShell({
             <strong>{title}</strong>
           </div>
           <div className="top-actions">
+            <TutorialButton />
             <div className="avatar" title={user?.name}>
               {user?.initials}
             </div>

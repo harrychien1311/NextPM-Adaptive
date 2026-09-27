@@ -4,7 +4,7 @@ import { asyncHandler } from '../../lib/async-handler';
 import { parse } from '../../lib/validate';
 import { authenticate } from '../../middleware/auth';
 import { prisma } from '../../lib/prisma';
-import { login, publicUser, register } from './auth.service';
+import { login, markTutorialSeen, publicUser, register } from './auth.service';
 
 export const authRouter = Router();
 
@@ -38,5 +38,13 @@ authRouter.get(
   asyncHandler(async (req, res) => {
     const user = await prisma.user.findUniqueOrThrow({ where: { id: req.user!.id } });
     res.json({ user: publicUser(user) });
+  }),
+);
+
+authRouter.post(
+  '/me/tutorial',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    res.json({ user: await markTutorialSeen(req.user!.id) });
   }),
 );

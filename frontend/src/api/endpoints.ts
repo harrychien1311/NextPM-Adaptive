@@ -42,6 +42,7 @@ export const authApi = {
   register: (body: { email: string; name: string; password: string; jobTitle?: string }) =>
     api.post<{ token: string; user: User }>('/auth/register', body),
   me: () => api.get<{ user: User }>('/auth/me'),
+  markTutorialSeen: () => api.post<{ user: User }>('/auth/me/tutorial', {}),
 };
 
 /**

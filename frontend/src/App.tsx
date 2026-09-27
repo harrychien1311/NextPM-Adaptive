@@ -6,6 +6,7 @@ import { AdminPage } from './pages/AdminPage';
 import { AccountLibraryPage } from './pages/AccountLibraryPage';
 import { ProgramOverviewPage } from './pages/ProgramOverviewPage';
 import { WorkspacePage } from './pages/WorkspacePage';
+import { TutorialProvider } from './components/Tutorial';
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { user, loading } = useAuth();
@@ -41,6 +42,8 @@ function WorkspaceRoute() {
 export function App() {
   return (
     <HashRouter>
+      {/* Inside the router, since the tour reads the route; around every route, so it opens wherever the first sign-in lands. */}
+      <TutorialProvider>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
@@ -92,6 +95,7 @@ export function App() {
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      </TutorialProvider>
     </HashRouter>
   );
 }

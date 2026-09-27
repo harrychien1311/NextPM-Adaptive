@@ -172,6 +172,10 @@ model User {
   passwordHash String
   active       Boolean  @default(true)
   createdAt    DateTime @default(now())
+  /// When this account finished or skipped the first-run tutorial. Null means it opens by itself at
+  /// the next sign-in. Stored on the account, not in the browser, so it follows the person to
+  /// another device instead of greeting them again there.
+  tutorialSeenAt DateTime?
 
   ownedPrograms    Program[]
   ownedProjects    Project[]           @relation("projectOwner")

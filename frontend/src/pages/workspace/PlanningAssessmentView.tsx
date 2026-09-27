@@ -301,6 +301,7 @@ export function PlanningAssessmentView({
         </button>
         <button
           className={`primary${lockClass}`}
+          data-tour="confirm-plan"
           {...lockedProps}
           disabled={canWrite && !chosen}
           onClick={guard(() => setModal(true))}

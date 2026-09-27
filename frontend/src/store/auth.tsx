@@ -10,6 +10,8 @@ interface AuthState {
   login: (email: string, password: string) => Promise<void>;
   register: (body: { email: string; name: string; password: string; jobTitle?: string }) => Promise<void>;
   logout: () => void;
+  /** Stops the first-run tutorial opening by itself for this account. */
+  markTutorialSeen: () => void;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -69,6 +71,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Also drop it on the way out, so a signed-out account's projects are not sitting in
         // memory waiting to be rendered to whoever signs in next.
         queryClient.clear();
+      },
+      markTutorialSeen: () => {
+        if (!user || user.tutorialSeenAt) return;
+        // Settled locally first, so the tour cannot reopen while the request is in flight — or
+        // forever, if it fails: a tutorial that greets someone at every sign-in because one request
+        // was lost is worse than one that is missed. The server copy follows when it answers.
+        setUser({ ...user, tutorialSeenAt: new Date().toISOString() });
+        authApi
+          .markTutorialSeen()
+          .then((data) => setUser(data.user))
+          .catch(() => undefined);
       },
     }),
     [user, loading, queryClient],

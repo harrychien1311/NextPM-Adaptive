@@ -710,6 +710,7 @@ export function InputView({
               <button
                 type="button"
                 className="primary"
+                data-tour="analyze"
                 onClick={startAnalysis}
                 disabled={!canWrite || analyze.isPending}
                 title={

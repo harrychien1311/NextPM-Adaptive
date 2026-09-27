@@ -34,7 +34,15 @@ export async function register(params: { email: string; name: string; password: 
   return { token: signToken(user), user: publicUser(user) };
 }
 
-export function publicUser(user: { id: string; email: string; name: string; initials: string; role: Role; jobTitle: string }) {
+export function publicUser(user: {
+  id: string;
+  email: string;
+  name: string;
+  initials: string;
+  role: Role;
+  jobTitle: string;
+  tutorialSeenAt: Date | null;
+}) {
   return {
     id: user.id,
     email: user.email,
@@ -42,5 +50,16 @@ export function publicUser(user: { id: string; email: string; name: string; init
     initials: user.initials,
     role: user.role,
     jobTitle: user.jobTitle,
+    tutorialSeenAt: user.tutorialSeenAt,
   };
+}
+
+/**
+ * Records that the account has been through the first-run tutorial, so it stops opening by itself.
+ * Idempotent: the first time is the one kept, and replaying the tutorial later changes nothing.
+ */
+export async function markTutorialSeen(userId: string) {
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+  if (user.tutorialSeenAt) return publicUser(user);
+  return publicUser(await prisma.user.update({ where: { id: userId }, data: { tutorialSeenAt: new Date() } }));
 }

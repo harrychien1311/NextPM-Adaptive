@@ -7,6 +7,7 @@ import { useAuth } from '../store/auth';
 import { useToast } from '../components/Toast';
 import { Backdrop, ModalShell } from '../components/Modal';
 import { AccountShell } from '../components/AccountShell';
+import { useTutorial } from '../components/Tutorial';
 import { ApiError } from '../api/client';
 
 // "On Hold" everywhere — the filter once said "Hold", the badge "On hold" and the status dropdown
@@ -89,13 +90,15 @@ export function ProgramOverviewPage() {
   const capabilities = overview.data?.capabilities;
 
   // A brand-new account owns nothing yet — open the create-project dialog straight away so the
-  // first screen it ever sees is actionable rather than an empty board.
+  // first screen it ever sees is actionable rather than an empty board. The first-run tutorial goes
+  // first: the dialog waits until it is closed, then opens where the tutorial's last step points.
+  const tutorial = useTutorial();
   const promptedRef = useRef(false);
   useEffect(() => {
-    if (!summary || promptedRef.current) return;
+    if (!summary || promptedRef.current || tutorial.active) return;
     promptedRef.current = true;
     if (summary.myProjects === 0) setOpenModal('project');
-  }, [summary]);
+  }, [summary, tutorial.active]);
 
   const query = search.trim().toLowerCase();
   const filtering = Boolean(query || programFilter || typeFilter || approachFilter);
@@ -281,7 +284,7 @@ export function ProgramOverviewPage() {
                 + Create program
               </button>
             )}
-            <button className="primary" onClick={() => setOpenModal('project')}>
+            <button className="primary" data-tour="add-project" onClick={() => setOpenModal('project')}>
               + Add project
             </button>
           </div>

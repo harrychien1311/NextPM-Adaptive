@@ -88,6 +88,7 @@ export function FloatingAgentButton({ onOpen }: { onOpen: () => void }) {
   return (
     <button
       className="floating-agent"
+      data-tour="agent"
       onMouseDown={startDrag}
       onClick={() => {
         if (dragged.current) {
