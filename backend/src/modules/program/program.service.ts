@@ -187,6 +187,17 @@ async function projectReadiness(projectId: string) {
   };
 }
 
+/** How many projects the overview works on at once. Order of the result matches the input. */
+const OVERVIEW_CONCURRENCY = 4;
+
+async function mapInBatches<T, R>(items: T[], size: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = [];
+  for (let index = 0; index < items.length; index += size) {
+    out.push(...(await Promise.all(items.slice(index, index + size).map(fn))));
+  }
+  return out;
+}
+
 /**
  * PM actions still outstanding — the "Open gaps" column. The same test the dashboard applies to
  * its own list: an OPEN action stops counting once the PM resolved it, once the document it names
@@ -232,8 +243,10 @@ export async function programOverview(user: { id: string; role: Role }) {
 
   const isProgramOwner = user.role === Role.PROGRAM_OWNER;
 
-  const enriched = await Promise.all(
-    projects.map(async (project) => {
+  // A few projects at a time rather than all at once: each card's figures read that project's
+  // assessment snapshot, documents and actions, and firing every project's reads together is a
+  // memory peak that grows with the board — on a 512 MB instance, enough to take the API down.
+  const enriched = await mapInBatches(projects, OVERVIEW_CONCURRENCY, async (project) => {
       const stats = await projectReadiness(project.id);
       const [decision, openActions, openGaps] = await Promise.all([
         prisma.approachDecision.findFirst({ where: { projectId: project.id, active: true } }),
@@ -275,8 +288,7 @@ export async function programOverview(user: { id: string; role: Role }) {
           Boolean(decision) && (isProgramOwner || isProjectOwner || membership?.role === ProjectRole.OWNER),
         ...stats,
       };
-    }),
-  );
+  });
 
   const groups = [
     ...programs.map((program) => {

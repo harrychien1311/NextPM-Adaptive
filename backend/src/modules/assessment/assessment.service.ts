@@ -43,7 +43,7 @@ import {
   type RuleJudgementRequest,
 } from '../ai/provider';
 import { logEvent } from '../audit/audit.service';
-import { activeChecklistForProject, checklistScoreForProject, runChecklistAssessment } from '../checklist/checklist.service';
+import { checklistScoreForProject, matchedChecklistForProject, runChecklistAssessment } from '../checklist/checklist.service';
 
 /** Per-document ceiling on the text handed to the model, matching the planning analysis. */
 const DOCUMENT_CHARS = 20_000;
@@ -433,7 +433,7 @@ export async function runFullAssessment(projectId: string, actorId: string) {
 }
 
 async function runCustomerStandard(projectId: string, actorId: string): Promise<CustomerStandardRun> {
-  const resolved = await activeChecklistForProject(projectId).catch(() => null);
+  const resolved = await matchedChecklistForProject(projectId).catch(() => null);
   if (!resolved) return { ran: false, ok: true };
   const named = { customerName: resolved.customer.name, checklistName: resolved.checklist.name };
   try {

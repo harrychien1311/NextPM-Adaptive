@@ -5,7 +5,7 @@ import { listEvents } from '../audit/audit.service';
 import { projectWorkspace } from '../program/program.service';
 import { gapDocumentNames } from '../documents/documents.service';
 import { latestAssessment } from '../assessment/assessment.service';
-import { activeChecklistForProject } from '../checklist/checklist.service';
+import { matchedChecklistForProject } from '../checklist/checklist.service';
 
 /**
  * The default set is what fits one screen. Everything else is opt-in through Customize and renders
@@ -277,12 +277,12 @@ export async function dashboard(projectId: string, userId: string) {
    * panel used to read its absence as "no checklist in the library for SK AX" — on exactly the
    * projects whose checklist had been found but not yet run. This says which of the two it is.
    */
-  const resolvedChecklist = await activeChecklistForProject(projectId).catch(() => null);
+  const resolvedChecklist = await matchedChecklistForProject(projectId).catch(() => null);
   const customerChecklist = resolvedChecklist
     ? {
         customerName: resolvedChecklist.customer.name,
         checklistName: resolvedChecklist.checklist.name,
-        items: resolvedChecklist.checklist.items.length,
+        items: resolvedChecklist.checklist.itemCount,
       }
     : null;
 

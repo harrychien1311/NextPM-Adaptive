@@ -96,6 +96,37 @@ export async function activeChecklistForProject(projectId: string) {
   };
 }
 
+/**
+ * The same match as `activeChecklistForProject`, without the items — which checklist applies, and
+ * how many items it has. For the figures (readiness, the dashboard row, the program board), which
+ * run for every project on every overview load: loading every customer's every item there — text,
+ * English reading, guidance — for each project at once is what pushed the API out of memory.
+ */
+export async function matchedChecklistForProject(projectId: string) {
+  const project = await prisma.project.findUnique({ where: { id: projectId }, select: { customer: true } });
+  if (!project) return null;
+  const customers = await prisma.customer.findMany({
+    where: { active: true },
+    select: {
+      id: true,
+      key: true,
+      name: true,
+      aliases: true,
+      checklists: {
+        where: { active: true },
+        select: { id: true, name: true, version: true, _count: { select: { items: true } } },
+      },
+    },
+  });
+  const match = matchCustomer(project.customer, customers);
+  if (!match || !isRecognised(match) || !match.customer.checklists.length) return null;
+  const checklist = match.customer.checklists[0];
+  return {
+    customer: { id: match.customer.id, key: match.customer.key, name: match.customer.name },
+    checklist: { id: checklist.id, name: checklist.name, version: checklist.version, itemCount: checklist._count.items },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Reading the assessment
 // ---------------------------------------------------------------------------
@@ -194,7 +225,7 @@ export async function checklistReadiness(projectId: string) {
  * readiness figure kept scoring the project against the old checklist.
  */
 export async function checklistScoreForProject(projectId: string): Promise<(ChecklistScore & { stale: boolean }) | null> {
-  const resolved = await activeChecklistForProject(projectId).catch(() => null);
+  const resolved = await matchedChecklistForProject(projectId).catch(() => null);
   if (!resolved) return null;
   const assessment = await prisma.projectChecklistAssessment.findUnique({
     where: { projectId_checklistId: { projectId, checklistId: resolved.checklist.id } },
