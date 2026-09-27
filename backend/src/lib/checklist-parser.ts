@@ -18,8 +18,8 @@
  * into a silently-dropped row.
  */
 
-import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
+import { readSheetCells, type SheetCells } from './xlsx-cells';
 
 export interface ParsedChecklistItem {
   order: number;
@@ -35,29 +35,6 @@ export interface ParsedChecklist {
   items: ParsedChecklistItem[];
   /** What the parser did and what it could not read — shown to whoever uploaded the file. */
   note: string;
-}
-
-/**
- * ExcelJS throws on `cell.text` for a merged slave whose master is empty, and returns objects for
- * rich text, hyperlinks and formulas. This is the one safe way to ask a cell what it says.
- */
-function cellText(cell: ExcelJS.Cell): string {
-  try {
-    const value = cell.value as unknown;
-    if (value === null || value === undefined) return '';
-    if (typeof value === 'string') return value;
-    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-    if (value instanceof Date) return value.toISOString().slice(0, 10);
-    if (typeof value === 'object') {
-      const record = value as { richText?: { text: string }[]; text?: string; result?: unknown };
-      if (Array.isArray(record.richText)) return record.richText.map((run) => run.text).join('');
-      if (typeof record.text === 'string') return record.text;
-      if (record.result !== undefined && record.result !== null) return String(record.result);
-    }
-    return typeof cell.text === 'string' ? cell.text : '';
-  } catch {
-    return '';
-  }
 }
 
 const clean = (value: string): string =>
@@ -128,15 +105,92 @@ function groupsFromHeaderRow(cells: string[]): ColumnGroup[] {
   return groups;
 }
 
+/**
+ * A merged range shows its master's text in every cell it covers, and the parser depends on that:
+ * the category column is merged down each block, and a banner is recognised by its text being
+ * stretched across columns. So each merge is expanded onto its slaves, all reporting the master's
+ * address as their source. The expansion stops at the last row holding a value, and `MAX_EXPANDED_CELLS`
+ * bounds it outright — a merge Excel lets run to row 1,048,576 would otherwise rebuild in memory
+ * exactly the grid the lean reader exists to avoid.
+ */
+const MAX_EXPANDED_CELLS = 200_000;
+const MAX_MERGE_COLUMN = 1024;
+
+interface ChecklistGrid {
+  rows: { cells: string[]; sources: string[] }[];
+  clipped: boolean;
+}
+
+function checklistGrid(sheet: SheetCells): ChecklistGrid {
+  const text = new Map<number, Map<number, { text: string; source: string }>>();
+  const put = (row: number, col: number, value: string, source: string) => {
+    let cells = text.get(row);
+    if (!cells) text.set(row, (cells = new Map()));
+    cells.set(col, { text: value, source });
+  };
+  for (const [row, cells] of sheet.cells) {
+    for (const [col, value] of cells) put(row, col, clean(value), `${row}:${col}`);
+  }
+
+  let expanded = 0;
+  let clipped = false;
+  for (const merge of sheet.merges) {
+    const master = sheet.cells.get(merge.top)?.get(merge.left);
+    // Rows past the last value hold nothing a merge could combine with, so they are cut. Columns are
+    // not cut to the last value: a banner merged over two columns whose second is empty everywhere
+    // must still read as stretched, or it stops being recognised as a banner.
+    const bottom = Math.min(merge.bottom, sheet.maxRow);
+    const right = Math.min(merge.right, MAX_MERGE_COLUMN);
+    if (!master) {
+      // An empty master shows nothing across its range, whatever a slave cell still stores.
+      for (let row = merge.top; row <= bottom; row += 1) {
+        const cells = text.get(row);
+        for (let col = merge.left; cells && col <= right; col += 1) cells.delete(col);
+        if (cells && !cells.size) text.delete(row);
+      }
+      continue;
+    }
+    const value = clean(master);
+    const source = `${merge.top}:${merge.left}`;
+    for (let row = merge.top; row <= bottom && !clipped; row += 1) {
+      for (let col = merge.left; col <= right; col += 1) {
+        if (++expanded > MAX_EXPANDED_CELLS) {
+          clipped = true;
+          break;
+        }
+        put(row, col, value, source);
+      }
+    }
+  }
+
+  const rows = [...text.keys()]
+    .sort((a, b) => a - b)
+    .map((row) => {
+      const entries = text.get(row)!;
+      const width = Math.max(...entries.keys());
+      const cells: string[] = [];
+      const sources: string[] = [];
+      for (let col = 1; col <= width; col += 1) {
+        cells.push(entries.get(col)?.text ?? '');
+        sources.push(entries.get(col)?.source ?? `${row}:${col}`);
+      }
+      return { cells, sources };
+    });
+  return { rows, clipped };
+}
+
 export async function parseChecklistXlsx(buffer: Buffer): Promise<ParsedChecklist> {
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer as unknown as ArrayBuffer);
+  const sheets = await readSheetCells(buffer);
 
   const items: ParsedChecklistItem[] = [];
   const notes: string[] = [];
   let order = 0;
 
-  workbook.eachSheet((sheet) => {
+  for (const sheet of sheets) {
+    if (sheet.skipped) {
+      notes.push(`sheet "${sheet.name}": not read — ${sheet.skipped}`);
+      continue;
+    }
     let groups: ColumnGroup[] = [];
     /** The category column is merged vertically, so an empty cell means "same as above". */
     let carried: (string | null)[] = [];
@@ -144,27 +198,20 @@ export async function parseChecklistXlsx(buffer: Buffer): Promise<ParsedChecklis
     let bannerCells: string[] = [];
     let headerRows = 0;
 
-    sheet.eachRow((row) => {
-      const cells: string[] = [];
-      /** Where each cell's value really comes from — a merged slave reports its master's address. */
-      const sources: string[] = [];
-      row.eachCell({ includeEmpty: true }, (cell, column) => {
-        cells[column - 1] = clean(cellText(cell));
-        sources[column - 1] = cell.isMerged ? cell.master?.address ?? cell.address : cell.address;
-      });
-      for (let i = 0; i < cells.length; i += 1) cells[i] = cells[i] ?? '';
+    const grid = checklistGrid(sheet);
+    for (const { cells, sources } of grid.rows) {
 
       const candidate = groupsFromHeaderRow(cells);
       if (candidate.length) {
         groups = candidate;
         carried = [];
         headerRows += 1;
-        return;
+        continue;
       }
 
       // A banner row titles the block below it rather than asking anything. Counting non-empty
-      // *cells* would miss it — ExcelJS hands every slave of a merge the master's text, so the row
-      // looks full. What marks a banner is that every value it shows is stretched *horizontally*
+      // *cells* would miss it — every slave of a merge shows the master's text, so the row looks
+      // full. What marks a banner is that every value it shows is stretched *horizontally*
       // across columns. A vertical merge (this sheet merges the category column down each block)
       // spans only one column per row, so it is correctly not a banner. This sheet also puts two
       // banners side by side on one row, which is why "exactly one value" is the wrong test.
@@ -177,10 +224,10 @@ export async function parseChecklistXlsx(buffer: Buffer): Promise<ParsedChecklis
       if (isBanner) {
         bannerCells = cells.slice();
         carried = [];
-        return;
+        continue;
       }
 
-      if (!groups.length) return;
+      if (!groups.length) continue;
 
       groups.forEach((group, groupIndex) => {
         const text = cells[group.text] ?? '';
@@ -205,10 +252,12 @@ export async function parseChecklistXlsx(buffer: Buffer): Promise<ParsedChecklis
           expected: (group.expected !== null && cells[group.expected]) || null,
         });
       });
-    });
+    }
 
-    notes.push(`sheet "${sheet.name}": ${headerRows} header row(s)`);
-  });
+    notes.push(
+      `sheet "${sheet.name}": ${headerRows} header row(s)${grid.clipped ? ' (very large merged ranges were cut short)' : ''}`,
+    );
+  }
 
   return {
     items,
