@@ -99,11 +99,16 @@ function FptStandard({ projectId, onClose }: { projectId: string; onClose: () =>
    * once Project Input is updated and the assessment re-run. A rule the PM ticked reads PASS, not
    * UNKNOWN, so a tick is never hidden by this.
    */
-  const rows = (data?.rows ?? []).filter((row) => row.category === 'MISSING_DOCUMENT' && row.status !== 'UNKNOWN');
-  const score = data?.categories.MISSING_DOCUMENT;
+  // The FPT standard is both halves of what the input provides: the facts and the documents.
+  const rows = (data?.rows ?? []).filter(
+    (row) => (row.category === 'MISSING_DOCUMENT' || row.category === 'MISSING_INFORMATION') && row.status !== 'UNKNOWN',
+  );
+  const fpt = data?.standards.fpt;
+  const documents = rows.filter((row) => row.category === 'MISSING_DOCUMENT');
   const sections = [
-    { title: 'Required for every project', rows: rows.filter((row) => !row.appliesWhen) },
-    { title: 'Required only in specific situations', rows: rows.filter((row) => row.appliesWhen) },
+    { title: 'Information the plan needs', rows: rows.filter((row) => row.category === 'MISSING_INFORMATION') },
+    { title: 'Documents required for every project', rows: documents.filter((row) => !row.appliesWhen) },
+    { title: 'Documents required only in specific situations', rows: documents.filter((row) => row.appliesWhen) },
   ];
 
   return (
@@ -119,14 +124,13 @@ function FptStandard({ projectId, onClose }: { projectId: string; onClose: () =>
       <div className="standard-summary">
         <div>
           <strong>{data ? `${data.standards.fpt.score}%` : '—'}</strong>
-          <span>
-            {score ? `${score.passed} of ${score.assessed} applicable documents in place` : 'Not assessed yet'}
-          </span>
+          <span>{fpt ? `${fpt.met} of ${fpt.assessed} criteria met` : 'Not assessed yet'}</span>
         </div>
         <p>
-          The planning documents Process_Software Project Management v5.0 expects. Tick one yourself when you know it
-          is in place, or ask the AI to check the project input again. Your ticks are kept across re-runs. Checks the
-          input could not answer are not listed — update Project Input and re-assess to see them.
+          The information and planning documents Process_Software Project Management v5.0 expects. Every criterion
+          counts the same: the score is the share met out of those that could be judged. Tick one yourself when you know
+          it is in place, or ask the AI to check the project input again. Your ticks are kept across re-runs. Checks the
+          input could not answer are not listed or counted — update Project Input and re-assess to see them.
         </p>
         <button
           className={`primary${lockClass}`}

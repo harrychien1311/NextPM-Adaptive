@@ -1237,6 +1237,12 @@ export interface ChecklistAssessmentContext {
   verifiedInputs: { label: string; value: string }[];
   /** What has actually been produced, with enough text to be evidence rather than a title list. */
   documents: { name: string; status: string; excerpt: string }[];
+  /**
+   * The project's own uploaded documents (SOW, contract, requirements). The checklist is now
+   * assessed right after the FPT standard, before most planning documents exist, so without these
+   * almost every item could only come back UNKNOWN.
+   */
+  uploadedDocuments?: { label: string; text: string }[];
   items: { id: string; section: string | null; text: string; guidance: string | null }[];
 }
 
@@ -1426,12 +1432,19 @@ function buildChecklistAssessmentPrompt(context: ChecklistAssessmentContext): st
     )
     .join('\n');
 
+  const uploaded = (context.uploadedDocuments ?? [])
+    .map((document) => `--- ${document.label} ---\n${document.text}`)
+    .join('\n\n');
+
   return [
     `Project: ${context.projectName} · type ${context.projectType} · customer ${context.customerName}`,
     context.approach ? `Confirmed governance model: ${context.approach}` : 'No governance model confirmed yet.',
     '',
     'PM-verified project inputs (evidence):',
     inputs || '- none verified yet',
+    '',
+    'Uploaded project documents (evidence — the project’s own material, may be truncated):',
+    uploaded || '- none uploaded',
     '',
     'Planning documents produced so far (evidence, may be truncated):',
     documents || '- none generated yet',
@@ -1451,6 +1464,8 @@ export async function assessChecklistItems(
       const result = await callAnthropicJson<{ verdicts: ChecklistAssessmentOutput['verdicts'] }>({
         system: CHECKLIST_ASSESSMENT_SYSTEM_PROMPT,
         prompt: buildChecklistAssessmentPrompt(context),
+        // Same kind of work as the FPT assessment — checks against a rubric — so the same effort.
+        effort: env.ai.assessmentEffort,
         label: `skill3:checklist:${context.items.length}-items`,
       });
       return { verdicts: result.verdicts ?? [], provider: 'anthropic' };

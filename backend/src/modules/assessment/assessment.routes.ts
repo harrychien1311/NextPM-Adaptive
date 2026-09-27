@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { asyncHandler } from '../../lib/async-handler';
 import { parse } from '../../lib/validate';
 import { PROJECT_WRITE_ROLES, requireProjectMember, requireProjectRole } from '../../middleware/auth';
-import { latestAssessment, runAssessment, setRuleVerdict } from './assessment.service';
+import { serviceUnavailable } from '../../lib/http-error';
+import { latestAssessment, runFullAssessment, setRuleVerdict } from './assessment.service';
 import { ASSESSMENT_RULES, ASSESSMENT_TABS } from '../../data/assessment-rules';
 
 export const assessmentRouter = Router();
@@ -22,14 +23,18 @@ assessmentRouter.get(
 );
 
 /**
- * Re-runs the catalog. A write, because it costs model calls and stores a snapshot — a reader
- * pressing it would spend the project's budget and change what everyone else sees.
+ * Re-assess: the FPT standard, then the customer's checklist. A write, because it costs model calls
+ * and stores a snapshot — a reader pressing it would spend the project's budget and change what
+ * everyone else sees. An FPT failure is still an error response (the screen has nothing new to show);
+ * the customer step's outcome rides along either way.
  */
 assessmentRouter.post(
   '/:projectId/assessment/run',
   requireProjectRole(...PROJECT_WRITE_ROLES),
   asyncHandler(async (req, res) => {
-    res.json({ assessment: await runAssessment(req.params.projectId, req.user!.id) });
+    const result = await runFullAssessment(req.params.projectId, req.user!.id);
+    if (!result.assessment) throw serviceUnavailable(result.fptError ?? 'The FPT standard assessment failed.');
+    res.json({ assessment: result.assessment, customerStandard: result.customerStandard });
   }),
 );
 

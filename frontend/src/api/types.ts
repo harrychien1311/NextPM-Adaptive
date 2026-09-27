@@ -294,7 +294,11 @@ export interface CategoryScore {
 }
 
 export interface StandardsPanel {
-  fpt: { label: string; score: number; note: string };
+  /**
+   * Missing Information + Missing Documents criteria, counted: `met` of `assessed` (the criteria
+   * that could be judged). `score` is that share.
+   */
+  fpt: { label: string; score: number; met: number; assessed: number; note: string };
   /** Null when this project's customer has no checklist in the library. */
   customer: { label: string; score: number; coverage: number; stale: boolean; note: string } | null;
   readiness: number;
@@ -310,6 +314,28 @@ export interface AssessmentPayload {
   aiProvider: 'anthropic' | 'mock';
   /** The project's current uploads — `readable` is how many have text the assessment can read. */
   evidence: { files: number; readable: number };
+}
+
+/** What the customer-standard step of *Analyze planning needs* / *Re-assess* did. */
+export interface CustomerStandardRun {
+  /** False when no library checklist matches this project's customer. */
+  ran: boolean;
+  ok: boolean;
+  customerName?: string;
+  checklistName?: string;
+  score?: number;
+  coverage?: number;
+  /** `none`: the AI pass did not run, so open items stayed unknown. */
+  provider?: 'anthropic' | 'none';
+  error?: string;
+}
+
+/** One line for a toast: how the customer standard went. */
+export function describeCustomerStandard(run: CustomerStandardRun): string {
+  if (!run.ran) return 'No customer checklist applies to this project.';
+  if (!run.ok) return `${run.customerName} standard could not be assessed: ${run.error}`;
+  if (run.provider === 'none') return `${run.customerName} standard: the AI pass did not run, so open items stay unknown.`;
+  return `${run.customerName} standard ${run.score ?? 0}%.`;
 }
 
 export interface AssessmentResponse {

@@ -6,6 +6,7 @@ import { DEFAULT_GOVERNANCE_MODELS, governanceModelMeta } from '../../data/gover
 import { logEvent } from '../audit/audit.service';
 import { syncDocumentsWithPack } from '../documents/documents.service';
 import { buildCustomerSuggestion, syncPlanningActions } from '../input/input.service';
+import { runFullAssessment } from '../assessment/assessment.service';
 
 /**
  * This module keeps its original "rules" folder name for a minimal diff, but it no
@@ -244,6 +245,19 @@ export async function runPlanningAnalysis(projectId: string, actorId: string) {
   });
 
   return evaluation;
+}
+
+/**
+ * *Analyze planning needs*, end to end: the analysis (what the project is, methodology fit, gaps,
+ * findings), then the FPT standard (missing information, missing documents, risks, conflicts), then
+ * the customer's own checklist. One button, so the PM never has to run the customer standard
+ * separately from the dashboard. The analysis must succeed — everything else is measured against
+ * the project it describes — while each standard reports its own outcome without costing the other.
+ */
+export async function runPlanningPipeline(projectId: string, actorId: string) {
+  const evaluation = await runPlanningAnalysis(projectId, actorId);
+  const standards = await runFullAssessment(projectId, actorId);
+  return { evaluation, ...standards };
 }
 
 /** How much of each uploaded document the analysis reads. Enough to quote, small enough to batch. */

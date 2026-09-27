@@ -6,7 +6,7 @@ import { useToast } from '../../components/Toast';
 import { useDebouncedCallback } from '../../hooks/useDebouncedCallback';
 import { useProjectWrite } from '../../hooks/useProjectWrite';
 import { CustomerConfirmBanner } from './CustomerConfirmBanner';
-import type { InputField, ProjectType } from '../../api/types';
+import { describeCustomerStandard, type InputField, type ProjectType } from '../../api/types';
 import type { WorkspaceView } from '../WorkspacePage';
 
 /** One wording for every disabled control, so a reader is told why rather than left guessing. */
@@ -130,16 +130,28 @@ export function InputView({
    */
   const analyze = useMutation({
     mutationFn: () => rulesApi.analyze(projectId),
-    onSuccess: async () => {
+    onSuccess: async (result) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['approach', projectId] }),
         queryClient.invalidateQueries({ queryKey: ['workspace', projectId] }),
         queryClient.invalidateQueries({ queryKey: ['studio', projectId] }),
-        // The analysis is what opens the PM action center's entries, so the dashboard changes most
+        // The same request ran the FPT standard and the customer's checklist.
+        queryClient.invalidateQueries({ queryKey: ['assessment', projectId] }),
+        queryClient.invalidateQueries({ queryKey: ['checklist', projectId] }),
+        // The assessment is what opens the PM action center's entries, so the dashboard changes most
         // of all here.
         refreshDashboard(),
       ]);
-      notify({ title: 'Analysis ready', detail: 'Opening Planning Assessment.' });
+      notify({
+        title: result.assessment.ok ? 'Analysis and assessment ready' : 'Analysis ready — the FPT assessment failed',
+        detail: [
+          result.assessment.ok
+            ? `FPT standard ${result.assessment.fptScore}%.`
+            : `FPT standard not assessed: ${result.assessment.error ?? 'unexpected error'} Re-assess on Planning Assessment.`,
+          describeCustomerStandard(result.customerStandard),
+          'Opening Planning Assessment.',
+        ].join(' '),
+      });
       setTimeout(() => onNavigate('approach'), 350);
     },
     onError: (error) =>
@@ -702,11 +714,12 @@ export function InputView({
                 disabled={!canWrite || analyze.isPending}
                 title={
                   canWrite
-                    ? 'Read every uploaded document and return the project overview, the approach advisory and the planning gaps'
+                    ? 'Read every uploaded document, then assess the project against the FPT standard and its customer’s checklist'
                     : READ_ONLY_HINT
                 }
               >
-                {analyze.isPending ? '✦ Analyzing…' : '✦ Analyze planning needs'}
+                {/* Three steps in one request, which takes a few minutes — say so while it runs. */}
+                {analyze.isPending ? '✦ Analyzing & assessing — a few minutes…' : '✦ Analyze planning needs'}
               </button>
             ) : (
               /* A confirmed plan changes in its own step — this only takes the PM there. */

@@ -43,7 +43,7 @@ import {
   type RuleJudgementRequest,
 } from '../ai/provider';
 import { logEvent } from '../audit/audit.service';
-import { checklistScoreForProject } from '../checklist/checklist.service';
+import { activeChecklistForProject, checklistScoreForProject, runChecklistAssessment } from '../checklist/checklist.service';
 
 /** Per-document ceiling on the text handed to the model, matching the planning analysis. */
 const DOCUMENT_CHARS = 20_000;
@@ -357,7 +357,7 @@ export async function runAssessment(projectId: string, actorId: string) {
     }
   }
 
-  const fpt = scoreCategory(results, 'MISSING_DOCUMENT');
+  const fpt = fptStandard(results);
   const blockers = results.filter((result) => result.status === 'FAIL' && RULE_BY_ID.get(result.ruleId)?.mandatory).length;
   const unknowns = results.filter((result) => result.status === 'UNKNOWN').length;
 
@@ -395,6 +395,54 @@ function earliestJudged(runAt: Date, results: RuleResult[]) {
     const at = judgedAtOf(result, runAt);
     return at < earliest ? at : earliest;
   }, runAt);
+}
+
+/** What the customer-standard step of a full assessment did. */
+export interface CustomerStandardRun {
+  /** False when no library checklist matches this project's customer — a normal state, not a failure. */
+  ran: boolean;
+  ok: boolean;
+  customerName?: string;
+  checklistName?: string;
+  score?: number;
+  coverage?: number;
+  /** `none` means the AI pass did not run (no key, or the call failed) — open items stayed unknown. */
+  provider?: 'anthropic' | 'none';
+  error?: string;
+}
+
+/**
+ * Both standards, in order: the FPT standard (the four categories), then the customer's own
+ * checklist when the library has one for this project's customer. One action for the PM — *Analyze
+ * planning needs* and *Re-assess* both run it — so the two standards are always judged against the
+ * same material and the customer one is never left for a separate trip to the dashboard.
+ *
+ * Neither step can cost the PM the other: a failed FPT run is reported and the customer checklist is
+ * still assessed, and a failed checklist run leaves the FPT result standing. Each says what happened.
+ */
+export async function runFullAssessment(projectId: string, actorId: string) {
+  let assessment: Awaited<ReturnType<typeof runAssessment>> | null = null;
+  let fptError: string | null = null;
+  try {
+    assessment = await runAssessment(projectId, actorId);
+  } catch (error) {
+    fptError = error instanceof Error ? error.message : 'The FPT standard assessment failed.';
+  }
+  const customerStandard = await runCustomerStandard(projectId, actorId);
+  return { assessment, fptError, customerStandard };
+}
+
+async function runCustomerStandard(projectId: string, actorId: string): Promise<CustomerStandardRun> {
+  const resolved = await activeChecklistForProject(projectId).catch(() => null);
+  if (!resolved) return { ran: false, ok: true };
+  const named = { customerName: resolved.customer.name, checklistName: resolved.checklist.name };
+  try {
+    const result = await runChecklistAssessment({ projectId, actorId });
+    const score = await checklistScoreForProject(projectId);
+    return { ran: true, ok: true, ...named, score: score?.score ?? result.score.score, coverage: score?.coverage, provider: result.provider };
+  } catch (error) {
+    return { ran: true, ok: false, ...named, error: error instanceof Error ? error.message : 'The customer checklist assessment failed.' };
+  }
 }
 
 /**
@@ -479,6 +527,42 @@ export function scoreCategory(results: RuleResult[], category: AssessmentCategor
   };
 }
 
+/**
+ * The categories the FPT standard is measured on: what the project input provides — the facts the
+ * plan needs (Missing Information) and the documents it needs (Missing Documents). Risks and
+ * conflicts stay on their own tabs and out of the score: "no risk triggered" is not the same claim
+ * as "a criterion is met".
+ */
+export const FPT_STANDARD_CATEGORIES: AssessmentCategory[] = ['MISSING_INFORMATION', 'MISSING_DOCUMENT'];
+
+/**
+ * The FPT standard: how many of its criteria the project meets, out of those that could be judged.
+ *
+ * **Counted, not weighted** — every criterion is one, so the figure is exactly "met N of M" and a
+ * PM can check it by counting the list. A met criterion is one the input satisfies, or one resolved
+ * since (its document confirmed, its PM action resolved, or ticked by the PM). Not-evaluated and
+ * not-applicable criteria are outside both halves, as everywhere else: a percentage over checks the
+ * input could not answer would claim something nobody measured.
+ */
+export function fptStandard(results: RuleResult[]) {
+  const rows = results.filter((result) => {
+    const rule = RULE_BY_ID.get(result.ruleId);
+    return rule && FPT_STANDARD_CATEGORIES.includes(rule.assessmentCategory);
+  });
+  const met = rows.filter((row) => row.status === 'PASS' || row.status === 'OVERRIDDEN').length;
+  const missing = rows.filter((row) => row.status === 'FAIL').length;
+  const assessed = met + missing;
+  return {
+    score: assessed ? Math.round((met / assessed) * 100) : 0,
+    met,
+    missing,
+    assessed,
+    unknown: rows.filter((row) => row.status === 'UNKNOWN').length,
+    notApplicable: rows.filter((row) => row.status === 'NOT_APPLICABLE').length,
+    total: rows.length,
+  };
+}
+
 const SEVERITY_ORDER = { BLOCKER: 0, HIGH: 1, MEDIUM: 2, LOW: 3, INFO: 4 };
 const STATUS_ORDER: Record<RuleStatus, number> = { FAIL: 0, UNKNOWN: 1, OVERRIDDEN: 2, PASS: 3, NOT_APPLICABLE: 4 };
 
@@ -486,21 +570,21 @@ const STATUS_ORDER: Record<RuleStatus, number> = { FAIL: 0, UNKNOWN: 1, OVERRIDD
  * The two-tier standards and the Planning readiness figure, from one place.
  *
  * **Two tiers, in precedence order.** The FPT standard is the company baseline and applies to every
- * project — it is exactly the `MISSING_DOCUMENT` rules, so "every required document confirmed" and
- * "FPT standard fulfilled" are the same statement rather than two numbers that can disagree. The
- * customer standard is laid on top and is whichever customer this project matched, which is a
- * different checklist for LGCNS than for SKAX.
+ * project — the Missing Information and Missing Documents criteria, counted: how many the project
+ * meets out of those that could be judged (`fptStandard`). The customer standard is laid on top and
+ * is whichever customer this project matched, which is a different checklist for LGCNS than for SKAX.
  *
  * **Planning readiness = 60% customer + 40% FPT, and FPT alone when there is no customer.**
  */
 export function standardsFor(
-  fptScore: number,
+  fpt: { score: number; met: number; assessed: number },
   checklist: { score: number; coverage: number; stale: boolean } | null,
   customer: string | null,
 ) {
+  const fptScore = fpt.score;
   const customerCounts = Boolean(checklist && checklist.coverage > 0);
   return {
-    fpt: { label: 'FPT standards', score: fptScore, note: 'Company baseline · always applied' },
+    fpt: { label: 'FPT standards', score: fptScore, met: fpt.met, assessed: fpt.assessed, note: 'Company baseline · always applied' },
     customer: customerCounts
       ? {
           label: `${customer ?? 'Customer'} standards`,
@@ -662,7 +746,7 @@ export async function latestAssessment(projectId: string) {
         a.ruleId.localeCompare(b.ruleId),
     );
 
-  const fpt = scoreCategory(effective, 'MISSING_DOCUMENT');
+  const fpt = fptStandard(effective);
 
   // The same set `loadInput` reads — every current upload — so the figure is the evidence the next
   // assessment will see. `readable` is what actually reaches the model: a scan with no text layer
@@ -684,11 +768,11 @@ export async function latestAssessment(projectId: string) {
     rows,
     categories: {
       MISSING_INFORMATION: scoreCategory(effective, 'MISSING_INFORMATION'),
-      MISSING_DOCUMENT: fpt,
+      MISSING_DOCUMENT: scoreCategory(effective, 'MISSING_DOCUMENT'),
       PLANNING_RISK: scoreCategory(effective, 'PLANNING_RISK'),
       CONFLICT: scoreCategory(effective, 'CONFLICT'),
     },
-    standards: standardsFor(fpt.score, checklist, project?.customer ?? null),
+    standards: standardsFor(fpt, checklist, project?.customer ?? null),
   };
 }
 
@@ -701,7 +785,7 @@ export async function latestAssessment(projectId: string) {
  */
 export async function fptStandardScore(projectId: string): Promise<number | null> {
   const latest = await loadLatest(projectId);
-  return latest ? scoreCategory(latest.effective, 'MISSING_DOCUMENT').score : null;
+  return latest ? fptStandard(latest.effective).score : null;
 }
 
 /**
@@ -860,7 +944,7 @@ export async function applyAssessmentUpdates(params: {
     }
   }
 
-  const fpt = scoreCategory(results, 'MISSING_DOCUMENT');
+  const fpt = fptStandard(results);
   const run = await prisma.assessmentRun.create({
     data: {
       projectId: params.projectId,

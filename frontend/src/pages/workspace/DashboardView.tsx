@@ -44,11 +44,11 @@ const DOMAIN_LABEL: Record<string, string> = {
 const READINESS_BASIS: Record<string, { label: string; help: string }> = {
   CUSTOMER_AND_FPT: {
     label: '60% customer standard + 40% FPT standard',
-    help: 'Weighted 60% on how far this project meets the standards its customer set, and 40% on the FPT standard — the expected planning documents the PM has confirmed.',
+    help: 'Weighted 60% on how far this project meets the standards its customer set, and 40% on the FPT standard — the share of FPT criteria (information and documents the plan needs) the project meets.',
   },
   FPT_ONLY: {
     label: 'FPT standard',
-    help: 'This project’s customer has no checklist in the library, so the score is the FPT standard alone: the share of expected planning documents the PM has confirmed.',
+    help: 'This project’s customer has no checklist in the library, so the score is the FPT standard alone: the share of FPT criteria (information and documents the plan needs) the project meets.',
   },
   CUSTOMER_AND_OUTPUTS: {
     label: '60% customer standard + 40% approved documents',
@@ -415,7 +415,10 @@ export function DashboardView({ projectId, onNavigate }: { projectId: string; on
                     </div>
                     <small>{data.standards.fpt.note}</small>
                     <div className="standard-figure">
-                      <span>Expected documents confirmed</span>
+                      {/* Counted, so the PM can check it: criteria met out of those that could be judged. */}
+                      <span>
+                        Criteria met · {data.standards.fpt.met} of {data.standards.fpt.assessed}
+                      </span>
                       <b>{data.standards.fpt.score}%</b>
                     </div>
                     <div className="bar teal">

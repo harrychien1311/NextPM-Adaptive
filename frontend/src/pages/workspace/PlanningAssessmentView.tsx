@@ -4,6 +4,7 @@ import { assessmentApi, rulesApi } from '../../api/endpoints';
 import { useToast } from '../../components/Toast';
 import { Backdrop, ModalShell } from '../../components/Modal';
 import { useReadOnlyGuard } from '../../hooks/useProjectWrite';
+import { describeCustomerStandard } from '../../api/types';
 import type {
   Approach,
   AssessmentCategory,
@@ -105,13 +106,18 @@ export function PlanningAssessmentView({
 
   const run = useMutation({
     mutationFn: () => assessmentApi.run(projectId),
-    onSuccess: async () => {
+    onSuccess: async (result) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['assessment', projectId] }),
         queryClient.invalidateQueries({ queryKey: ['dashboard', projectId] }),
         queryClient.invalidateQueries({ queryKey: ['workspace', projectId] }),
+        // Re-assess runs the customer's checklist too.
+        queryClient.invalidateQueries({ queryKey: ['checklist', projectId] }),
       ]);
-      notify({ title: 'Assessment re-run', detail: 'Every rule was evaluated against the current documents.' });
+      notify({
+        title: 'Assessment re-run',
+        detail: `FPT standard ${result.assessment.standards.fpt.score}%. ${describeCustomerStandard(result.customerStandard)}`,
+      });
     },
     onError: (error) => notify({ title: 'Could not run the assessment', detail: (error as Error).message }),
   });
@@ -818,7 +824,7 @@ function MethodologyFitTab({
       <article className="panel advisory-panel">
         <div className="panel-head">
           <div>
-            <h2>Methodology fit</h2>
+            <h2>Management approach</h2>
             <p>A suitability score from the documents — not how confident the model is</p>
           </div>
         </div>

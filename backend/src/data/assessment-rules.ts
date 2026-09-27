@@ -491,7 +491,7 @@ export const ASSESSMENT_TABS = [
   { key: 'documents', label: 'Missing Documents', category: 'MISSING_DOCUMENT' as const },
   { key: 'risks', label: 'Risks', category: 'PLANNING_RISK' as const },
   { key: 'conflicts', label: 'Conflicts', category: 'CONFLICT' as const },
-  { key: 'fit', label: 'Methodology Fit', category: null },
+  { key: 'fit', label: 'Management Approach', category: null },
 ];
 
 /**

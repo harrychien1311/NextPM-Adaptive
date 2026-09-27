@@ -6,6 +6,7 @@ import type {
   ApproachResponse,
   Approach,
   AssessmentPayload,
+  CustomerStandardRun,
   AssessmentResponse,
   ChecklistDetail,
   ChecklistReadiness,
@@ -292,7 +293,12 @@ export const rulesApi = {
    * gaps and the document findings as one snapshot. No offline fallback: it fails rather than
    * inventing.
    */
-  analyze: (projectId: string) => api.post(`/projects/${projectId}/planning/analyze`),
+  /** Analysis → FPT standard → customer standard, in one request; each step reports its own outcome. */
+  analyze: (projectId: string) =>
+    api.post<{
+      assessment: { ok: true; fptScore: number; readiness: number } | { ok: false; error: string | null };
+      customerStandard: CustomerStandardRun;
+    }>(`/projects/${projectId}/planning/analyze`),
   decide: (projectId: string, body: { approach: Approach; outcome?: 'CONFIRMED' | 'OVERRIDDEN'; rationale?: string }) =>
     api.post(`/projects/${projectId}/approach/decide`, body),
 };
@@ -386,8 +392,9 @@ export const documentsApi = {
  */
 export const assessmentApi = {
   latest: (projectId: string) => api.get<AssessmentResponse>(`/projects/${projectId}/assessment`),
+  /** Re-assess: the FPT standard, then the customer's checklist. */
   run: (projectId: string) =>
-    api.post<{ assessment: AssessmentPayload }>(`/projects/${projectId}/assessment/run`, {}),
+    api.post<{ assessment: AssessmentPayload; customerStandard: CustomerStandardRun }>(`/projects/${projectId}/assessment/run`, {}),
   /** The PM ticks or unticks one rule. Outranks the model and survives re-runs. */
   setRule: (projectId: string, ruleId: string, met: boolean) =>
     api.put<{ assessment: AssessmentPayload }>(`/projects/${projectId}/assessment/rules/${ruleId}`, { met }),

@@ -15,7 +15,7 @@ import {
   decideApproach,
   latestEvaluation,
   runEvaluation,
-  runPlanningAnalysis,
+  runPlanningPipeline,
 } from './rules.service';
 import {
   addUploadedPlanChangeDocument,
@@ -83,15 +83,22 @@ rulesRouter.post(
 );
 
 /**
- * "Analyze planning needs" — the single call behind the Planning Review screen. Reads every
- * uploaded document and what the PM typed, and returns the overview, the approach advisory, the
- * planning gaps and the document findings in one snapshot.
+ * "Analyze planning needs" — the one button between Project Input and Planning Assessment. Runs the
+ * analysis (overview, methodology fit, planning gaps, findings), then the FPT standard, then the
+ * customer's checklist, and reports how each step went.
  */
 rulesRouter.post(
   '/:projectId/planning/analyze',
   requireProjectRole(...PROJECT_WRITE_ROLES),
   asyncHandler(async (req, res) => {
-    res.status(201).json(await runPlanningAnalysis(req.params.projectId, req.user!.id));
+    const result = await runPlanningPipeline(req.params.projectId, req.user!.id);
+    res.status(201).json({
+      evaluation: result.evaluation,
+      assessment: result.assessment
+        ? { ok: true, fptScore: result.assessment.standards.fpt.score, readiness: result.assessment.standards.readiness }
+        : { ok: false, error: result.fptError },
+      customerStandard: result.customerStandard,
+    });
   }),
 );
 

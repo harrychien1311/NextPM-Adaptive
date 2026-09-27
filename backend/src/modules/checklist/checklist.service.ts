@@ -41,6 +41,9 @@ import { logEvent } from '../audit/audit.service';
 /** How much of each document the model gets as evidence. Enough to quote, small enough to batch. */
 const DOCUMENT_EXCERPT_CHARS = 2_000;
 
+/** Per uploaded document — the same ceiling as the FPT assessment, so both standards read the same material. */
+const UPLOAD_CHARS = 20_000;
+
 /**
  * How many checklist items go into one model call. The two checklists we have are 29 and 37 items,
  * so they fit in a single call each; the cap is here so a 300-item checklist added later degrades
@@ -230,7 +233,7 @@ export async function runChecklistAssessment(params: {
   });
 
   try {
-    const [values, documents, decision] = await Promise.all([
+    const [values, documents, decision, uploads] = await Promise.all([
       prisma.projectInputValue.findMany({
         where: { projectId: params.projectId, NOT: { value: null } },
         include: { definition: true },
@@ -240,7 +243,17 @@ export async function runChecklistAssessment(params: {
         include: { sections: { orderBy: { order: 'asc' } } },
       }),
       prisma.approachDecision.findFirst({ where: { projectId: params.projectId, active: true } }),
+      // The project's own current uploads — the same set the FPT assessment reads.
+      prisma.referenceFile.findMany({ where: { projectId: params.projectId, supersededAt: null }, orderBy: { uploadedAt: 'asc' } }),
     ]);
+    const uploadedDocuments = uploads
+      .map((file) => {
+        const extraction = file.extraction as { rawText?: string; textAvailable?: boolean } | null;
+        return extraction?.textAvailable && extraction.rawText
+          ? { label: file.fileName, text: extraction.rawText.slice(0, UPLOAD_CHARS) }
+          : null;
+      })
+      .filter((entry): entry is { label: string; text: string } => entry !== null);
 
     const inputs = values.map((value) => ({
       label: value.definition.label,
@@ -304,6 +317,7 @@ export async function runChecklistAssessment(params: {
         approach: decision?.approach ?? null,
         verifiedInputs,
         documents: documentEvidence,
+        uploadedDocuments,
         items: batch.map((item) => ({
           id: item.id,
           section: item.section,
