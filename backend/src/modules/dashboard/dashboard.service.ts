@@ -19,10 +19,11 @@ const DEFAULT_WIDGETS: Record<string, boolean> = {
   tasks: true,
   decisions: true,
   standards: true,
+  // The document list — every upload and every generated document, previewable from here.
+  library: true,
   // Optional: shown only once the PM ticks them in Customize.
   customer: false,
   domains: false,
-  library: false,
   activity: false,
   // Plan history is no longer a dashboard widget: it is step 5 of the planning flow, in the sidebar,
   // once the plan is confirmed. A saved layout that still has `history: true` is simply ignored.

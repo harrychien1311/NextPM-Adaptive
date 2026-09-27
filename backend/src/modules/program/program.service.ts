@@ -408,6 +408,7 @@ export async function createProject(params: {
             tasks: true,
             decisions: true,
             standards: true,
+            library: true,
           } as Prisma.InputJsonValue,
         },
       },

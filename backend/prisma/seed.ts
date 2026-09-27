@@ -223,7 +223,7 @@ async function main() {
           create: {
             userId: users.LV,
             // The default set only — optional blocks stay off until someone ticks them in Customize.
-            widgets: { readiness: true, approach: true, outputs: true, tasks: true, decisions: true, standards: true },
+            widgets: { readiness: true, approach: true, outputs: true, tasks: true, decisions: true, standards: true, library: true },
           },
         },
       },

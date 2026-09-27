@@ -67,9 +67,9 @@ const WIDGET_LABELS: [string, string, string][] = [
   ['tasks', 'Planning progress', 'Default'],
   ['decisions', 'PM Actions', 'Default'],
   ['standards', 'Standards (FPT → customer)', 'Default'],
+  ['library', 'Document list', 'Default'],
   ['customer', 'Customer standard detail', 'Optional'],
   ['domains', 'Project information coverage', 'Optional'],
-  ['library', 'Document list', 'Optional'],
   ['activity', 'Recent activity', 'Optional'],
 ];
 
