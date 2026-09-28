@@ -27,6 +27,7 @@
 
 import { AssessmentSource, ChecklistStatus, DocumentStatus } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
+import { pmContextInputs } from '../../lib/custom-context';
 import { badRequest, notFound } from '../../lib/http-error';
 import {
   computeChecklistScore,
@@ -264,7 +265,7 @@ export async function runChecklistAssessment(params: {
   });
 
   try {
-    const [values, documents, decision, uploads] = await Promise.all([
+    const [values, documents, decision, uploads, customContext] = await Promise.all([
       prisma.projectInputValue.findMany({
         where: { projectId: params.projectId, NOT: { value: null } },
         include: { definition: true },
@@ -276,6 +277,7 @@ export async function runChecklistAssessment(params: {
       prisma.approachDecision.findFirst({ where: { projectId: params.projectId, active: true } }),
       // The project's own current uploads — the same set the FPT assessment reads.
       prisma.referenceFile.findMany({ where: { projectId: params.projectId, supersededAt: null }, orderBy: { uploadedAt: 'asc' } }),
+      pmContextInputs(params.projectId),
     ]);
     const uploadedDocuments = uploads
       .map((file) => {
@@ -286,11 +288,15 @@ export async function runChecklistAssessment(params: {
       })
       .filter((entry): entry is { label: string; text: string } => entry !== null);
 
-    const inputs = values.map((value) => ({
-      label: value.definition.label,
-      value: value.value!,
-      verified: value.verified,
-    }));
+    const inputs = [
+      ...values.map((value) => ({
+        label: value.definition.label,
+        value: value.value!,
+        verified: value.verified,
+      })),
+      // Written by the PM, so as verified as anything they typed into the form.
+      ...customContext.map((entry) => ({ ...entry, verified: true })),
+    ];
 
     const existing = new Map(assessment.items.map((row) => [row.checklistItemId, row]));
 

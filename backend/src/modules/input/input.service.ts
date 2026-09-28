@@ -474,13 +474,32 @@ export async function verifyInputs(projectId: string, actorId: string) {
   };
 }
 
-export async function addCustomField(params: { projectId: string; name: string; value?: string; useIn?: string }) {
+/**
+ * Custom context: a named fact the PM adds when the standard form has no field for it. Every model
+ * call reads it (`lib/custom-context.ts`). The `useIn` column is left at its default and no longer
+ * set or shown — it claimed to route a field to rules or documents, and nothing ever read it.
+ */
+export async function addCustomField(params: { projectId: string; name: string; value?: string }) {
   return prisma.projectCustomField.create({
+    data: { projectId: params.projectId, name: params.name.trim(), value: params.value?.trim() || null },
+  });
+}
+
+/** Saves the PM's edit to a custom field's name or value. An emptied value is stored as null. */
+export async function updateCustomField(
+  projectId: string,
+  id: string,
+  changes: { name?: string; value?: string | null },
+) {
+  const field = await prisma.projectCustomField.findFirst({ where: { id, projectId } });
+  if (!field) throw notFound('Custom field not found');
+  const name = changes.name?.trim();
+  if (changes.name !== undefined && !name) throw badRequest('A custom field needs a name');
+  return prisma.projectCustomField.update({
+    where: { id },
     data: {
-      projectId: params.projectId,
-      name: params.name,
-      value: params.value,
-      useIn: params.useIn ?? 'BOTH',
+      ...(name ? { name } : {}),
+      ...(changes.value !== undefined ? { value: changes.value?.trim() || null } : {}),
     },
   });
 }

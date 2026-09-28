@@ -139,7 +139,8 @@ export const adminApi = {
 export const projectApi = {
   create: (body: {
     name: string;
-    type: ProjectType;
+    /** One of `PROJECT_CATEGORIES`; the server derives the delivery family from it. */
+    category: string;
     programId?: string | null;
     customer?: string;
     targetStart?: string;
@@ -154,8 +155,11 @@ export const projectApi = {
       customer?: string;
       targetLabel?: string;
       programId?: string | null;
-      /** Changing it changes which input schema and which document catalog apply. */
-      type?: ProjectType;
+      /**
+       * The project type. Changing it can change the delivery family, and with it which input
+       * schema and document catalog apply.
+       */
+      category?: string;
       /** null = "not decided yet", which is what asks the analysis to recommend a model. */
       preferredApproach?: string | null;
     },
@@ -188,8 +192,10 @@ export const inputApi = {
       `/projects/${projectId}/input/customer-suggestion`,
       { action, ...(value ? { value } : {}) },
     ),
-  addCustomField: (projectId: string, body: { name: string; value?: string; useIn?: string }) =>
+  addCustomField: (projectId: string, body: { name: string; value?: string }) =>
     api.post(`/projects/${projectId}/custom-fields`, body),
+  updateCustomField: (projectId: string, id: string, body: { name?: string; value?: string | null }) =>
+    api.patch(`/projects/${projectId}/custom-fields/${id}`, body),
   removeCustomField: (projectId: string, id: string) => api.delete(`/projects/${projectId}/custom-fields/${id}`),
   /** Marks an action resolved. It stays on the list, green, until it is closed. */
   resolveAction: (projectId: string, actionId: string, value: string) =>

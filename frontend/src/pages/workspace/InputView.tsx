@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from 'react';
+﻿import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type RefObject } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { inputApi, projectApi, rulesApi } from '../../api/endpoints';
 import { ApiError } from '../../api/client';
@@ -6,18 +6,12 @@ import { useToast } from '../../components/Toast';
 import { useDebouncedCallback } from '../../hooks/useDebouncedCallback';
 import { useProjectWrite } from '../../hooks/useProjectWrite';
 import { CustomerConfirmBanner } from './CustomerConfirmBanner';
-import { describeCustomerStandard, type InputField, type ProjectType } from '../../api/types';
+import { describeCustomerStandard, type InputField } from '../../api/types';
+import { categoryLabel, PROJECT_CATEGORIES } from '../../api/project-categories';
 import type { WorkspaceView } from '../WorkspacePage';
 
 /** One wording for every disabled control, so a reader is told why rather than left guessing. */
 const READ_ONLY_HINT = 'You have view-only access to this project';
-
-/** Seeded from the Create Project dialog; changing it here changes which document catalog applies. */
-const PROJECT_TYPES: { value: ProjectType; label: string }[] = [
-  { value: 'SI', label: 'SI — System Integration' },
-  { value: 'SM', label: 'SM — Service Management' },
-  { value: 'PRODUCT', label: 'Product' },
-];
 
 /**
  * The models the PM can declare up front. Mirrors `DEFAULT_GOVERNANCE_MODELS` on the server — the
@@ -161,9 +155,34 @@ export function InputView({
       }),
   });
 
+  /**
+   * The row being added. "+ Add custom field" opens it on the screen — name and value boxes, no
+   * browser prompt — and it is saved as one field once it has a name.
+   */
+  const [newField, setNewField] = useState<{ name: string; value: string } | null>(null);
+  const newFieldNameRef = useRef<HTMLInputElement>(null);
+
   const addField = useMutation({
-    mutationFn: (name: string) => inputApi.addCustomField(projectId, { name, useIn: 'BOTH' }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['input', projectId] }),
+    mutationFn: (field: { name: string; value: string }) =>
+      inputApi.addCustomField(projectId, { name: field.name, value: field.value || undefined }),
+    onSuccess: () => {
+      setNewField(null);
+      setSavedAt(new Date());
+      return queryClient.invalidateQueries({ queryKey: ['input', projectId] });
+    },
+    onError: (error) =>
+      notify({ title: 'Could not add the field', detail: error instanceof ApiError ? error.message : 'Unexpected error' }),
+  });
+
+  const updateField = useMutation({
+    mutationFn: ({ id, changes }: { id: string; changes: { name?: string; value?: string | null } }) =>
+      inputApi.updateCustomField(projectId, id, changes),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['input', projectId] });
+      setSavedAt(new Date());
+    },
+    onError: (error) =>
+      notify({ title: 'Could not save the field', detail: error instanceof ApiError ? error.message : 'Unexpected error' }),
   });
 
   const removeField = useMutation({
@@ -201,24 +220,29 @@ export function InputView({
   });
 
   /**
-   * Saves a project-level answer. Changing the type re-reads the whole input schema and the
-   * document catalog, so the input profile is invalidated alongside the workspace.
+   * Saves a project-level answer. Changing the project type can move it to another delivery family,
+   * which re-reads the whole input schema and the document catalog — so the input profile is
+   * invalidated alongside the workspace, and the notice says which of the two happened.
    */
   const setProjectField = useMutation({
-    mutationFn: (patch: { type?: ProjectType; preferredApproach?: string | null }) =>
+    mutationFn: (patch: { category?: string; preferredApproach?: string | null }) =>
       projectApi.update(projectId, patch),
-    onSuccess: async (_result, patch) => {
+    onSuccess: async (result, patch) => {
+      const previousFamily = workspace.data?.type;
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['workspace', projectId] }),
         queryClient.invalidateQueries({ queryKey: ['input', projectId] }),
         queryClient.invalidateQueries({ queryKey: ['studio', projectId] }),
-        // Changing the type swaps the whole document catalog, so Document progress changes with it.
+        // A new family swaps the whole document catalog, so Document progress changes with it.
         refreshDashboard(),
       ]);
-      if (patch.type) {
+      if (patch.category) {
         notify({
-          title: 'Project type changed',
-          detail: 'The input form and the document catalog for this project changed with it.',
+          title: `Project type: ${patch.category}`,
+          detail:
+            result.type !== previousFamily
+              ? 'This type plans with a different document catalog, so the planning documents for this project changed with it.'
+              : 'The AI reads the new type from the next analysis; the document catalog is the same.',
         });
       }
     },
@@ -305,6 +329,8 @@ export function InputView({
    * specified" leaves it blank rather than claiming a contract nobody named.
    */
   const contractField = data.fields.find((field) => field.key === 'contractType');
+  /** A headcount, saved like contract type — as an ordinary input the analysis reads as verified. */
+  const teamSizeField = data.fields.find((field) => field.key === 'teamSize');
 
   const requiredState: RequiredState = {
     name: Boolean(nameField && valueOf(nameField).trim()),
@@ -572,13 +598,22 @@ export function InputView({
             <label>
               Project type *
               <select
-                value={workspace.data?.type ?? ''}
+                value={workspace.data?.category ?? ''}
                 disabled={!canWrite}
-                onChange={(event) => setProjectField.mutate({ type: event.target.value as ProjectType })}
+                onChange={(event) => event.target.value && setProjectField.mutate({ category: event.target.value })}
               >
-                {PROJECT_TYPES.map((option) => (
+                {/*
+                  A project from before these types existed may have none. It is named by its earlier
+                  type, and not selectable: that type is no longer one a PM can pick.
+                */}
+                {!workspace.data?.category && workspace.data && (
+                  <option value="" disabled>
+                    {categoryLabel(workspace.data)} (earlier type) — pick one
+                  </option>
+                )}
+                {PROJECT_CATEGORIES.map((option) => (
                   <option key={option.value} value={option.value}>
-                    {option.label}
+                    {option.value}
                   </option>
                 ))}
               </select>
@@ -619,6 +654,21 @@ export function InputView({
                 </select>
               </label>
             )}
+            {teamSizeField && (
+              <label>
+                {teamSizeField.label}
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  inputMode="numeric"
+                  placeholder="People on the team"
+                  value={valueOf(teamSizeField)}
+                  disabled={!canWrite}
+                  onChange={(event) => change(teamSizeField, event.target.value.replace(/[^\d]/g, ''))}
+                />
+              </label>
+            )}
           </div>
 
 
@@ -627,7 +677,7 @@ export function InputView({
               <span>+</span>
               <div>
                 <h2>Custom context</h2>
-                <p>Add only signals that affect a rule or generated section</p>
+                <p>Facts the form has no field for — the analysis, assessment, documents and agent all read them</p>
               </div>
             </div>
             <button
@@ -636,8 +686,9 @@ export function InputView({
               disabled={!canWrite}
               title={canWrite ? undefined : READ_ONLY_HINT}
               onClick={() => {
-                const name = window.prompt('Field name', 'Release blackout');
-                if (name) addField.mutate(name);
+                // A second click goes back to the row already open rather than stacking empty ones.
+                if (!newField) setNewField({ name: '', value: '' });
+                setTimeout(() => newFieldNameRef.current?.focus(), 0);
               }}
             >
               + Add custom field
@@ -645,35 +696,34 @@ export function InputView({
           </div>
 
           <div className="custom-fields">
+            {data.customFields.length === 0 && !newField && (
+              <p className="custom-fields-empty">
+                No custom context yet. Add a fact the form has no field for — the analysis, the assessment, document
+                drafting and the planning agent all read it.
+              </p>
+            )}
             {data.customFields.map((field) => (
-              <div key={field.id}>
-                <label>
-                  Field name
-                  <input defaultValue={field.name} readOnly />
-                </label>
-                <label>
-                  Value
-                  <input defaultValue={field.value ?? ''} readOnly />
-                </label>
-                <label>
-                  Use in
-                  <select defaultValue={field.useIn} disabled>
-                    <option value="RULES">Risk &amp; schedule rules</option>
-                    <option value="DOCUMENT">Document content only</option>
-                    <option value="BOTH">Both</option>
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  className="remove-field"
-                  disabled={!canWrite}
-                  title={canWrite ? undefined : READ_ONLY_HINT}
-                  onClick={() => removeField.mutate(field.id)}
-                >
-                  ×
-                </button>
-              </div>
+              <CustomFieldRow
+                key={field.id}
+                field={field}
+                canWrite={canWrite}
+                onSave={(changes) => updateField.mutate({ id: field.id, changes })}
+                onRemove={() => removeField.mutate(field.id)}
+              />
             ))}
+            {newField && (
+              <NewCustomFieldRow
+                draft={newField}
+                nameRef={newFieldNameRef}
+                saving={addField.isPending}
+                onChange={setNewField}
+                onSave={() => {
+                  const name = newField.name.trim();
+                  if (name && !addField.isPending) addField.mutate({ name, value: newField.value.trim() });
+                }}
+                onCancel={() => setNewField(null)}
+              />
+            )}
           </div>
 
           <div className="form-actions">
@@ -739,5 +789,162 @@ export function InputView({
       </div>
 
     </section>
+  );
+}
+
+/**
+ * The row "+ Add custom field" opens: the same two boxes as a saved field, typed into in place.
+ *
+ * It is saved once it has a name — on Enter, on *Add*, or when focus leaves the row altogether, so a
+ * PM who types a fact and clicks elsewhere does not lose it. Leaving with no name keeps the row
+ * open rather than saving a field nobody named; Escape or × discards it.
+ */
+function NewCustomFieldRow({
+  draft,
+  nameRef,
+  saving,
+  onChange,
+  onSave,
+  onCancel,
+}: {
+  draft: { name: string; value: string };
+  nameRef: RefObject<HTMLInputElement>;
+  saving: boolean;
+  onChange: (draft: { name: string; value: string }) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const keys = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault(); // Enter adds the field rather than submitting the surrounding form
+      onSave();
+    } else if (event.key === 'Escape') {
+      onCancel();
+    }
+  };
+
+  return (
+    <div
+      className="custom-field-new"
+      onBlur={(event) => {
+        // Focus moving between the row's own boxes and buttons is not leaving it.
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null) && draft.name.trim()) onSave();
+      }}
+    >
+      <label>
+        Field name
+        <input
+          ref={nameRef}
+          value={draft.name}
+          placeholder="e.g. Release blackout"
+          maxLength={120}
+          onChange={(event) => onChange({ ...draft, name: event.target.value })}
+          onKeyDown={keys}
+        />
+      </label>
+      <label>
+        Value
+        <input
+          value={draft.value}
+          placeholder="e.g. No production deployments 15–31 December"
+          maxLength={4000}
+          onChange={(event) => onChange({ ...draft, value: event.target.value })}
+          onKeyDown={keys}
+        />
+      </label>
+      <div className="custom-field-new-actions">
+        <button type="button" className="primary small" disabled={!draft.name.trim() || saving} onClick={onSave}>
+          {saving ? 'Adding…' : 'Add'}
+        </button>
+        <button type="button" className="remove-field" title="Discard this field" onClick={onCancel}>
+          ×
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One custom-context field. Typed into freely and saved when the PM leaves the box (or presses
+ * Enter) — only when something actually changed, so tabbing through does not write the row again.
+ * The inputs used to be `readOnly` with no route to save to, which is why nothing could be typed.
+ */
+function CustomFieldRow({
+  field,
+  canWrite,
+  onSave,
+  onRemove,
+}: {
+  field: { id: string; name: string; value: string | null };
+  canWrite: boolean;
+  onSave: (changes: { name?: string; value?: string | null }) => void;
+  onRemove: () => void;
+}) {
+  const [name, setName] = useState(field.name);
+  const [value, setValue] = useState(field.value ?? '');
+
+  // A refetch after someone else's save brings the stored text back in.
+  useEffect(() => setName(field.name), [field.name]);
+  useEffect(() => setValue(field.value ?? ''), [field.value]);
+
+  // Both read the box itself, not state: a blur that lands in the same tick as the last keystroke
+  // (paste then Tab, autofill) would otherwise save the text from before it.
+  const saveName = (event: FocusEvent<HTMLInputElement>) => {
+    const next = event.currentTarget.value.trim();
+    if (!next) {
+      setName(field.name); // a field must keep a name; an emptied box reverts
+      return;
+    }
+    if (next !== field.name) onSave({ name: next });
+  };
+  const saveValue = (event: FocusEvent<HTMLInputElement>) => {
+    const next = event.currentTarget.value.trim();
+    if (next !== (field.value ?? '')) onSave({ value: next || null });
+  };
+  // Enter saves rather than submitting the surrounding form.
+  const enterSaves = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      event.currentTarget.blur();
+    }
+  };
+
+  return (
+    <div>
+      <label>
+        Field name
+        <input
+          value={name}
+          readOnly={!canWrite}
+          title={canWrite ? undefined : READ_ONLY_HINT}
+          maxLength={120}
+          onChange={(event) => setName(event.target.value)}
+          onBlur={saveName}
+          onKeyDown={enterSaves}
+        />
+      </label>
+      <label>
+        Value
+        <input
+          value={value}
+          readOnly={!canWrite}
+          title={canWrite ? undefined : READ_ONLY_HINT}
+          placeholder={canWrite ? 'e.g. No production deployments 15–31 December' : undefined}
+          maxLength={4000}
+          onChange={(event) => setValue(event.target.value)}
+          onBlur={saveValue}
+          onKeyDown={enterSaves}
+        />
+      </label>
+      <button
+        type="button"
+        className="remove-field"
+        disabled={!canWrite}
+        title={canWrite ? 'Remove this field' : READ_ONLY_HINT}
+        onClick={onRemove}
+      >
+        ×
+      </button>
+    </div>
   );
 }

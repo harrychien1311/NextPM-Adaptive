@@ -11,6 +11,7 @@ import { prisma } from '../../lib/prisma';
 import { conflict, forbidden, notFound } from '../../lib/http-error';
 import { slugify } from '../../lib/slug';
 import { INPUT_SCHEMAS } from '../../data/input-schemas';
+import { familyForCategory, type ProjectCategory } from '../../data/project-categories';
 import { computeInputReadiness } from '../../lib/readiness';
 import { checklistScoreForProject } from '../checklist/checklist.service';
 import { fptStandardScore, missingDocumentNames } from '../assessment/assessment.service';
@@ -259,6 +260,7 @@ export async function programOverview(user: { id: string; role: Role }) {
         id: project.id,
         name: project.name,
         type: project.type,
+        category: project.category,
         status: project.status,
         summary: project.summary,
         customer: project.customer,
@@ -363,13 +365,15 @@ export async function programOverview(user: { id: string; role: Role }) {
 export async function createProject(params: {
   programId?: string | null;
   name: string;
-  type: ProjectType;
+  category: ProjectCategory;
   customer?: string;
   targetStart?: string;
   targetEnd?: string;
   ownerId: string;
 }) {
-  const definitions = await prisma.inputFieldDefinition.findMany({ where: { projectType: params.type } });
+  // The delivery family follows from the category: it picks the input schema and document catalog.
+  const type = familyForCategory(params.category);
+  const definitions = await prisma.inputFieldDefinition.findMany({ where: { projectType: type } });
 
   // The name the PM typed in the create dialog is the same fact the form's first field asks for,
   // so seed it rather than making them type it twice. It counts as PM input, not a suggestion.
@@ -380,11 +384,12 @@ export async function createProject(params: {
       programId: params.programId || null,
       ownerId: params.ownerId,
       name: params.name,
-      type: params.type,
+      type,
+      category: params.category,
       status: ProjectStatus.DRAFT,
       customer: params.customer,
-      summary: `${params.type} workspace · Planning setup not started`,
-      phaseLabel: `${params.type} · INITIATING`,
+      summary: `${params.category} workspace · Planning setup not started`,
+      phaseLabel: `${params.category} · INITIATING`,
       targetStart: params.targetStart ? new Date(params.targetStart) : null,
       targetEnd: params.targetEnd ? new Date(params.targetEnd) : null,
       members: { create: { userId: params.ownerId, role: ProjectRole.OWNER } },
@@ -431,8 +436,8 @@ export async function createProject(params: {
     projectId: project.id,
     actorId: params.ownerId,
     type: 'PROJECT_CREATED',
-    title: `${params.type} workspace created`,
-    detail: `${INPUT_SCHEMAS[params.type].length} input fields provisioned from the ${params.type} schema`,
+    title: `${params.category} workspace created`,
+    detail: `${INPUT_SCHEMAS[type].length} input fields provisioned from the ${type} schema`,
   });
 
   return project;
@@ -458,6 +463,8 @@ export async function projectWorkspace(projectId: string) {
     id: project.id,
     name: project.name,
     type: project.type,
+    /** The project type as the PM picked it; `type` is the delivery family it plans with. */
+    category: project.category,
     status: project.status,
     /**
      * The field the customer reference library matches on. Omitting it here was a real defect:

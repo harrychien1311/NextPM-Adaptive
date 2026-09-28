@@ -190,6 +190,8 @@ async function main() {
         ownerId: users[seed.members[0]],
         name: seed.name,
         type: seed.type,
+        // The same category the migration gives an existing project of this family; PRODUCT has none.
+        category: seed.type === ProjectType.SI ? 'Development' : seed.type === ProjectType.SM ? 'AMS / O&M' : null,
         status: seed.status,
         summary: seed.summary,
         targetLabel: seed.targetLabel,

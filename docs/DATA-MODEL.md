@@ -34,7 +34,7 @@ Three fields on `Project` carry more weight than their size suggests:
 | --- | --- |
 | `InputFieldDefinition` | the schema of the minimum profile, per `ProjectType`; `signalKey` is what the prompts read |
 | `ProjectInputValue` | one answer per project × definition, with `source` and `verified` |
-| `ProjectCustomField` | extra PM signals, routed to the analysis, documents or both |
+| `ProjectCustomField` | custom context — a named fact the PM adds; read by every model call as a PM-written input (`useIn` is a retired column, left at its default) |
 | `ReferenceFile` | uploads with `status` and a JSON `extraction` holding the text read on upload |
 
 The `source` enum is what keeps file data honest: `PM_INPUT`, `FILE_REFERENCE`, `AI_SUGGESTED`.

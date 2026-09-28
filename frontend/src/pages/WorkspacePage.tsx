@@ -18,6 +18,7 @@ import { FloatingAgentButton } from './workspace/FloatingAgentButton';
 import { TeamModal } from './workspace/TeamModal';
 import { SignOutIcon } from '../components/icons';
 import { TutorialButton } from '../components/Tutorial';
+import { categoryBadge, categoryLabel } from '../api/project-categories';
 
 /**
  * The planning flow is five steps: Project Input, Planning Assessment, Planning Documents, then —
@@ -132,7 +133,10 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
             <strong>{project.program?.name ?? 'Standalone'}</strong>
           </div>
           <div className="workspace-identity">
-            <span className={`project-type ${typeClass}`}>{project.type}</span>
+            {/* The badge names the project type; its colour is the delivery family it plans with. */}
+            <span className={`project-type ${typeClass}`} title={categoryLabel(project)}>
+              {categoryBadge(project)}
+            </span>
             <div>
               <strong>{project.name}</strong>
               <small>Project workspace</small>

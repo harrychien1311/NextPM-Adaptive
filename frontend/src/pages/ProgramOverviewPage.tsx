@@ -2,7 +2,8 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { planChangeApi, programApi, projectApi } from '../api/endpoints';
-import type { ProgramGroup, ProjectCard, ProjectStatus, ProjectType } from '../api/types';
+import type { ProgramGroup, ProjectCard, ProjectStatus } from '../api/types';
+import { categoryLabel, PROJECT_CATEGORIES } from '../api/project-categories';
 import { useAuth } from '../store/auth';
 import { useToast } from '../components/Toast';
 import { Backdrop, ModalShell } from '../components/Modal';
@@ -19,7 +20,6 @@ const STATUS_META: Record<string, { label: string }> = {
   CLOSED: { label: 'Closed' },
 };
 
-const TYPE_LABEL: Record<ProjectType, string> = { SI: 'SI', SM: 'SM', PRODUCT: 'Product' };
 const HEALTH_LABEL: Record<string, { label: string }> = {
   good: { label: 'On track' },
   watch: { label: 'Watch' },
@@ -111,7 +111,7 @@ export function ProgramOverviewPage() {
    */
   const visible = useMemo(() => {
     const matchesFilters = (project: ProjectCard) =>
-      (!typeFilter || project.type === typeFilter) &&
+      (!typeFilter || categoryLabel(project) === typeFilter) &&
       (!approachFilter || (project.approach ?? NO_APPROACH) === approachFilter);
     return groups
       .filter((group) => !programFilter || group.key === programFilter)
@@ -129,6 +129,17 @@ export function ProgramOverviewPage() {
   }, [groups, programFilter, typeFilter, approachFilter, query, filtering]);
 
   const shown = visible.reduce((sum, group) => sum + group.projects.length, 0);
+  /**
+   * The six project types, then any earlier type still on the board (an older Product project that
+   * has not been given one), so every row can be filtered to.
+   */
+  const typeOptions = useMemo(() => {
+    const current = PROJECT_CATEGORIES.map((entry) => entry.value);
+    const earlier = [...new Set(allProjects.map((project) => categoryLabel(project)))].filter(
+      (label) => !current.includes(label),
+    );
+    return [...current, ...earlier];
+  }, [allProjects]);
   const approachOptions = useMemo(
     () => [...new Set(allProjects.map((project) => project.approach ?? NO_APPROACH))].sort(),
     [allProjects],
@@ -141,13 +152,13 @@ export function ProgramOverviewPage() {
   };
 
   const createProject = useMutation({
-    mutationFn: (body: { name: string; type: ProjectType; programId: string | null; customer: string; targetStart: string }) =>
+    mutationFn: (body: { name: string; category: string; programId: string | null; customer: string; targetStart: string }) =>
       projectApi.create(body),
     onSuccess: (workspace) => {
       queryClient.invalidateQueries({ queryKey: ['overview'] });
       notify({
         title: 'Project workspace created',
-        detail: `${workspace.type} input profile and planning templates are ready — you own this project.`,
+        detail: `${categoryLabel(workspace)} input profile and planning templates are ready — you own this project.`,
       });
       setOpenModal(null);
       // Straight to Project Input: a project one second old has nothing to show on a dashboard,
@@ -344,9 +355,11 @@ export function ProgramOverviewPage() {
               <span>Project type</span>
               <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
                 <option value="">All types</option>
-                <option value="SI">SI</option>
-                <option value="SM">SM</option>
-                <option value="PRODUCT">Product</option>
+                {typeOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
               </select>
             </label>
             <label className="pc-field">
@@ -458,7 +471,7 @@ export function ProgramOverviewPage() {
                               <Highlight text={project.name} query={query} />
                               {!isProgram && <span className="pc-chip standalone">Standalone</span>}
                             </td>
-                            <td>{TYPE_LABEL[project.type]}</td>
+                            <td>{categoryLabel(project)}</td>
                             <td>
                               <Highlight text={project.customer || '—'} query={query} />
                             </td>
@@ -801,12 +814,12 @@ function CreateProjectModal({
   programs: { id: string; name: string }[];
   busy: boolean;
   onClose: () => void;
-  onSubmit: (body: { name: string; type: ProjectType; programId: string | null; customer: string; targetStart: string }) => void;
+  onSubmit: (body: { name: string; category: string; programId: string | null; customer: string; targetStart: string }) => void;
 }) {
   // Empty for the same reason as Customer below: a prefilled field is one nobody edits, and the
   // project's name is its identity everywhere else in the app.
   const [name, setName] = useState('');
-  const [type, setType] = useState<ProjectType>('SI');
+  const [category, setCategory] = useState<string>(PROJECT_CATEGORIES[0].value);
   const [programId, setProgramId] = useState<string>('');
   /**
    * Empty, with only a placeholder to suggest the shape of an answer.
@@ -820,12 +833,6 @@ function CreateProjectModal({
   const [customer, setCustomer] = useState('');
   const [targetStart, setTargetStart] = useState('2026-10-01');
 
-  const TYPES: { key: ProjectType; badge: string; title: string; hint: string }[] = [
-    { key: 'SI', badge: 'SI', title: 'System Integration', hint: 'Build, integrate, test and hand over' },
-    { key: 'SM', badge: 'SM', title: 'Service Management', hint: 'Transition, operate and meet SLA' },
-    { key: 'PRODUCT', badge: 'P', title: 'Product Development', hint: 'Discover, iterate and release' },
-  ];
-
   return (
     <ModalShell open={open} className="create-project-modal">
       <div className="modal-head">
@@ -838,7 +845,7 @@ function CreateProjectModal({
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          onSubmit({ name: name.trim(), type, programId: programId || null, customer: customer.trim(), targetStart });
+          onSubmit({ name: name.trim(), category, programId: programId || null, customer: customer.trim(), targetStart });
         }}
       >
         <label>
@@ -852,16 +859,16 @@ function CreateProjectModal({
         </label>
         <label>
           Project type *
-          <div className="type-selector">
-            {TYPES.map((option) => (
+          <div className="type-selector category-selector">
+            {PROJECT_CATEGORIES.map((option) => (
               <button
                 type="button"
-                key={option.key}
-                className={type === option.key ? 'selected' : ''}
-                onClick={() => setType(option.key)}
+                key={option.value}
+                className={category === option.value ? 'selected' : ''}
+                onClick={() => setCategory(option.value)}
               >
                 <span>{option.badge}</span>
-                <b>{option.title}</b>
+                <b>{option.value}</b>
                 <small>{option.hint}</small>
               </button>
             ))}

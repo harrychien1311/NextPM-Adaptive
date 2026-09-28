@@ -70,7 +70,10 @@ export interface ProgramSummary {
 export interface ProjectCard {
   id: string;
   name: string;
+  /** The delivery family — which input schema and document catalog apply. */
   type: ProjectType;
+  /** The project type the PM picked (`api/project-categories.ts`); null only on older PRODUCT projects. */
+  category: string | null;
   status: ProjectStatus;
   summary: string | null;
   customer: string | null;
@@ -128,7 +131,10 @@ export interface ProgramOverview {
 export interface Workspace {
   id: string;
   name: string;
+  /** The delivery family — which input schema and document catalog apply. */
   type: ProjectType;
+  /** The project type the PM picked (`api/project-categories.ts`); null only on older PRODUCT projects. */
+  category: string | null;
   status: ProjectStatus;
   /** What the customer reference library matches on — free text, set only by the PM. */
   customer: string | null;
@@ -428,7 +434,7 @@ export interface InputProfile {
   fields: InputField[];
   readiness: number;
   counters: { total: number; pmInput: number; fileReference: number; missing: number; verified: number };
-  customFields: { id: string; name: string; value: string | null; useIn: string }[];
+  customFields: { id: string; name: string; value: string | null }[];
   referenceGroups: {
     group: string;
     glyph: string;

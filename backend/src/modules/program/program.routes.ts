@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { ProjectRole, ProjectStatus, ProjectType, Role } from '@prisma/client';
+import { ProjectRole, ProjectStatus, Role } from '@prisma/client';
 import { asyncHandler } from '../../lib/async-handler';
+import { familyForCategory, PROJECT_CATEGORY_VALUES } from '../../data/project-categories';
 import { parse } from '../../lib/validate';
 import {
   PROJECT_CREATOR_ROLES,
@@ -86,7 +87,8 @@ projectRouter.post(
     const body = parse(
       z.object({
         name: z.string().min(2),
-        type: z.nativeEnum(ProjectType),
+        // The PM picks a category; the delivery family (`type`) follows from it in the service.
+        category: z.enum(PROJECT_CATEGORY_VALUES),
         programId: z.string().uuid().nullish(),
         customer: z.string().optional(),
         targetStart: z.string().optional(),
@@ -126,8 +128,12 @@ projectRouter.patch(
         customer: z.string().optional(),
         targetLabel: z.string().optional(),
         programId: z.string().uuid().nullish(),
-        /** Project Input writes both of these: the type drives the catalog, the approach the analysis mode. */
-        type: z.nativeEnum(ProjectType).optional(),
+        /**
+         * Project Input writes both of these: the category sets the delivery family, which drives the
+         * catalog; the approach sets the analysis mode. `type` is no longer accepted on its own — a
+         * family written without its category would leave the two disagreeing.
+         */
+        category: z.enum(PROJECT_CATEGORY_VALUES).optional(),
         // Empty string means "I have not decided" and must reach the database as null, since null
         // is what puts the analysis into recommend mode.
         preferredApproach: z
@@ -138,9 +144,10 @@ projectRouter.patch(
       }),
       req.body,
     );
-    const { programId, ...rest } = body;
+    const { programId, category, ...rest } = body;
     await updateProject(req.params.projectId, {
       ...rest,
+      ...(category ? { category, type: familyForCategory(category) } : {}),
       ...(programId === undefined ? {} : { program: programId ? { connect: { id: programId } } : { disconnect: true } }),
     });
     res.json(await projectWorkspace(req.params.projectId));

@@ -21,6 +21,7 @@
  */
 import { ActionPriority, DocumentStatus, ManagementDomain, type ProjectType } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
+import { pmContextInputs } from '../../lib/custom-context';
 import { badRequest, notFound } from '../../lib/http-error';
 import {
   ACTIONABLE_CATEGORIES,
@@ -117,7 +118,7 @@ async function loadContext(projectId: string): Promise<ProjectContext> {
   });
   if (!project) throw notFound('Project not found');
 
-  const [values, uploads, planningDocuments, decision, catalog] = await Promise.all([
+  const [values, uploads, planningDocuments, decision, catalog, customContext] = await Promise.all([
     // Verified values only: invariant 1 — an unverified AI suggestion is a candidate, not a fact.
     prisma.projectInputValue.findMany({ where: { projectId, verified: true }, include: { definition: true } }),
     prisma.referenceFile.findMany({ where: { projectId, supersededAt: null }, orderBy: { uploadedAt: 'asc' } }),
@@ -129,15 +130,19 @@ async function loadContext(projectId: string): Promise<ProjectContext> {
       where: { projectType: project.type, OR: [{ extended: false }, { documents: { some: { projectId } } }] },
       select: { name: true, domain: true },
     }),
+    pmContextInputs(projectId),
   ]);
 
   return {
     project: { id: project.id, name: project.name, type: project.type, customer: project.customer },
     projectManager: project.owner?.name ?? null,
     governanceModel: decision?.approach ?? null,
-    inputs: values
-      .filter((row) => row.value?.trim())
-      .map((row) => ({ label: row.definition.label, value: row.value!.trim() })),
+    inputs: [
+      ...values
+        .filter((row) => row.value?.trim())
+        .map((row) => ({ label: row.definition.label, value: row.value!.trim() })),
+      ...customContext,
+    ],
     documents: uploads
       .map((file) => {
         const extraction = file.extraction as { rawText?: string; textAvailable?: boolean } | null;

@@ -16,6 +16,7 @@ import {
   registerDescriptionDocument,
   registerReference,
   removeCustomField,
+  updateCustomField,
   removeReference,
   resolveAction,
   closeAction,
@@ -118,13 +119,27 @@ inputRouter.post(
   asyncHandler(async (req, res) => {
     const body = parse(
       z.object({
-        name: z.string().min(1),
+        name: z.string().trim().min(1),
         value: z.string().optional(),
-        useIn: z.enum(['RULES', 'DOCUMENT', 'BOTH']).optional(),
       }),
       req.body,
     );
     res.status(201).json(await addCustomField({ projectId: req.params.projectId, ...body }));
+  }),
+);
+
+inputRouter.patch(
+  '/:projectId/custom-fields/:id',
+  requireProjectRole(...PROJECT_WRITE_ROLES),
+  asyncHandler(async (req, res) => {
+    const body = parse(
+      z.object({
+        name: z.string().max(120).optional(),
+        value: z.string().max(4000).nullable().optional(),
+      }),
+      req.body,
+    );
+    res.json(await updateCustomField(req.params.projectId, req.params.id, body));
   }),
 );
 

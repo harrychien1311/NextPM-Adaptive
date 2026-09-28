@@ -1,5 +1,6 @@
 import { DecisionOutcome, Prisma, ProjectType } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
+import { pmContextInputs } from '../../lib/custom-context';
 import { badRequest, notFound } from '../../lib/http-error';
 import { analyzePlanningNeeds, normalizeEvidence, recommendGovernanceModel } from '../ai/provider';
 import { DEFAULT_GOVERNANCE_MODELS, governanceModelMeta } from '../../data/governance-models';
@@ -24,18 +25,22 @@ async function loadRecommendationContext(projectId: string) {
   const project = await prisma.project.findUnique({ where: { id: projectId } });
   if (!project) throw notFound('Project not found');
 
-  const [definitions, values, descriptionFile] = await Promise.all([
+  const [definitions, values, descriptionFile, customContext] = await Promise.all([
     prisma.inputFieldDefinition.findMany({ where: { projectType: project.type } }),
     prisma.projectInputValue.findMany({ where: { projectId }, include: { definition: true } }),
     prisma.referenceFile.findFirst({
       where: { projectId, group: 'DESCRIPTION', supersededAt: null },
       orderBy: { uploadedAt: 'desc' },
     }),
+    pmContextInputs(projectId),
   ]);
 
-  const verifiedInputs = values
-    .filter((value) => value.verified && value.value)
-    .map((value) => ({ label: value.definition.label, value: value.value! }));
+  const verifiedInputs = [
+    ...values
+      .filter((value) => value.verified && value.value)
+      .map((value) => ({ label: value.definition.label, value: value.value! })),
+    ...customContext,
+  ];
 
   const fields: CandidateField[] = definitions.map((definition) => ({
     fieldKey: definition.signalKey ?? definition.key,
@@ -133,13 +138,14 @@ export async function runPlanningAnalysis(projectId: string, actorId: string) {
   const project = await prisma.project.findUnique({ where: { id: projectId } });
   if (!project) throw notFound('Project not found');
 
-  const [values, references, definitions] = await Promise.all([
+  const [values, references, definitions, customContext] = await Promise.all([
     prisma.projectInputValue.findMany({ where: { projectId }, include: { definition: true } }),
     // Current uploads only. A superseded version is kept so a plan change can compare against it,
     // but feeding both versions to this call would have the model report the difference between
     // them as a contradiction inside the project — which is exactly what it is not.
     prisma.referenceFile.findMany({ where: { projectId, supersededAt: null }, orderBy: { uploadedAt: 'asc' } }),
     prisma.documentDefinition.findMany({ where: { projectType: project.type }, orderBy: { name: 'asc' } }),
+    pmContextInputs(projectId),
   ]);
 
   // Every upload, not only the description document: a contradiction between two files is exactly
@@ -162,9 +168,10 @@ export async function runPlanningAnalysis(projectId: string, actorId: string) {
   const analysis = await analyzePlanningNeeds({
     projectName: project.name,
     projectType: project.type,
-    inputs: values
-      .filter((value) => value.value)
-      .map((value) => ({ label: value.definition.label, value: value.value! })),
+    inputs: [
+      ...values.filter((value) => value.value).map((value) => ({ label: value.definition.label, value: value.value! })),
+      ...customContext,
+    ],
     documents,
     preferredApproach: project.preferredApproach,
     catalogDocuments: [...new Set(definitions.map((definition) => definition.name))],

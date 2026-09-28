@@ -1,5 +1,6 @@
 import { AgentRole } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
+import { pmContextInputs } from '../../lib/custom-context';
 import { forbidden, notFound } from '../../lib/http-error';
 import { answerAgentQuestion, type AgentTurn } from '../ai/provider';
 
@@ -58,7 +59,7 @@ export async function deleteSession(sessionId: string, projectId: string, userId
  * lookup, which can always pick the wrong passage.
  */
 async function projectContext(projectId: string, question: string) {
-  const [project, decision, evaluation, values, documents, actions] = await Promise.all([
+  const [project, decision, evaluation, values, documents, actions, customContext] = await Promise.all([
     prisma.project.findUnique({ where: { id: projectId }, include: { program: true } }),
     prisma.approachDecision.findFirst({ where: { projectId, active: true } }),
     prisma.aiApproachSuggestion.findFirst({ where: { projectId }, orderBy: { createdAt: 'desc' } }),
@@ -69,14 +70,18 @@ async function projectContext(projectId: string, question: string) {
       orderBy: { name: 'asc' },
     }),
     prisma.actionItem.findMany({ where: { projectId, status: 'OPEN' } }),
+    pmContextInputs(projectId),
   ]);
   if (!project) throw notFound('Project not found');
 
   const line = (label: string, value: unknown) => `- ${label}: ${value ?? '—'}`;
 
-  const inputs = values
-    .filter((value) => value.value)
-    .map((value) => `- ${value.definition.label}: ${value.value}${value.verified ? '' : '  (NOT YET VERIFIED)'}`);
+  const inputs = [
+    ...values
+      .filter((value) => value.value)
+      .map((value) => `- ${value.definition.label}: ${value.value}${value.verified ? '' : '  (NOT YET VERIFIED)'}`),
+    ...customContext.map((entry) => `- ${entry.label}: ${entry.value}`),
+  ];
 
   const docList = documents.map(
     (doc) => `- ${doc.name} — ${doc.status}${doc.status !== 'NOT_GENERATED' ? ` (v${doc.version})` : ''}`,

@@ -2018,8 +2018,13 @@ article.approach-option.is-locked:hover {
   question — what is this project, and how are we running it.
 */
 .profile-row {
-  /* Name, type, management approach, contract type. */
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  /* Name, type, management approach, contract type, team size — the name gets the most room. */
+  grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr)) minmax(0, 0.7fr);
+}
+@media (max-width: 1400px) {
+  .profile-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 @media (max-width: 1200px) {
   .profile-row {
@@ -4632,6 +4637,44 @@ article.approach-option.is-locked:hover {
   }
   .pc-meta {
     margin-left: 0;
+  }
+}
+
+/* Custom context rows: name, value, remove. The prototype's grid had a fourth column for "Use in",
+   which is gone; the value gets the width it freed, since it is the part the PM writes into. */
+.custom-fields {
+  display: grid;
+  gap: 12px;
+}
+.custom-fields > div {
+  grid-template-columns: 1fr 2.25fr 30px;
+}
+.custom-fields-empty {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+/* The row "+ Add custom field" opens: the same boxes, with Add and × where the saved rows have ×. */
+.custom-fields > .custom-field-new {
+  grid-template-columns: 1fr 2.25fr auto;
+  padding: 10px;
+  margin: 0 -10px;
+  border-radius: 9px;
+  background: #f4f9f8;
+  border: 1px dashed #b7dcd6;
+}
+.custom-field-new-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.custom-field-new-actions .primary.small {
+  padding: 9px 14px;
+}
+@media (max-width: 760px) {
+  .custom-fields > div,
+  .custom-fields > .custom-field-new {
+    grid-template-columns: 1fr;
   }
 }
 

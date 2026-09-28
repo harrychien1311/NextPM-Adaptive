@@ -166,8 +166,8 @@ const STEPS: TutorialStep[] = [
     title: 'Create Project',
     body: (
       <>
-        Press <b>+ Add project</b>. In the dialog, name the project, pick its type — SI, SM or Product — and name the
-        customer (SK AX, LGCNS, …).
+        Press <b>+ Add project</b>. In the dialog, name the project, pick its type — Development, Maintenance, AMS /
+        O&amp;M, IT Managed Services, BPO or Automotive (ASPICE) — and name the customer (SK AX, LGCNS, …).
       </>
     ),
     note: {
@@ -183,7 +183,7 @@ const STEPS: TutorialStep[] = [
         </label>
         <div className="tour-form-pair">
           <label>
-            Project type<span>SI ▾</span>
+            Project type<span>Development ▾</span>
           </label>
           <label>
             Customer<span>SK AX</span>

@@ -32,6 +32,20 @@ const CONTRACT_TYPE: FieldSeed = {
 };
 
 /**
+ * Team size, on the minimum profile beside contract type. A number of people, the same for every
+ * project type, and one of the things the methodology scoring leans on — SAFe is only ever right for
+ * multi-team work, and a team of three running full Scrum ceremonies is overhead. No default: an
+ * invented headcount would be scored as if the PM had said it.
+ */
+const TEAM_SIZE: FieldSeed = {
+  key: 'teamSize',
+  label: 'Team size',
+  fieldType: FieldType.NUMBER,
+  domain: ManagementDomain.RESOURCES,
+  signalKey: 'teamSize',
+};
+
+/**
  * "Minimum project profile" — the signals the AI scores a governance model from, per project type.
  * Mirrors `inputSchemas` in the approved prototype.
  */
@@ -55,6 +69,7 @@ export const INPUT_SCHEMAS: Record<ProjectType, FieldSeed[]> = {
     { key: 'externalApiOwner', label: 'External API owner', fieldType: FieldType.TEXT, domain: ManagementDomain.RISK, signalKey: 'externalApiOwner' },
     { key: 'budgetControlScope', label: 'Budget control scope', fieldType: FieldType.SELECT, options: ['PM owns', 'Track impact only'], domain: ManagementDomain.FINANCE, signalKey: 'budgetControlScope' },
     CONTRACT_TYPE,
+    TEAM_SIZE,
   ],
   SM: [
     { key: 'serviceName', label: 'Service name', fieldType: FieldType.TEXT, domain: ManagementDomain.GOVERNANCE, required: true, defaultValue: 'SK Manufacturing AMS' },
@@ -72,6 +87,7 @@ export const INPUT_SCHEMAS: Record<ProjectType, FieldSeed[]> = {
     { key: 'escalationSla', label: 'Escalation SLA', fieldType: FieldType.SELECT, options: ['2 days', '3 days', '5 days'], domain: ManagementDomain.GOVERNANCE, signalKey: 'escalationSla' },
     { key: 'budgetControlScope', label: 'Budget control scope', fieldType: FieldType.SELECT, options: ['PM owns', 'Track impact only'], domain: ManagementDomain.FINANCE, signalKey: 'budgetControlScope' },
     CONTRACT_TYPE,
+    TEAM_SIZE,
   ],
   PRODUCT: [
     { key: 'productName', label: 'Product name', fieldType: FieldType.TEXT, domain: ManagementDomain.GOVERNANCE, required: true, defaultValue: 'AI Quality Assistant' },
@@ -88,6 +104,7 @@ export const INPUT_SCHEMAS: Record<ProjectType, FieldSeed[]> = {
     { key: 'complianceNeed', label: 'Regulatory need', fieldType: FieldType.SELECT, options: ['Medium', 'High', 'Low'], domain: ManagementDomain.GOVERNANCE, signalKey: 'complianceNeed', defaultValue: 'Medium' },
     { key: 'budgetControlScope', label: 'Budget control scope', fieldType: FieldType.SELECT, options: ['PM owns', 'Track impact only'], domain: ManagementDomain.FINANCE, signalKey: 'budgetControlScope' },
     CONTRACT_TYPE,
+    TEAM_SIZE,
   ],
 };
 

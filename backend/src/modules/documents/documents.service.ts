@@ -16,6 +16,7 @@ import {
 import { DocumentStatus, ManagementDomain, Prisma } from '@prisma/client';
 import JSZip from 'jszip';
 import { prisma } from '../../lib/prisma';
+import { pmContextInputs } from '../../lib/custom-context';
 import { badRequest, conflict, notFound } from '../../lib/http-error';
 import {
   fillTemplatePlaceholders,
@@ -609,10 +610,13 @@ export async function generateDraft(params: { projectId: string; documentId: str
     : await prisma.aiApproachSuggestion.findFirst({ where: { projectId }, orderBy: { createdAt: 'desc' } });
   const reasons = ((evaluation?.reasons ?? []) as unknown as string[]) ?? [];
 
-  const verified = await prisma.projectInputValue.findMany({
-    where: { projectId, verified: true, NOT: { value: null } },
-    include: { definition: true },
-  });
+  const [verified, customContext] = await Promise.all([
+    prisma.projectInputValue.findMany({
+      where: { projectId, verified: true, NOT: { value: null } },
+      include: { definition: true },
+    }),
+    pmContextInputs(projectId),
+  ]);
 
   await prisma.planningDocument.update({ where: { id: documentId }, data: { status: DocumentStatus.GENERATING } });
 
@@ -625,6 +629,7 @@ export async function generateDraft(params: { projectId: string; documentId: str
 
   const verifiedInputs = [
     ...verified.map((value) => ({ label: value.definition.label, value: value.value! })),
+    ...customContext,
     ...confirmed,
   ];
 

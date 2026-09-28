@@ -289,6 +289,12 @@ model Project {
   /// scoring the project against the wrong checklist and filling another company's template, so
   /// this one is confirmed by a person.
   customerSuggestion Json?
+  /// The project type the PM picked — one of `PROJECT_CATEGORIES` (data/project-categories.ts):
+  /// Development, Maintenance, AMS / O&M, IT Managed Services, Business Process Outsourcing,
+  /// Automotive (ASPICE). `type` is set from it and stays the delivery family that picks the input
+  /// schema and document catalog. Null only on projects created before categories existed with a
+  /// type none of them maps back to (PRODUCT).
+  category    String?
   summary     String?
   phaseLabel  String?
   targetStart DateTime?

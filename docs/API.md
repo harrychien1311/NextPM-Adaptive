@@ -81,7 +81,8 @@ project against a checklist we fell back to would put a meaningless number in fr
 | GET | `/projects/:id/input` | fields, counters, custom fields, reference groups, description document, plus `customer` and any pending `customerSuggestion` |
 | PUT | `/projects/:id/input` | `{ values: [{ definitionId, value }] }` — saves as `PM_INPUT`, **verified on save** |
 | POST | `/projects/:id/input/customer-suggestion` | `{ action: "accept" \| "dismiss", value? }` — the PM's decision on the customer the analysis read from the documents. **Accepting is the only thing that writes `Project.customer`**, which is what makes that customer's checklist and templates apply; `value` lets the PM correct the proposed name first. Both write an `AuditEvent` |
-| POST | `/projects/:id/custom-fields` | `{ name, value?, useIn: RULES\|DOCUMENT\|BOTH }` |
+| POST | `/projects/:id/custom-fields` | `{ name, value? }` — custom context; every model call reads it as a PM-written input |
+| PATCH | `/projects/:id/custom-fields/:fieldId` | `{ name?, value? }` — an empty `value` is stored as null |
 | DELETE | `/projects/:id/custom-fields/:fieldId` | |
 | POST | `/projects/:id/actions/:actionId/resolve` | `{ value }` — writes the answer back into the input profile |
 | POST | `/projects/:id/references` | multipart: `file`, `group: COMMITMENT\|SCOPE\|ORGANIZATION\|SCHEDULE\|OTHER`. Max 2 readable files per group; **an upload first clears the group's unreadable files**, since a file whose text could not be extracted can never contribute anything |
