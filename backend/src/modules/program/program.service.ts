@@ -117,7 +117,7 @@ export async function deleteProject(projectId: string, user: { id: string; role:
  * `basis` reports which formula produced the number, and every screen prints it — a percentage
  * whose basis is unstated is one nobody can act on.
  */
-async function projectReadiness(projectId: string) {
+export async function projectReadiness(projectId: string) {
   const [values, documents, checklist, fptScore, neededNames] = await Promise.all([
     prisma.projectInputValue.findMany({ where: { projectId }, include: { definition: true } }),
     prisma.planningDocument.findMany({ where: { projectId } }),

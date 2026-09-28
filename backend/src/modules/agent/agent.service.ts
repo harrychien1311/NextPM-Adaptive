@@ -3,6 +3,9 @@ import { prisma } from '../../lib/prisma';
 import { pmContextInputs } from '../../lib/custom-context';
 import { forbidden, notFound } from '../../lib/http-error';
 import { answerAgentQuestion, type AgentTurn } from '../ai/provider';
+import { projectReadiness } from '../program/program.service';
+import { latestAssessment } from '../assessment/assessment.service';
+import { matchedChecklistForProject } from '../checklist/checklist.service';
 
 /** How many earlier turns to replay. Enough for a real follow-up, bounded so cost stays flat. */
 const HISTORY_TURNS = 12;
@@ -50,6 +53,83 @@ export async function deleteSession(sessionId: string, projectId: string, userId
   return { deleted: true };
 }
 
+/** What each readiness basis means, in the words the agent can repeat to the PM. */
+const BASIS_TEXT = {
+  CUSTOMER_AND_FPT: '60% customer standard + 40% FPT standard',
+  FPT_ONLY: 'the FPT standard alone — no customer checklist has been assessed for this project',
+  CUSTOMER_AND_OUTPUTS: '60% customer standard + 40% share of approved documents — the Planning Assessment has not been run yet',
+  NOT_ASSESSED: 'the share of approved documents only — the Planning Assessment has not been run yet',
+} as const;
+
+/** How many findings of each Planning Assessment category are named; the counts are always complete. */
+const FINDINGS_PER_CATEGORY = 12;
+
+/**
+ * The figures the dashboard shows, for the agent. Built by the same functions the dashboard calls
+ * (`projectReadiness`, `latestAssessment`), so the agent can never quote a different number than the
+ * tile the PM is looking at. The agent used to be given none of this, and its prompt tells it to use
+ * only the data it is given — so asked about Planning readiness, it truthfully said there was no such
+ * figure.
+ */
+export async function readinessContext(projectId: string): Promise<string[]> {
+  const [readiness, assessment, checklist] = await Promise.all([
+    projectReadiness(projectId),
+    latestAssessment(projectId),
+    matchedChecklistForProject(projectId).catch(() => null),
+  ]);
+
+  const fpt = assessment?.standards.fpt;
+  const customer = assessment?.standards.customer;
+  const lines = [
+    'PLANNING READINESS & STANDARDS (the same figures the dashboard shows)',
+    `- Planning readiness: ${readiness.readiness}%, computed as ${BASIS_TEXT[readiness.basis]}.`,
+    '- Formula: 60% customer standard + 40% FPT standard; the FPT standard alone when no customer checklist is assessed.',
+    fpt
+      ? `- FPT standard: ${fpt.score}% — ${fpt.met} of ${fpt.assessed} judged criteria met (Missing Information + Missing Documents; criteria the input could not judge are left out).`
+      : '- FPT standard: not measured yet — the Planning Assessment has never been run (Analyze planning needs on Project Input).',
+    customer
+      ? `- ${customer.label}: ${customer.score}% (${customer.coverage}% of the checklist assessed${customer.stale ? ', out of date since the documents changed' : ''}).`
+      : checklist
+        ? `- Customer standard (${checklist.customer.name}, ${checklist.checklist.itemCount} items): not assessed yet, so it is not in the figure.`
+        : '- Customer standard: no checklist in the library for this project’s customer, so it is not in the figure.',
+    `- Planning artifacts: ${readiness.artifactsApproved} of ${readiness.artifactsNeeded} needed documents approved; ${readiness.documentsGenerated} of ${readiness.documentsTotal} catalog documents generated.`,
+    `- Input readiness (the intake form, not part of Planning readiness): ${readiness.inputReadiness}%.`,
+  ];
+
+  if (!assessment) return lines;
+
+  const failing = (category: string) => assessment.rows.filter((row) => row.category === category && row.status === 'FAIL');
+  const named = (rows: ReturnType<typeof failing>, describe: (row: (typeof rows)[number]) => string) => [
+    ...rows.slice(0, FINDINGS_PER_CATEGORY).map((row) => `  - ${describe(row)}`),
+    ...(rows.length > FINDINGS_PER_CATEGORY ? [`  - …and ${rows.length - FINDINGS_PER_CATEGORY} more`] : []),
+  ];
+  // A PM's own "not met" outranks an approved document, so the agent must be able to say why a row
+  // whose document is approved is still missing.
+  const byPm = (row: ReturnType<typeof failing>[number]) => (row.pmVerdict === 'NOT_MET' ? ' — marked not met by the PM' : '');
+  const information = failing('MISSING_INFORMATION');
+  const missingDocuments = failing('MISSING_DOCUMENT');
+  const risks = failing('PLANNING_RISK');
+  const conflicts = failing('CONFLICT');
+
+  return [
+    ...lines,
+    '',
+    `PLANNING ASSESSMENT (latest run ${assessment.at.toISOString().slice(0, 10)}; resolved items already excluded)`,
+    `- Missing information: ${information.length}`,
+    ...named(information, (row) => `${row.name}${row.action ? ` — ${row.action}` : ''}${byPm(row)}`),
+    `- Missing documents: ${missingDocuments.length}`,
+    ...named(
+      missingDocuments,
+      (row) =>
+        `${row.name}${row.targetDocument ? ` → ${row.targetDocument} (${row.targetDocumentStatus ?? 'NOT_GENERATED'})` : ''}${byPm(row)}`,
+    ),
+    `- Risks found: ${risks.length}`,
+    ...named(risks, (row) => `[${row.severity}] ${row.name}`),
+    `- Conflicts found: ${conflicts.length}`,
+    ...named(conflicts, (row) => `[${row.severity}] ${row.name}`),
+  ];
+}
+
 /**
  * Everything the agent is allowed to know about this project.
  *
@@ -59,7 +139,7 @@ export async function deleteSession(sessionId: string, projectId: string, userId
  * lookup, which can always pick the wrong passage.
  */
 async function projectContext(projectId: string, question: string) {
-  const [project, decision, evaluation, values, documents, actions, customContext] = await Promise.all([
+  const [project, decision, evaluation, values, documents, actions, customContext, figures] = await Promise.all([
     prisma.project.findUnique({ where: { id: projectId }, include: { program: true } }),
     prisma.approachDecision.findFirst({ where: { projectId, active: true } }),
     prisma.aiApproachSuggestion.findFirst({ where: { projectId }, orderBy: { createdAt: 'desc' } }),
@@ -71,6 +151,7 @@ async function projectContext(projectId: string, question: string) {
     }),
     prisma.actionItem.findMany({ where: { projectId, status: 'OPEN' } }),
     pmContextInputs(projectId),
+    readinessContext(projectId),
   ]);
   if (!project) throw notFound('Project not found');
 
@@ -102,7 +183,7 @@ async function projectContext(projectId: string, question: string) {
   return [
     'PROJECT',
     line('Name', project.name),
-    line('Type', project.type),
+    line('Project type', `${project.category ?? 'not set (earlier type)'} — plans with the ${project.type} document catalog`),
     line('Status', project.status),
     line('Program', project.program?.name ?? 'Standalone'),
     line('Customer', project.customer),
@@ -111,6 +192,8 @@ async function projectContext(projectId: string, question: string) {
     line('Confirmed model', decision ? `${decision.approach} (${decision.rigor}, ${decision.outcome})` : 'not confirmed yet'),
     line('AI recommendation', evaluation ? `${evaluation.recommendedApproach} at ${evaluation.confidence}%` : 'none yet'),
     line('Reasons', ((evaluation?.reasons ?? []) as unknown as string[]).join('; ') || '—'),
+    '',
+    ...figures,
     '',
     `PROJECT INPUTS (${values.filter((v) => v.verified && v.value).length} verified of ${values.length})`,
     ...(inputs.length ? inputs : ['- none filled in yet']),
