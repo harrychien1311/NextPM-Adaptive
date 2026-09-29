@@ -576,7 +576,8 @@ function RuleTab({
    * missing — including items since resolved, so the PM sees them done. A check the input was not
    * enough to judge is left out entirely: listing it as "not evaluated" only made the PM wonder
    * whether it was missing, and it reappears on its own once the input is updated and re-assessed.
-   * With every row missing, a "Missing" tag on each would say nothing, so there are no tags.
+   * With every row missing, a "Missing" tag on each would say nothing, so a still-missing row has no
+   * tag — a resolved Missing Information row gets a green "Resolved" one (see `RuleRowItem`).
    */
   // Found missing by the AI, or marked not met by the PM in the Standards popup.
   if (actionable) rows = rows.filter((row) => row.assessedStatus === 'FAIL' || row.status === 'FAIL');
@@ -714,16 +715,28 @@ function RuleRowItem({
         </span>
         <span className="rule-meta">
           {actionable ? (
-            stage && (
-              <>
-                <span className={`status-pill doc-stage-${stage.key}`}>{stage.label}</span>
-                {row.targetDocumentStale && (
-                  <span className="status-pill doc-stage-stale" title={row.targetDocumentStale}>
-                    Out of date after a plan change
-                  </span>
-                )}
-              </>
-            )
+            <>
+              {/*
+                A missing fact the PM has since supplied — an answered document question, a resolved
+                PM action, a tick in Standards — says so in green. Still missing, it carries no tag:
+                every other row on this tab is missing, so a tag would say nothing.
+              */}
+              {row.category === 'MISSING_INFORMATION' && row.resolution && (
+                <span className="status-pill status-resolved" title={row.resolution.detail}>
+                  ✓ Resolved
+                </span>
+              )}
+              {stage && (
+                <>
+                  <span className={`status-pill doc-stage-${stage.key}`}>{stage.label}</span>
+                  {row.targetDocumentStale && (
+                    <span className="status-pill doc-stage-stale" title={row.targetDocumentStale}>
+                      Out of date after a plan change
+                    </span>
+                  )}
+                </>
+              )}
+            </>
           ) : (
             <>
               <span className={`sev-pill sev-${row.severity.toLowerCase()}`}>{row.severity}</span>

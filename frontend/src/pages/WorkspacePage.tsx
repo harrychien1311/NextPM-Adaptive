@@ -223,7 +223,8 @@ export function WorkspacePage({ projectId }: { projectId: string }) {
             <div className="agent-orb">✦</div>
             <strong>Planning Agent</strong>
             <span>Advisory</span>
-            <small>AI verifies, recommends and drafts. PM confirms every decision and baseline.</small>
+            {/* The agent answers; it changes nothing. Documents are drafted in Planning Artifacts. */}
+            <small>Answers questions about this project. It advises only — documents are drafted in Planning Artifacts.</small>
             <button onClick={() => setAgentOpen(true)}>Open agent</button>
           </div>
           <div className="profile">

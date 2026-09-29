@@ -195,9 +195,10 @@ export function InputView({
     onSuccess: (_result, variables) => {
       queryClient.invalidateQueries({ queryKey: ['input', projectId] });
       refreshDashboard();
+      // The same notice as the description upload: its text is out and the next analysis reads it.
       notify({
-        title: 'Reference queued for verification',
-        detail: `${variables.file.name} was checked against the group rules.`,
+        title: 'Reference source saved',
+        detail: `${variables.file.name} will be read the next time you run Analyze planning needs.`,
       });
     },
     onError: (error) => notify({ title: 'Upload rejected', detail: (error as Error).message }),
@@ -213,7 +214,7 @@ export function InputView({
       refreshDashboard();
       notify({
         title: 'Project description saved',
-        detail: `${file.name} will be read the next time you ask the AI for a governance-model recommendation.`,
+        detail: `${file.name} will be read the next time you run Analyze planning needs.`,
       });
     },
     onError: (error) => notify({ title: 'Upload rejected', detail: (error as Error).message }),
@@ -493,7 +494,7 @@ export function InputView({
         <div className="panel-head">
           <div>
             <h2>Optional reference sources</h2>
-            <p>Upload a small, classified source only to prefill or verify structured data</p>
+            <p>Further documents the AI analysis reads alongside the project description</p>
           </div>
           <span className="policy-chip">
             Max {data.policy.maxFilesPerGroup} files/group · {data.policy.maxUploadMb} MB/file

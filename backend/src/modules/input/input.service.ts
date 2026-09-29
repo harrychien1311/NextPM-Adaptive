@@ -717,9 +717,15 @@ export async function closeAction(params: { projectId: string; actionId: string;
 }
 
 /**
+ * What a readable upload says, on the description slot and the reference groups alike: the text is
+ * out, and the next *Analyze planning needs* (or Re-assess) reads it — nothing else to press.
+ */
+const READY_MESSAGE = 'Text extracted — ready for the next AI analysis';
+
+/**
  * Registers an uploaded reference file. Its text is read here, exactly like the project
  * description document — reading a file is cheap and language-agnostic, while deciding what the
- * text *means* is deferred to "Verify input" so the PM controls when a model is called.
+ * text *means* waits for *Analyze planning needs*, so the PM controls when a model is called.
  *
  * Files never become approved facts: anything derived from them lands as AI_SUGGESTED for PM
  * confirmation.
@@ -764,12 +770,18 @@ export async function registerReference(params: {
     fileName: params.fileName,
   });
 
+  /**
+   * A readable file is ready the moment its text is out, exactly like the description document:
+   * *Analyze planning needs* reads every current upload, so there is no further step. The status
+   * and message used to say otherwise — UPLOADED, shown amber, telling the PM to "press Verify
+   * input", a button that no longer exists.
+   */
   const file = await prisma.referenceFile.create({
     data: {
       ...fileData,
-      status: text ? ReferenceStatus.UPLOADED : ReferenceStatus.WARNING,
+      status: text ? ReferenceStatus.VERIFIED : ReferenceStatus.WARNING,
       message: text
-        ? 'Text extracted — press Verify input to read it into the form'
+        ? READY_MESSAGE
         : unsupportedFormat
           ? 'This file format cannot be read as text — re-upload as PDF, DOCX or TXT'
           : 'Could not read this file — re-upload as PDF, DOCX or TXT',
@@ -784,7 +796,7 @@ export async function registerReference(params: {
     type: 'REFERENCE_UPLOADED',
     title: `${params.fileName} added to ${params.group.toLowerCase()} references`,
     detail: text
-      ? `${text.length.toLocaleString()} characters extracted; Verify input will read them into the form.`
+      ? `${text.length.toLocaleString()} characters extracted; the next analysis will read them.`
       : 'File stored, but no readable text was found.',
   });
 
@@ -834,7 +846,7 @@ export async function registerDescriptionDocument(params: {
       group: DESCRIPTION_GROUP,
       status: text ? ReferenceStatus.VERIFIED : ReferenceStatus.WARNING,
       message: text
-        ? 'Text extracted — ready for the next AI recommendation'
+        ? READY_MESSAGE
         : unsupportedFormat
           ? 'This file format cannot be read as text — re-upload as PDF, DOCX or TXT'
           : 'Could not read this file — re-upload as PDF, DOCX or TXT',
@@ -863,7 +875,7 @@ export async function registerDescriptionDocument(params: {
     type: 'DESCRIPTION_UPLOADED',
     title: `${params.fileName} added as the project description`,
     detail: text
-      ? 'Text extracted; the AI will read it on the next governance-model recommendation.'
+      ? 'Text extracted; the next analysis will read it.'
       : 'File stored, but no readable text was found.',
   });
 

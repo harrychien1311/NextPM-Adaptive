@@ -717,6 +717,53 @@
   font-size: 0.72rem;
   padding: 5px 10px;
 }
+/* AI suggestions on PM questions — blue like every other AI surface, and visibly not an answer. */
+.gap-suggestion {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #eef4ff;
+  border: 1px dashed #b9cff5;
+  font-size: 0.74rem;
+  color: #28476f;
+  line-height: 1.4;
+}
+.gap-suggestion span {
+  font-weight: 700;
+  color: #2368d8;
+  margin-right: 2px;
+}
+.suggest-button {
+  width: 100%;
+  margin-top: 4px;
+}
+.gap-suggestion-box {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 12px;
+  border-radius: 9px;
+  background: #eef4ff;
+  border: 1px dashed #b9cff5;
+}
+.gap-suggestion-box small {
+  font-size: 0.66rem;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: #2368d8;
+}
+.gap-suggestion-box p {
+  margin: 0;
+  font-size: 0.86rem;
+  color: var(--ink);
+}
+.gap-suggestion-box em {
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+.gap-suggestion-box button {
+  justify-self: start;
+}
 .fill-button {
   width: 100%;
 }

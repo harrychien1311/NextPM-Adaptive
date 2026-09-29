@@ -373,7 +373,12 @@ const STEPS: TutorialStep[] = [
     label: 'Always there',
     actor: 'AI',
     title: 'Chatbot Agent',
-    body: <>Ask the planning agent anything, at any step. It reads the whole project to answer.</>,
+    body: (
+      <>
+        Ask the planning agent anything, at any step. It reads the whole project to answer — advice only: it tells you
+        which document to work on, and you generate it in Planning Artifacts.
+      </>
+    ),
     targets: ['agent', 'agent-card'],
     art: (
       <div className="tour-art tour-art-doc">

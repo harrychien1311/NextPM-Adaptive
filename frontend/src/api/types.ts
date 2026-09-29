@@ -621,6 +621,12 @@ export interface DocumentGap {
   token: string;
   question: string;
   answer: string | null;
+  /** An AI suggestion the PM may take or ignore — never written into the document by itself. */
+  suggestion?: string | null;
+  /** What the suggestion rests on: a passage in the project data, or common practice. */
+  suggestionBasis?: string | null;
+  /** True once the AI was asked (or never will be — a question about a person). */
+  suggested?: boolean;
 }
 
 export interface RaciRow {

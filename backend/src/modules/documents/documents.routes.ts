@@ -21,6 +21,7 @@ import {
   renderDocumentDocx,
   renderDocumentExport,
   renderDocumentXlsx,
+  suggestDocumentGapAnswers,
   templateFit,
   updateDocumentSections,
 } from './documents.service';
@@ -106,6 +107,24 @@ documentsRouter.post(
         projectId: req.params.projectId,
         documentId: req.params.documentId,
         ...body,
+        actorId: req.user!.id,
+      }),
+    );
+  }),
+);
+
+/**
+ * "✦ Suggest answers" — one model call for suggestions on the document's open questions. Write-gated
+ * because it spends a model call; it writes suggestions beside the questions, never into the text.
+ */
+documentsRouter.post(
+  '/:projectId/documents/:documentId/gaps/suggest',
+  requireProjectRole(...PROJECT_WRITE_ROLES),
+  asyncHandler(async (req, res) => {
+    res.json(
+      await suggestDocumentGapAnswers({
+        projectId: req.params.projectId,
+        documentId: req.params.documentId,
         actorId: req.user!.id,
       }),
     );

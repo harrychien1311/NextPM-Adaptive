@@ -37,11 +37,56 @@ export function readGaps(value: unknown): DocumentGap[] {
         const gap = entry as DocumentGap;
         // `ruleId` kept: it ties a question to the Missing Information finding it asks about, and
         // dropping it on read would quietly break that link the first time the gaps are re-saved.
-        return { token: gap.token, question: gap.question, answer: gap.answer ?? null, ruleId: gap.ruleId ?? null };
+        return {
+          token: gap.token,
+          question: gap.question,
+          answer: gap.answer ?? null,
+          ruleId: gap.ruleId ?? null,
+          // Kept for the same reason: a re-save must not strip the AI's suggestion off a question.
+          suggestion: gap.suggestion ?? null,
+          suggestionBasis: gap.suggestionBasis ?? null,
+          // A question about a person is settled from the start — it never gets a suggestion, so
+          // the Studio must not offer to ask for one.
+          suggested: Boolean(gap.suggested) || isPersonQuestion(gap.question),
+        };
       }
       return null;
     })
     .filter((gap): gap is DocumentGap => gap !== null);
+}
+
+/**
+ * A question whose answer is a person — a name, an owner, a sponsor, a contact. The AI never gets to
+ * suggest one of those: a plausible name offered as a suggestion is still an invented name, and it
+ * is exactly the kind a busy PM accepts without checking. Checked here in code rather than trusted
+ * to the prompt; it errs towards dropping, since a missing suggestion costs the PM nothing.
+ */
+const PERSON_QUESTION =
+  /\b(who|whom|whose)\b|\bnames?\b|\b(sponsors?|owners?|contacts?|approvers?|signator(y|ies)|assignees?|persons?|people|individuals?|e-?mail)\b/i;
+
+export function isPersonQuestion(question: string): boolean {
+  return PERSON_QUESTION.test(question);
+}
+
+const MAX_SUGGESTION_CHARS = 300;
+const MAX_BASIS_CHARS = 200;
+
+/**
+ * Cleans the suggestions the model put on its gaps: trimmed, capped, dropped on any question about a
+ * person, and each gap marked as asked (`suggested`) when a real model produced it — so the Studio
+ * does not offer to ask again for a suggestion it already declined to make.
+ */
+export function withSafeSuggestions(gaps: DocumentGap[], askedModel: boolean): DocumentGap[] {
+  return gaps.map((gap) => {
+    const suggestion = gap.suggestion?.trim().slice(0, MAX_SUGGESTION_CHARS) || null;
+    const allowed = suggestion && !isPersonQuestion(gap.question);
+    return {
+      ...gap,
+      suggestion: allowed ? suggestion : null,
+      suggestionBasis: allowed ? gap.suggestionBasis?.trim().slice(0, MAX_BASIS_CHARS) || null : null,
+      suggested: askedModel || Boolean(gap.suggested),
+    };
+  });
 }
 
 export function slugForFile(name: string): string {

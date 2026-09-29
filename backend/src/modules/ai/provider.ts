@@ -134,6 +134,16 @@ export interface DocumentGap {
    * server check every known gap was asked, and lets the PM's answer resolve that finding.
    */
   ruleId?: string | null;
+  /**
+   * A suggested answer the PM may take, edit or ignore — never an answer. It is shown beside the
+   * question and nothing writes it into the document: only `answer`, which the PM saves, replaces
+   * the token. Never offered for a question whose answer is a person (`isPersonQuestion`).
+   */
+  suggestion?: string | null;
+  /** What the suggestion rests on — a passage in the project data, or common practice. */
+  suggestionBasis?: string | null;
+  /** True once the AI has been asked for a suggestion, whether or not it offered one. */
+  suggested?: boolean;
 }
 
 export interface GenerationOutput {
@@ -535,6 +545,27 @@ const TABLE_DOCUMENT_RULES = `If this document is given a COLUMN LIST below, the
   breakdown in WBS ID order.
 - Only rows the project data supports. A short honest table beats a padded one.`;
 
+/**
+ * Suggested answers on gaps. A suggestion is advice beside a question, never a value in the
+ * document: the token stays in the text and only the PM's saved answer replaces it, so invariant 4
+ * (the model never invents a missing fact *in the document*) holds. People are excluded outright —
+ * here, and again in code (`withSafeSuggestions` / `isPersonQuestion`), because a suggested name is
+ * still an invented name.
+ */
+const GAP_SUGGESTION_RULES = `SUGGESTED ANSWERS — each gap may also offer the PM a suggestion to consider. It is never an answer:
+- "suggestion": an answer the PM could accept or edit, short enough to replace the token in its
+  sentence as written. Offer one only when something real supports it — a passage in the project
+  data that points to the answer without settling it, or established practice for this document
+  type, project type and governance model (a review cadence, an approval threshold, a meeting
+  rhythm, a standard process step). Otherwise leave it out.
+- "suggestionBasis": one short line naming that support, e.g. "SOW §3 mentions monthly steering
+  reviews" or "Common practice under Scrum: a review at the end of every sprint".
+- NEVER suggest a person: no name, no named individual, no contact detail — leave both fields out
+  for any question whose answer is who someone is. Leave them out too for a fact only this project
+  can decide that nothing supports (a contract value, a date committed to the customer).
+- The suggestion is not written into the document. The {{gap:N}} token stays in the text exactly as
+  above; only the PM's own answer ever replaces it. Write suggestions in English.`;
+
 const NO_FABRICATION_RULES = `You decide the section structure yourself. Choose the sections this document type genuinely
 needs for this project type and governance model, in a sensible reading order — do not pad it with
 sections the project has no information for.
@@ -553,7 +584,9 @@ NEVER INVENT ANYTHING. This is the rule that matters most:
   the project data is in — the PM reads these in the application, and the application is English.
 - You draft; the PM approves. Never state that anything is approved or baselined.
 
-Write 2-5 sentences per section in professional PM English.`;
+Write 2-5 sentences per section in professional PM English.
+
+${GAP_SUGGESTION_RULES}`;
 
 const SYSTEM_PROMPT = `You are the NextPM planning agent, drafting one planning document.
 
@@ -575,7 +608,7 @@ ${TABLE_DOCUMENT_RULES}
 
 Return strict JSON and nothing else:
 { "sections": [{ "title": string, "content": string }],
-  "gaps": [{ "token": "{{gap:1}}", "question": string, "ruleId"?: string }],
+  "gaps": [{ "token": "{{gap:1}}", "question": string, "ruleId"?: string, "suggestion"?: string, "suggestionBasis"?: string }],
   "unresolved": string[], "raciTable"?: [...], "table"?: { "columns": [...], "rows": [[...]] } }
 "unresolved" is a short plain-English list of what was left blank, for the audit trail.`;
 
@@ -775,7 +808,7 @@ ${TABLE_DOCUMENT_RULES}
 
 Return strict JSON and nothing else:
 { "sections": [{ "title": string, "content": string }],
-  "gaps": [{ "token": "{{gap:1}}", "question": string, "ruleId"?: string }],
+  "gaps": [{ "token": "{{gap:1}}", "question": string, "ruleId"?: string, "suggestion"?: string, "suggestionBasis"?: string }],
   "unresolved": string[], "raciTable"?: [...], "riskRegister"?: [...], "orgChart"?: {...},
   "table"?: { "columns": [...], "rows": [[...]] } }`;
 
@@ -1074,7 +1107,7 @@ Never turn a paragraph of guidance into a gap: that deletes advice and replaces 
 
 Return strict JSON and nothing else:
 { "values": [{ "token": string, "value": string }],
-  "gaps": [{ "token": "{{gap:1}}", "question": string, "ruleId"?: string }],
+  "gaps": [{ "token": "{{gap:1}}", "question": string, "ruleId"?: string, "suggestion"?: string, "suggestionBasis"?: string }],
   "unresolved": string[] }
 Each placeholder you were given appears at most once in "values" — once if it is a blank to fill,
 not at all if it is the template's own guidance. "gaps" describes the {{gap:N}} tokens you put
@@ -1369,6 +1402,71 @@ export async function translateChecklistItems(items: ChecklistTranslationItem[])
     }
   }
   return translated;
+}
+
+export interface GapSuggestionContext {
+  projectName: string;
+  projectType: string;
+  approach: string | null;
+  documentName: string;
+  verifiedInputs: { label: string; value: string }[];
+  /** The project's current uploads — what a suggestion can point to as its basis. */
+  documents: { label: string; text: string }[];
+  /** The open questions, each with the sentence its token sits in. */
+  gaps: { token: string; question: string; context: string }[];
+}
+
+export interface GapSuggestion {
+  token: string;
+  suggestion?: string | null;
+  suggestionBasis?: string | null;
+}
+
+/**
+ * Suggested answers for the open questions of a document drafted before suggestions existed — one
+ * call for all of them, instead of regenerating the document (which costs a full draft and throws
+ * the PM's answers away). A new draft gets its suggestions from the drafting call itself.
+ *
+ * No mock: a keyword heuristic dressed as a suggestion would be an invented answer with a
+ * confident label on it. Without a model this returns nothing and the Studio says so.
+ */
+export async function suggestGapAnswers(context: GapSuggestionContext): Promise<GapSuggestion[]> {
+  if (!context.gaps.length) return [];
+  if (env.ai.provider !== 'anthropic' || !env.ai.anthropicKey) return [];
+
+  const system = `You help a project manager answer the open questions left in one planning document.
+You do not write the document and you do not answer for the PM: you only offer suggestions the PM
+may accept, edit or ignore.
+
+${GAP_SUGGESTION_RULES}
+
+Return strict JSON and nothing else:
+{ "suggestions": [{ "token": "{{gap:1}}", "suggestion"?: string, "suggestionBasis"?: string }] }
+One entry per question you were given, by its token. Leave out "suggestion" where nothing supports one.`;
+
+  const prompt = [
+    `Document: ${context.documentName}`,
+    `Project: ${context.projectName} · type ${context.projectType}${context.approach ? ` · governance model ${context.approach}` : ''}`,
+    '',
+    'VERIFIED PROJECT INPUTS',
+    context.verifiedInputs.map((input) => `- ${input.label}: ${input.value}`).join('\n') || '- none',
+    '',
+    'PROJECT DOCUMENTS',
+    context.documents.map((document) => `--- ${document.label} ---\n${document.text}`).join('\n\n') || '- none uploaded',
+    '',
+    'OPEN QUESTIONS (token · question · the sentence it sits in)',
+    context.gaps.map((gap) => `- ${gap.token} · ${gap.question}${gap.context ? `\n  in: "${gap.context}"` : ''}`).join('\n'),
+  ].join('\n');
+
+  const result = await callAnthropicJson<{ suggestions?: GapSuggestion[] }>({
+    system,
+    prompt,
+    label: `gap-suggestions:${context.gaps.length}`,
+    // Short answers from material already read — low effort is plenty and keeps it cheap.
+    effort: env.ai.assessmentEffort,
+  });
+  const asked = new Set(context.gaps.map((gap) => gap.token));
+  return (result.suggestions ?? []).filter((entry) => entry && asked.has(entry.token));
 }
 
 /**
@@ -2681,8 +2779,18 @@ export async function answerAgentQuestion(context: AgentReplyContext): Promise<s
           // which deliberately understands only this subset. Widen one and the other must follow.
           system: [
             'You are the NextPM planning agent for one project. Answer the PM from the project data below.',
-            'You may explain the governance-model recommendation, point out missing inputs, or offer to',
-            'generate a planning document. You never apply a decision — the PM confirms everything in the UI.',
+            'You may explain the governance-model recommendation, the readiness figures and the Planning',
+            'Assessment, point out missing inputs, and advise which planning document to work on next.',
+            '',
+            'What you cannot do — say so plainly when asked, never offer or imply otherwise:',
+            '- You cannot generate, edit, fill, approve or export a document, save an input, confirm a',
+            '  model or change anything in the project. You only answer in this chat.',
+            '- When the PM wants a document drafted, name the exact document and tell them where to do it:',
+            '  **Planning Artifacts** → select the document → **Generate document**. For an input, point to',
+            '  **Project Input**; for a governance model, **Planning Assessment** → **Confirm and Open',
+            '  Planning Artifacts**. Never write "I will generate", "I can draft it for you" or similar.',
+            '- If the PM asks you to write the content here, you may outline what the document should cover',
+            '  from the project data, but say it is a chat answer, not a saved draft.',
             '',
             'Answering rules:',
             '- Use ONLY the project data below. If it does not answer the question, say so plainly and name',

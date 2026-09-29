@@ -213,6 +213,23 @@ export function StudioView({
     onError: fail('Could not record the answer'),
   });
 
+  /** Suggestions for a document drafted before they existed; a new draft brings its own. */
+  const suggestAnswers = useMutation({
+    mutationFn: () => documentsApi.suggestGapAnswers(projectId, draft!.id),
+    onSuccess: (result) => {
+      refresh();
+      notify({
+        title: result.suggested
+          ? `${result.suggested} suggestion${result.suggested === 1 ? '' : 's'} ready`
+          : 'No suggestions this time',
+        detail: result.suggested
+          ? 'They appear under each question. Nothing was written into the document — use one only if it is right.'
+          : 'The project data and common practice did not support a suggestion for the open questions.',
+      });
+    },
+    onError: fail('Could not get suggestions'),
+  });
+
   const fillGaps = useMutation({
     mutationFn: () => documentsApi.fill(projectId, draft!.id),
     onSuccess: () => {
@@ -257,6 +274,8 @@ export function StudioView({
   const approved = shown.filter((entry) => entry.document?.status === 'APPROVED').length;
   const gaps = draft?.gaps ?? [];
   const answeredCount = gaps.filter((gap) => gap.answer?.trim()).length;
+  /** Open questions not yet put to the AI for a suggestion (the server marks person questions as settled). */
+  const unsuggestedCount = gaps.filter((gap) => !gap.answer?.trim() && !gap.suggested).length;
   const isApproved = draft?.status === 'APPROVED';
   /**
    * An approved baseline is frozen — except when an applied plan change has said this version no
@@ -680,11 +699,31 @@ export function StudioView({
                 The AI left {gaps.length} blank{gaps.length === 1 ? '' : 's'} rather than guessing. Answer them, then
                 write them into the document.
               </p>
+              {/*
+                Offered only while some open question has not been put to the AI yet — a document
+                drafted before suggestions existed. A new draft arrives with its suggestions.
+              */}
+              {unsuggestedCount > 0 && (
+                <button
+                  className={`secondary suggest-button${lockClass}`}
+                  {...lockedProps}
+                  onClick={guard(() => suggestAnswers.mutate())}
+                  disabled={canWrite && (suggestAnswers.isPending || isApproved)}
+                  title={canWrite ? 'Ask the AI for suggested answers — nothing is written into the document' : lockedProps.title}
+                >
+                  {suggestAnswers.isPending ? '✦ Suggesting…' : `✦ Suggest answers (${unsuggestedCount})`}
+                </button>
+              )}
               <div className="gap-list">
                 {gaps.map((gap) => (
                   <div className={`gap-item${gap.answer?.trim() ? ' answered' : ''}`} key={gap.token}>
                     <p>{gap.question}</p>
                     {gap.answer?.trim() ? <small>{gap.answer}</small> : null}
+                    {!gap.answer?.trim() && gap.suggestion && (
+                      <div className="gap-suggestion" title={gap.suggestionBasis ?? undefined}>
+                        <span>✦ Suggested</span> {gap.suggestion}
+                      </div>
+                    )}
                     <button
                       className={`secondary${lockClass}`}
                       {...lockedProps}
@@ -809,6 +848,20 @@ function AnswerGapModal({
             touched.
           </p>
         </div>
+        {/*
+          A suggestion is only ever offered: "Use this suggestion" copies it into the box, where the
+          PM can still edit it, and nothing is saved until they press Save answer.
+        */}
+        {gap?.suggestion && (
+          <div className="gap-suggestion-box">
+            <small>✦ AI SUGGESTION — CHECK BEFORE USING</small>
+            <p>{gap.suggestion}</p>
+            {gap.suggestionBasis && <em>Based on: {gap.suggestionBasis}</em>}
+            <button type="button" className="secondary small" onClick={() => setAnswer(gap.suggestion ?? '')}>
+              Use this suggestion
+            </button>
+          </div>
+        )}
         <label>
           Answer *
           <input value={answer} onChange={(event) => setAnswer(event.target.value)} required autoFocus />

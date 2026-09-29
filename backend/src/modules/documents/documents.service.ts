@@ -17,11 +17,12 @@ import { DocumentStatus, ManagementDomain, Prisma } from '@prisma/client';
 import JSZip from 'jszip';
 import { prisma } from '../../lib/prisma';
 import { pmContextInputs } from '../../lib/custom-context';
-import { badRequest, conflict, notFound } from '../../lib/http-error';
+import { badRequest, conflict, notFound, serviceUnavailable } from '../../lib/http-error';
 import {
   fillTemplatePlaceholders,
   generateDocument,
   generateGovernanceArtifact,
+  suggestGapAnswers,
   type DocumentGap,
   type DocumentTable,
   type GenerationOutput,
@@ -95,9 +96,11 @@ import {
   documentExportFormat,
   isChartDocument,
   isStructureOnlyDocument,
+  isPersonQuestion,
   readGaps,
   slugForFile,
   splitOnGaps,
+  withSafeSuggestions,
 } from './document-format';
 import { buildDocumentXlsx } from './xlsx-export';
 import { markAssessmentStale, reassessAfterApproval } from '../checklist/checklist.service';
@@ -739,6 +742,10 @@ export async function generateDraft(params: { projectId: string; documentId: str
   // sections are the placeholder values, and emptying them would ship the customer's file blank.
   if (isStructureOnlyDocument(document.name) && !templateForDocument) output = { ...output, sections: [] };
 
+  // The model's suggested answers, cleaned before the server adds known gaps of its own: those were
+  // never put to the model, so they stay unmarked and the Studio can still ask for a suggestion.
+  output = { ...output, gaps: withSafeSuggestions(output.gaps, output.provider === 'anthropic') };
+
   // Drafted to a template's outline: recorded, so the export takes that template's file type.
   if (outlineTemplate) {
     structuredData = {
@@ -911,6 +918,105 @@ export async function answerDocumentGap(params: {
   }
 
   return updated;
+}
+
+/** How much of each upload the suggestion call reads — the same order of size the analysis reads. */
+const SUGGESTION_DOCUMENT_CHARS = 20_000;
+
+/** The sentence a token sits in, so the suggestion fits the blank it would fill. */
+function sentenceAround(text: string, token: string): string {
+  const at = text.indexOf(token);
+  if (at < 0) return '';
+  const start = Math.max(0, text.lastIndexOf('.', at) + 1, text.lastIndexOf('\n', at) + 1, at - 200);
+  const endDot = text.indexOf('.', at + token.length);
+  const endLine = text.indexOf('\n', at + token.length);
+  const ends = [endDot, endLine].filter((index) => index >= 0);
+  const end = Math.min(at + token.length + 200, ends.length ? Math.min(...ends) + 1 : text.length);
+  return text.slice(start, end).replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * "✦ Suggest answers" — asks the AI once for suggestions on every open question of a document that
+ * has none yet (one drafted before suggestions existed, or a question the server added). Questions
+ * about a person are never sent; every question sent is marked as asked, so a question the AI had no
+ * suggestion for is not offered again. Nothing is written into the document: a suggestion only
+ * appears beside its question, and the PM's saved answer is still the only thing "Fill out the
+ * document" uses.
+ */
+export async function suggestDocumentGapAnswers(params: { projectId: string; documentId: string; actorId: string }) {
+  const { projectId, documentId, actorId } = params;
+  const document = await prisma.planningDocument.findFirst({
+    where: { id: documentId, projectId },
+    include: { sections: { orderBy: { order: 'asc' } }, project: true },
+  });
+  if (!document) throw notFound('Planning document not found');
+
+  const gaps = readGaps(document.pmQuestions);
+  const open = gaps.filter((gap) => !gap.answer?.trim() && !gap.suggested && !isPersonQuestion(gap.question));
+  if (!open.length) return { suggested: 0, asked: 0 };
+  if (env.ai.provider !== 'anthropic' || !env.ai.anthropicKey) {
+    throw serviceUnavailable('Suggestions need the AI model, which is not configured on this server.');
+  }
+
+  const [decision, verified, context, uploads] = await Promise.all([
+    prisma.approachDecision.findFirst({ where: { projectId, active: true } }),
+    prisma.projectInputValue.findMany({
+      where: { projectId, verified: true, NOT: { value: null } },
+      include: { definition: true },
+    }),
+    pmContextInputs(projectId),
+    prisma.referenceFile.findMany({ where: { projectId, supersededAt: null }, orderBy: { uploadedAt: 'asc' } }),
+  ]);
+
+  const text = [
+    ...document.sections.map((section) => section.content ?? ''),
+    JSON.stringify(document.structuredData ?? ''),
+  ].join('\n');
+
+  const suggestions = await suggestGapAnswers({
+    projectName: document.project.name,
+    projectType: document.project.type,
+    approach: decision?.approach ?? null,
+    documentName: document.name,
+    verifiedInputs: [...verified.map((value) => ({ label: value.definition.label, value: value.value! })), ...context],
+    documents: uploads
+      .map((file) => {
+        const extraction = file.extraction as { rawText?: string; textAvailable?: boolean } | null;
+        return extraction?.textAvailable && extraction.rawText
+          ? { label: file.fileName, text: extraction.rawText.slice(0, SUGGESTION_DOCUMENT_CHARS) }
+          : null;
+      })
+      .filter((entry): entry is { label: string; text: string } => entry !== null),
+    gaps: open.map((gap) => ({ token: gap.token, question: gap.question, context: sentenceAround(text, gap.token) })),
+  });
+
+  const byToken = new Map(suggestions.map((entry) => [entry.token, entry]));
+  const openTokens = new Set(open.map((gap) => gap.token));
+  const merged = gaps.map((gap) => {
+    if (!openTokens.has(gap.token)) return gap;
+    const found = byToken.get(gap.token);
+    return withSafeSuggestions(
+      [{ ...gap, suggestion: found?.suggestion ?? null, suggestionBasis: found?.suggestionBasis ?? null }],
+      true,
+    )[0];
+  });
+  const suggested = merged.filter((gap) => openTokens.has(gap.token) && gap.suggestion).length;
+
+  await prisma.planningDocument.update({
+    where: { id: documentId },
+    data: { pmQuestions: merged as unknown as Prisma.InputJsonValue },
+  });
+
+  await logEvent({
+    projectId,
+    actorId,
+    actorType: 'AGENT',
+    type: 'DOCUMENT_GAP_SUGGESTIONS',
+    title: `Suggested answers for ${document.name}`,
+    detail: `${suggested} of ${open.length} open question(s) received a suggestion; none was written into the document.`,
+  });
+
+  return { suggested, asked: open.length };
 }
 
 /**

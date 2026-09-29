@@ -365,6 +365,9 @@ export const documentsApi = {
   /** Records one answer; nothing is written into the document until `fill`. */
   answerGap: (projectId: string, documentId: string, token: string, answer: string) =>
     api.post(`/projects/${projectId}/documents/${documentId}/gaps`, { token, answer }),
+  /** One model call for suggestions on the open questions; writes nothing into the document. */
+  suggestGapAnswers: (projectId: string, documentId: string) =>
+    api.post<{ suggested: number; asked: number }>(`/projects/${projectId}/documents/${documentId}/gaps/suggest`),
   /** Substitutes every answered gap into the blanks it belongs to. */
   fill: (projectId: string, documentId: string) => api.post(`/projects/${projectId}/documents/${documentId}/fill`),
   approve: (projectId: string, documentId: string) =>

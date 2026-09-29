@@ -208,8 +208,14 @@ export function AgentDrawer({
         )}
 
         <div className="conversation-wrap">
+          {/*
+            Says what this chat can and cannot do. It answers from the project data and changes
+            nothing — it used to read "recommends and drafts", which invited the PM to ask it for a
+            document it has no way to generate.
+          */}
           <div className="guardrail">
-            AI verifies, recommends and drafts. The PM confirms the approach and approves every baseline output.
+            Advisory only: the agent answers from this project’s data and changes nothing. Documents are generated in
+            Planning Artifacts, and the PM confirms every decision.
           </div>
 
           <div className="conversation" ref={scroller}>
@@ -231,7 +237,7 @@ export function AgentDrawer({
               <div className="agent-message">
                 <span>✦</span>
                 <div>
-                  <AgentMessageText content="Ask me about this project — the verified inputs, the governance model, or any planning document that has been generated." />
+                  <AgentMessageText content="Ask me about this project — its inputs, readiness, the Planning Assessment, the management approach, or any document already generated. I can tell you which document to work on next; generating it is done in **Planning Artifacts**." />
                 </div>
               </div>
             )}

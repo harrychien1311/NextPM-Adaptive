@@ -61,6 +61,9 @@ const BASIS_TEXT = {
   NOT_ASSESSED: 'the share of approved documents only — the Planning Assessment has not been run yet',
 } as const;
 
+/** How many recent plan changes the agent is shown. */
+const RECENT_PLAN_CHANGES = 5;
+
 /** How many findings of each Planning Assessment category are named; the counts are always complete. */
 const FINDINGS_PER_CATEGORY = 12;
 
@@ -138,8 +141,8 @@ export async function readinessContext(projectId: string): Promise<string[]> {
  * Sending it directly is both cheaper to build and more accurate than any nearest-neighbour
  * lookup, which can always pick the wrong passage.
  */
-async function projectContext(projectId: string, question: string) {
-  const [project, decision, evaluation, values, documents, actions, customContext, figures] = await Promise.all([
+export async function projectContext(projectId: string, question: string) {
+  const [project, decision, evaluation, values, documents, actions, customContext, figures, changes] = await Promise.all([
     prisma.project.findUnique({ where: { id: projectId }, include: { program: true } }),
     prisma.approachDecision.findFirst({ where: { projectId, active: true } }),
     prisma.aiApproachSuggestion.findFirst({ where: { projectId }, orderBy: { createdAt: 'desc' } }),
@@ -152,6 +155,13 @@ async function projectContext(projectId: string, question: string) {
     prisma.actionItem.findMany({ where: { projectId, status: 'OPEN' } }),
     pmContextInputs(projectId),
     readinessContext(projectId),
+    // The recent plan changes, so "why is this document out of date?" can be traced to the change.
+    prisma.planChange.findMany({
+      where: { projectId },
+      orderBy: { createdAt: 'desc' },
+      take: RECENT_PLAN_CHANGES,
+      select: { status: true, note: true, createdAt: true, appliedAt: true, _count: { select: { documents: true } } },
+    }),
   ]);
   if (!project) throw notFound('Project not found');
 
@@ -164,8 +174,30 @@ async function projectContext(projectId: string, question: string) {
     ...customContext.map((entry) => `- ${entry.label}: ${entry.value}`),
   ];
 
-  const docList = documents.map(
-    (doc) => `- ${doc.name} — ${doc.status}${doc.status !== 'NOT_GENERATED' ? ` (v${doc.version})` : ''}`,
+  /**
+   * One line per document, with what the Studio shows about it: status and version, when it was
+   * approved, and — the part the agent used to be blind to — whether a plan change marked it out of
+   * date, since when and why. Without the flag here, "which documents are out of date?" had no
+   * answer in the data the agent is told to use exclusively.
+   */
+  const day = (date: Date | null) => (date ? date.toISOString().slice(0, 10) : null);
+  const docList = documents.map((doc) =>
+    [
+      `- ${doc.name} — ${doc.status}${doc.status !== 'NOT_GENERATED' ? ` (v${doc.version})` : ''}`,
+      doc.status === 'APPROVED' && doc.approvedAt ? `, approved ${day(doc.approvedAt)}` : '',
+      doc.staleReason
+        ? ` — OUT OF DATE after a plan change${doc.staleSince ? ` (since ${day(doc.staleSince)})` : ''}: ${doc.staleReason}`
+        : '',
+    ].join(''),
+  );
+  const outOfDate = documents.filter((doc) => doc.staleReason).length;
+
+  const changeList = changes.map((change) =>
+    [
+      `- ${day(change.appliedAt ?? change.createdAt)} · ${change.status}`,
+      change._count.documents ? ` · ${change._count.documents} document(s)` : '',
+      change.note?.trim() ? ` · "${change.note.trim().slice(0, 200)}"` : '',
+    ].join(''),
   );
 
   // Full text only for the document the question actually names — the rest stay as a listing, so
@@ -201,8 +233,11 @@ async function projectContext(projectId: string, question: string) {
     `OPEN ACTIONS (${actions.length})`,
     ...(actions.length ? actions.map((a) => `- [${a.priority}] ${a.title}`) : ['- none']),
     '',
-    'PLANNING DOCUMENTS',
+    `PLANNING DOCUMENTS (${outOfDate} out of date after a plan change; regenerate one in Planning Artifacts to clear the flag)`,
     ...(docList.length ? docList : ['- none in the catalog yet']),
+    '',
+    `PLAN CHANGES (latest ${RECENT_PLAN_CHANGES}, newest first; an APPLIED change is what marks documents out of date — Update Planning / Plan History)`,
+    ...(changeList.length ? changeList : ['- none recorded']),
     ...(docBodies.length ? ['', 'FULL TEXT OF THE DOCUMENT(S) THIS QUESTION NAMES', ...docBodies] : []),
   ].join('\n');
 }
