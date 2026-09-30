@@ -585,19 +585,17 @@ export async function generateDraft(params: { projectId: string; documentId: str
   });
   if (!document) throw notFound('Planning document not found');
   /**
-   * An approved document is a baseline and is normally frozen. The one exception is a document an
-   * applied plan change has flagged as out of date: the change *is* the record of why this version
-   * no longer holds, and refusing to regenerate it left the PM in a dead end — the Studio banner
-   * telling them to regenerate while the button answered "create a new version", which nothing
-   * implements.
+   * Regenerating an approved document writes its **next version**: `version` goes up, the approval
+   * stamp is cleared and the document returns to PM review (below), so invariant 5 is intact — the
+   * PM approves v2 as its own act, and until then the approved-baseline export leaves it out.
    *
-   * Regenerating then produces a new version (below) and returns it to PM review, so invariant 5 is
-   * intact: approval is still a separate act and the PM has to sign the new draft too.
+   * It used to be allowed only when a plan change had flagged the document out of date, and refused
+   * otherwise with "create a new version before regenerating" — a feature that did not exist. The
+   * Studio showed "Regenerate as v2" greyed out, so a PM with an approved kickoff deck and a reason
+   * to redo it had no way forward at all. The Studio asks for confirmation first, and the audit event
+   * records the version that was replaced.
    */
   const regeneratingApproved = document.status === DocumentStatus.APPROVED;
-  if (regeneratingApproved && !document.staleReason) {
-    throw conflict('Approved documents are versioned — create a new version before regenerating');
-  }
 
   const blocking = await prisma.actionItem.findFirst({
     where: { projectId, status: 'OPEN', blocksDocument: document.name, priority: 'REQUIRED' },
@@ -827,9 +825,24 @@ export async function generateDraft(params: { projectId: string; documentId: str
     actorId,
     actorType: 'AGENT',
     type: 'DOCUMENT_GENERATED',
-    title: `${document.name} generated`,
+    title: regeneratingApproved
+      ? `${document.name} regenerated as v${document.version + 1} — approved v${document.version} replaced`
+      : `${document.name} generated`,
     detail: `${output.sections.length} sections · ${output.gaps.length} gap(s) for PM · produced by ${output.provider}`,
-    payload: { documentId, unresolved: output.unresolved, provider: output.provider },
+    payload: {
+      documentId,
+      unresolved: output.unresolved,
+      provider: output.provider,
+      // The approved version this draft replaced — its content is gone, so the trail is what is left.
+      ...(regeneratingApproved
+        ? {
+            replacedApprovedVersion: document.version,
+            replacedApprovedAt: document.approvedAt,
+            replacedApprovedById: document.approvedById,
+            staleReason: document.staleReason,
+          }
+        : {}),
+    },
   });
 
   return prisma.planningDocument.findUnique({

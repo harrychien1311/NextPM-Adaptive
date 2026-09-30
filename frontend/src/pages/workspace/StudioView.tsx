@@ -186,6 +186,8 @@ export function StudioView({
    * PM pressing a button that did nothing at all.
    */
   const [downloading, setDownloading] = useState(false);
+  /** The confirmation before an approved document is regenerated as its next version. */
+  const [confirmingRegenerate, setConfirmingRegenerate] = useState(false);
   const downloadDraft = () => {
     if (!draft || downloading) return;
     // Building a deck from the customer's template takes a few seconds; the button says so, so a
@@ -200,11 +202,16 @@ export function StudioView({
 
   const generate = useMutation({
     mutationFn: () => documentsApi.generate(projectId, selected!.definitionId),
-    onSuccess: () => {
+    onSuccess: (result) => {
       refresh();
+      setConfirmingRegenerate(false);
+      const version = (result as { version?: number } | null)?.version;
       notify({
-        title: 'Document generated',
-        detail: 'The AI chose the structure and left every unknown fact blank for you to confirm.',
+        title: version && version > 1 ? `Version ${version} generated` : 'Document generated',
+        detail:
+          version && version > 1
+            ? `v${version} is in PM review. Confirm it when it is right — until then it is not in the approved baseline.`
+            : 'The AI chose the structure and left every unknown fact blank for you to confirm.',
       });
     },
     onError: fail('Generation blocked'),
@@ -296,12 +303,12 @@ export function StudioView({
   const unsuggestedCount = gaps.filter((gap) => !gap.answer?.trim() && !gap.suggested).length;
   const isApproved = draft?.status === 'APPROVED';
   /**
-   * An approved baseline is frozen — except when an applied plan change has said this version no
-   * longer holds. The change is the record of why, so regenerating is allowed there and writes a
-   * new version the PM has to approve again. Without this the banner told them to regenerate while
-   * the button stayed grey.
+   * Regenerating an approved document writes its next version for the PM to approve again, so it is
+   * asked first — the approved content is replaced and leaves the baseline until then. It used to be
+   * allowed only for a version a plan change had marked out of date; otherwise the button read
+   * "Regenerate as v2" and stayed grey, with no other way to make a v2.
    */
-  const frozen = isApproved && !draft?.staleReason;
+  const startGenerate = () => (isApproved ? setConfirmingRegenerate(true) : generate.mutate());
 
   const startEditing = () => {
     setEditSections((draft?.sections ?? []).map((section) => ({ title: section.title, content: section.content ?? '' })));
@@ -490,14 +497,12 @@ export function StudioView({
             <button
               className={`primary${lockClass}`}
               {...lockedProps}
-              onClick={guard(() => generate.mutate())}
-              disabled={canWrite && (generate.isPending || !selected || frozen)}
+              onClick={guard(startGenerate)}
+              disabled={canWrite && (generate.isPending || !selected)}
               title={
-                canWrite && frozen
-                  ? 'Approved documents are versioned — they cannot be regenerated'
-                  : canWrite && isApproved
-                    ? `A plan change made this version out of date — regenerating writes v${(draft?.version ?? 1) + 1} for you to approve`
-                    : lockedProps.title
+                canWrite && isApproved
+                  ? `Writes v${(draft?.version ?? 1) + 1} for you to approve — v${draft?.version ?? 1} stays approved until you confirm`
+                  : lockedProps.title
               }
             >
               {generate.isPending
@@ -800,6 +805,47 @@ export function StudioView({
           onDownload={downloadDraft}
         />
       )}
+
+      {/*
+        Asked before an approved document is regenerated: the approved content is replaced by the
+        new draft, and the document leaves the baseline until the PM confirms v(n+1).
+      */}
+      <Backdrop open={confirmingRegenerate} onClose={() => !generate.isPending && setConfirmingRegenerate(false)} />
+      <ModalShell open={confirmingRegenerate} className="create-project-modal structure-modal">
+        <div className="modal-head">
+          <span className="agent-orb">✦</span>
+          <div>
+            <small>APPROVED DOCUMENT</small>
+            <h2>
+              Regenerate {selected?.name} as v{(draft?.version ?? 1) + 1}?
+            </h2>
+          </div>
+          <button className="close-modal" onClick={() => setConfirmingRegenerate(false)} disabled={generate.isPending}>
+            ×
+          </button>
+        </div>
+        <div className="rationale">
+          <p>
+            The AI writes a new draft, <b>v{(draft?.version ?? 1) + 1}</b>, which replaces the content of the approved v
+            {draft?.version ?? 1}. It returns to PM review and leaves the approved baseline until you confirm it again.
+          </p>
+          <p>
+            The approved v{draft?.version ?? 1} content is not kept in the app — <b>download it first</b> if you need a
+            copy. The audit log records which version was replaced and who had approved it.
+          </p>
+        </div>
+        <div className="modal-actions">
+          <button type="button" className="secondary" onClick={downloadDraft} disabled={downloading || generate.isPending}>
+            {downloading ? 'Preparing…' : `Download v${draft?.version ?? 1} first`}
+          </button>
+          <button type="button" className="secondary" onClick={() => setConfirmingRegenerate(false)} disabled={generate.isPending}>
+            Cancel
+          </button>
+          <button type="button" className="primary" onClick={() => generate.mutate()} disabled={generate.isPending}>
+            {generate.isPending ? '✦ Generating…' : `✦ Regenerate as v${(draft?.version ?? 1) + 1}`}
+          </button>
+        </div>
+      </ModalShell>
 
       <Backdrop open={answering !== null} onClose={() => setAnswering(null)} />
       <AnswerGapModal
