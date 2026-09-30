@@ -1068,6 +1068,11 @@ export async function fillDocumentGaps(params: { projectId: string; documentId: 
   const structured = readStructured(document.structuredData);
   const nextStructured = structured
     ? {
+        // Everything not substituted below is carried over untouched — above all `templateFill` and
+        // `templateOutline`. Rebuilding the object from the four substituted fields alone dropped
+        // them, so a kickoff deck filled from the customer's template forgot it after "Fill out the
+        // document" and downloaded as the neutral deck: a slide per placeholder with its answer.
+        ...structured,
         // A register document's answers live in its cells, so they have to be substituted there
         // too — otherwise "Fill out the document" would appear to do nothing on a table.
         table: structured.table
@@ -1728,6 +1733,45 @@ export async function renderDocumentXlsx(
 }
 
 /**
+ * Recovers `templateFill` on a document that lost it. "Fill out the document" used to rebuild
+ * `structuredData` from its substituted fields alone and drop the marker, so a kickoff deck filled
+ * from the customer's template downloaded as the neutral deck afterwards. A template-filled document
+ * is recognisable without it: its sections *are* the fill map, one per placeholder, titled with the
+ * token. When most section titles are placeholders of the template this project resolves to now,
+ * the marker is written back once, and the document follows the template again.
+ */
+const RECOVERY_MIN_SHARE = 0.6;
+
+async function recoverTemplateFill(
+  projectId: string,
+  document: { id: string; name: string; structuredData: unknown; sections: { title: string }[] },
+) {
+  if (!document.sections.length) return null;
+  const resolved = await customerTemplateForProject(projectId, document.name);
+  if (resolved?.mode !== 'FILL') return null;
+  const template = resolved.template;
+  const tokens = new Set(template.placeholders.map((placeholder) => placeholder.token));
+  const matching = document.sections.filter((section) => tokens.has(section.title)).length;
+  if (matching / document.sections.length < RECOVERY_MIN_SHARE) return null;
+
+  const templateFill = {
+    templateId: template.id,
+    customerKey: template.customerKey,
+    documentType: template.documentType,
+    fileType: template.fileType,
+    sourceFile: template.sourceFile,
+  };
+  await prisma.planningDocument.update({
+    where: { id: document.id },
+    data: {
+      structuredData: { ...(readStructured(document.structuredData) ?? {}), templateFill } as unknown as Prisma.InputJsonValue,
+    },
+  });
+  console.warn(`[documents] restored templateFill on ${document.name} (${document.id}) from ${template.sourceFile}`);
+  return templateFill;
+}
+
+/**
  * Fills the customer's own file with what the PM has for this document.
  *
  * The sections *are* the fill map: each section's title is the placeholder token and its content
@@ -1744,7 +1788,10 @@ export async function renderDocumentFromTemplate(
   });
   if (!document) throw notFound('Planning document not found');
 
-  const fill = readStructured(document.structuredData)?.templateFill;
+  const fill =
+    readStructured(document.structuredData)?.templateFill ??
+    // Only a generated draft can have lost it; an empty slot has nothing to recover.
+    (document.status !== DocumentStatus.NOT_GENERATED ? await recoverTemplateFill(projectId, document) : null);
   if (!fill) return null;
 
   /**
