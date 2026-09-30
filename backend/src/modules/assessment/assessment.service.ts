@@ -35,6 +35,7 @@ import {
   type RuleSeverity,
   type RuleStatus,
 } from '../../data/assessment-rules';
+import { KICKOFF_DECK } from '../../data/document-catalog';
 import {
   assessmentCacheWorthwhile,
   judgeAssessmentRules,
@@ -812,6 +813,23 @@ export async function missingDocumentNames(projectId: string): Promise<string[] 
     .map((result) => result.targetDocument)
     .filter((name): name is string => Boolean(name));
   return [...new Set(names)];
+}
+
+/**
+ * Documents every project delivers whatever the assessment found: the kickoff deck. It is the one
+ * output built from the customer's own file and the one a PM is always asked for, so it is never
+ * left to depend on a rule happening to fail.
+ */
+export const ALWAYS_REQUIRED_DOCUMENTS: readonly string[] = [KICKOFF_DECK];
+
+/**
+ * The documents this project's planning needs — what Planning Artifacts lists and what the *Approve*
+ * step counts: the ones the assessment found missing, plus the always-required ones. Null when the
+ * project has never been assessed, as for `missingDocumentNames`.
+ */
+export async function neededDocumentNames(projectId: string): Promise<string[] | null> {
+  const missing = await missingDocumentNames(projectId);
+  return missing ? [...new Set([...missing, ...ALWAYS_REQUIRED_DOCUMENTS])] : null;
 }
 
 /**

@@ -361,11 +361,28 @@ export async function addTemplate(params: {
   return rest;
 }
 
-export async function deleteTemplate(templateId: string) {
-  const template = await prisma.customerTemplate.findUnique({ where: { id: templateId } });
+/**
+ * Removes a template version and its file. Documents already filled from it still download: the
+ * export falls back to the customer's current template for the same document and file type
+ * (`renderDocumentFromTemplate`). Recorded in the audit log, because the bytes are gone and a later
+ * "why did this deck change?" has nothing else to go on.
+ */
+export async function deleteTemplate(templateId: string, actorId?: string) {
+  const template = await prisma.customerTemplate.findUnique({
+    where: { id: templateId },
+    include: { customer: { select: { name: true } } },
+  });
   if (!template) throw notFound('Template not found');
   await prisma.customerTemplate.delete({ where: { id: templateId } });
   await fs.rm(filePath(template.storageKey), { force: true }).catch(() => undefined);
+  await logEvent({
+    actorId: actorId ?? null,
+    actorType: 'PM',
+    type: 'CUSTOMER_TEMPLATE_DELETED',
+    title: `${template.documentType} template v${template.version} deleted for ${template.customer.name}`,
+    detail: template.sourceFile,
+    payload: { templateId, customerId: template.customerId, documentType: template.documentType, version: template.version },
+  });
   return { deleted: true };
 }
 

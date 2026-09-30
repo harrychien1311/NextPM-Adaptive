@@ -637,7 +637,14 @@ export function DashboardView({ projectId, onNavigate }: { projectId: string; on
           projectId={projectId}
           projectName={data.workspace.name}
           onClose={() => setPreview(null)}
-          onDownload={() => documentsApi.download(projectId, preview.id, preview.name, previewDoc.data.exportFormat)}
+          onDownload={() =>
+            // The server's reason on screen when the file cannot be built — never a silent button.
+            documentsApi
+              .download(projectId, preview.id, preview.name, previewDoc.data.exportFormat)
+              .catch((error: unknown) =>
+                notify({ title: 'Could not download the document', detail: (error as Error).message }),
+              )
+          }
         />
       )}
 

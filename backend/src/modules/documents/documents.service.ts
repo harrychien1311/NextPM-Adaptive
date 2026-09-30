@@ -61,7 +61,8 @@ import { readWorkbook } from '../../lib/xlsx-read';
  * deliberately does not have.
  */
 export async function gapDocumentNames(projectId: string): Promise<string[] | null> {
-  const assessed = await missingDocumentNames(projectId);
+  // What the assessment found missing, plus the documents every project delivers (the kickoff deck).
+  const assessed = await neededDocumentNames(projectId);
   if (assessed) return assessed;
 
   const evaluation = await prisma.aiApproachSuggestion.findFirst({
@@ -88,7 +89,7 @@ import { fillDocxTemplate } from '../../lib/docx-fill';
 import { env } from '../../config/env';
 import { logEvent } from '../audit/audit.service';
 import { DELIVERY_TEMPLATE, KICKOFF_DECK, WORK_PRODUCTS, workProductFor } from '../../data/document-catalog';
-import { missingDocumentNames, missingInformationForDocument } from '../assessment/assessment.service';
+import { missingInformationForDocument, neededDocumentNames } from '../assessment/assessment.service';
 import { artifactGuidance, governanceModelMeta, isGovernanceArtifact } from '../../data/governance-models';
 import {
   DOC_COLORS,
@@ -1733,10 +1734,28 @@ export async function renderDocumentFromTemplate(
   const fill = readStructured(document.structuredData)?.templateFill;
   if (!fill) return null;
 
-  const template = await prisma.customerTemplate.findUnique({ where: { id: fill.templateId } });
+  /**
+   * The exact version it was filled from — or, when that version has since been deleted from the
+   * library, the customer's current template for the same document in the same file type. Uploading
+   * v2 and then tidying away v1 is ordinary library upkeep, and it used to leave every document
+   * filled from v1 impossible to download at all. The sections are keyed by placeholder, so v2 is
+   * filled with the same values; a placeholder v2 no longer has is simply not used, and one only v2
+   * has stays as the template wrote it — nothing is invented either way.
+   */
+  const template =
+    (await prisma.customerTemplate.findUnique({ where: { id: fill.templateId } })) ??
+    (await prisma.customerTemplate.findFirst({
+      where: {
+        customer: { key: fill.customerKey },
+        documentType: fill.documentType,
+        fileType: fill.fileType,
+        active: true,
+      },
+      orderBy: { version: 'desc' },
+    }));
   if (!template) {
     throw notFound(
-      `The ${fill.customerKey} template this document was generated from is no longer in the customer library. Re-generate the document.`,
+      `The ${fill.customerKey} template this document was generated from is no longer in the customer library, and no current ${fill.customerKey} "${fill.documentType}" template replaces it. Re-generate the document.`,
     );
   }
 

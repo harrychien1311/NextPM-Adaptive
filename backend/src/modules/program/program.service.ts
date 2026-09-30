@@ -14,7 +14,7 @@ import { INPUT_SCHEMAS } from '../../data/input-schemas';
 import { familyForCategory, type ProjectCategory } from '../../data/project-categories';
 import { computeInputReadiness } from '../../lib/readiness';
 import { checklistScoreForProject } from '../checklist/checklist.service';
-import { fptStandardScore, missingDocumentNames } from '../assessment/assessment.service';
+import { ALWAYS_REQUIRED_DOCUMENTS, fptStandardScore, neededDocumentNames } from '../assessment/assessment.service';
 import { logEvent } from '../audit/audit.service';
 
 const COLOR_ROTATION = ['blue', 'violet', 'green', 'orange'];
@@ -123,7 +123,7 @@ export async function projectReadiness(projectId: string) {
     prisma.planningDocument.findMany({ where: { projectId } }),
     checklistScoreForProject(projectId),
     fptStandardScore(projectId),
-    missingDocumentNames(projectId),
+    neededDocumentNames(projectId),
   ]);
 
   /**
@@ -132,9 +132,10 @@ export async function projectReadiness(projectId: string) {
    * nothing says which are needed, so it falls back to every document generated so far. The top
    * bar's *Approve* step is done only when every one of these is approved.
    */
+  // The kickoff deck counts in both cases: every project delivers one, assessed or not.
   const needed = neededNames
     ? documents.filter((doc) => neededNames.includes(doc.name))
-    : documents.filter((doc) => doc.status !== DocumentStatus.NOT_GENERATED);
+    : documents.filter((doc) => doc.status !== DocumentStatus.NOT_GENERATED || ALWAYS_REQUIRED_DOCUMENTS.includes(doc.name));
 
   const input = computeInputReadiness(
     values.map((value) => ({ value: value.value, verified: value.verified, required: value.definition.required })),

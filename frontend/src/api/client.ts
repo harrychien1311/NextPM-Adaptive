@@ -89,7 +89,9 @@ export const api = {
     document.body.appendChild(link);
     link.click();
     link.remove();
-    URL.revokeObjectURL(url);
+    // Not revoked on the spot: a browser that starts the save asynchronously (Firefox, Safari, and
+    // Chrome with a large file) finds the URL already dead and drops the download without a word.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
     return { fileName, count: Number(response.headers.get('x-document-count')) || null };
   },
   /**

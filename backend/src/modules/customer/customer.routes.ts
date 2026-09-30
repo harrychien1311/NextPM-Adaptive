@@ -206,7 +206,7 @@ customerRouter.delete(
   '/templates/:templateId',
   requireLibraryWriter,
   asyncHandler(async (req, res) => {
-    res.json(await deleteTemplate(req.params.templateId));
+    res.json(await deleteTemplate(req.params.templateId, req.user!.id));
   }),
 );
 

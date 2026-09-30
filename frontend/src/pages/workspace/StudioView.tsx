@@ -180,6 +180,24 @@ export function StudioView({
   const fail = (title: string) => (error: unknown) =>
     notify({ title, detail: error instanceof ApiError ? error.message : (error as Error).message });
 
+  /**
+   * Download, with the server's reason on screen when it cannot build the file. The call used to be
+   * fired and forgotten, so a 404 ("the template this document was filled from is gone") left the
+   * PM pressing a button that did nothing at all.
+   */
+  const [downloading, setDownloading] = useState(false);
+  const downloadDraft = () => {
+    if (!draft || downloading) return;
+    // Building a deck from the customer's template takes a few seconds; the button says so, so a
+    // click is never met with nothing.
+    setDownloading(true);
+    documentsApi
+      .download(projectId, draft.id, selected?.name ?? 'document', selected?.exportFormat)
+      .then((result) => notify({ title: 'Download started', detail: result.fileName }))
+      .catch(fail('Could not download the document'))
+      .finally(() => setDownloading(false));
+  };
+
   const generate = useMutation({
     mutationFn: () => documentsApi.generate(projectId, selected!.definitionId),
     onSuccess: () => {
@@ -564,22 +582,12 @@ export function StudioView({
                       >
                         Edit content
                       </button>
-                      <button
-                        className="secondary"
-                        onClick={() =>
-                          documentsApi.download(
-                            projectId,
-                            draft.id,
-                            selected?.name ?? 'document',
-                            selected?.exportFormat,
-                          )
-                        }
-                      >
+                      <button className="secondary" onClick={downloadDraft} disabled={downloading} data-download>
                         {/*
                           Just "Download": the file type follows the template this document was
                           made from — Word, PowerPoint or Excel — and the server names the file.
                         */}
-                        Download
+                        {downloading ? 'Preparing…' : 'Download'}
                       </button>
                       <button
                         className={`primary${lockClass}`}
@@ -789,9 +797,7 @@ export function StudioView({
           projectId={projectId}
           projectName={workspace.data?.name ?? ''}
           onClose={() => setPreviewing(false)}
-          onDownload={() =>
-            documentsApi.download(projectId, draft!.id, selected?.name ?? 'document', selected?.exportFormat)
-          }
+          onDownload={downloadDraft}
         />
       )}
 
